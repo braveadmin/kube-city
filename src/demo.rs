@@ -1,0 +1,297 @@
+//! A simulated cluster, so kube-city runs without a real one.
+//!
+//! Made-up namespaces and pods get created, start, crash, recover, finish and
+//! get deleted. Everything is driven by a seeded RNG, so a seed replays the
+//! same city.
+
+use std::time::Duration;
+
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::{
+    util::Rng,
+    world::{PodInfo, PodState, WorldEvent},
+};
+
+/// Namespaces the simulation can open, with their long-running workloads.
+const CATALOGUE: &[(&str, &[&str])] = &[
+    ("orders", &["kafka", "schema-registry", "orders-api", "orders-sink"]),
+    ("keycloak", &["keycloak", "postgres"]),
+    ("monitoring", &["prometheus", "grafana", "alertmanager"]),
+    ("catalog", &["catalog-api", "catalog-worker", "search-indexer"]),
+    ("ingress", &["ingress-nginx"]),
+    ("payments", &["payments-gateway", "fraud-check", "receipts"]),
+    ("shipping", &["carrier-connector", "carrier-simulator"]),
+    ("feature-preview", &["console", "middleware", "core"]),
+];
+const JOB_WORKLOAD: &str = "report-job";
+/// Scale-ups stop here; restarts and new namespaces may briefly exceed it.
+const MAX_PODS: usize = 120;
+const INITIAL_NAMESPACES: usize = 4;
+
+#[derive(Debug)]
+struct SimPod {
+    info: PodInfo,
+    age: u32,
+    job: bool,
+}
+
+enum Transition {
+    Stay,
+    To(PodState),
+    Remove,
+}
+
+#[derive(Debug)]
+pub struct DemoCluster {
+    rng: Rng,
+    pods: Vec<SimPod>,
+    /// Indexes into `CATALOGUE` of the namespaces that exist right now.
+    open: Vec<usize>,
+    next_uid: u64,
+    started: bool,
+}
+
+impl DemoCluster {
+    pub fn new(seed: u64) -> Self {
+        Self { rng: Rng::new(seed), pods: Vec::new(), open: Vec::new(), next_uid: 0, started: false }
+    }
+
+    /// Advances the simulation by one step and returns what changed.
+    pub fn step(&mut self) -> Vec<WorldEvent> {
+        let mut events = Vec::new();
+        if !self.started {
+            self.started = true;
+            for _ in 0..INITIAL_NAMESPACES {
+                self.open_namespace(PodState::Running, &mut events);
+            }
+            return events;
+        }
+        self.advance_lifecycles(&mut events);
+        match self.rng.below(100) {
+            0..35 => self.scale_up(&mut events),
+            35..60 => self.scale_down(&mut events),
+            60..68 => self.crash(&mut events),
+            68..76 => self.rolling_restart(&mut events),
+            76..81 => self.open_namespace(PodState::Pending, &mut events),
+            81..84 => self.close_namespace(&mut events),
+            84..89 => self.run_job(&mut events),
+            _ => {}
+        }
+        events
+    }
+
+    fn advance_lifecycles(&mut self, events: &mut Vec<WorldEvent>) {
+        let mut i = 0;
+        while i < self.pods.len() {
+            let roll = self.rng.below(100);
+            let pod = &mut self.pods[i];
+            pod.age += 1;
+            let transition = match pod.info.state {
+                PodState::Pending if pod.age >= 3 => {
+                    Transition::To(if roll < 85 { PodState::Running } else { PodState::CrashLoop })
+                }
+                PodState::Running if pod.job && pod.age >= 5 => {
+                    Transition::To(if roll < 80 { PodState::Succeeded } else { PodState::Failed })
+                }
+                PodState::CrashLoop if pod.age >= 10 => {
+                    Transition::To(if roll < 50 { PodState::Running } else { PodState::CrashLoop })
+                }
+                PodState::Terminating if pod.age >= 2 => Transition::Remove,
+                PodState::Succeeded if pod.age >= 6 => Transition::Remove,
+                PodState::Failed if pod.age >= 8 => Transition::Remove,
+                _ => Transition::Stay,
+            };
+            match transition {
+                Transition::Stay => {}
+                Transition::To(state) => {
+                    pod.age = 0;
+                    if pod.info.state != state {
+                        pod.info.state = state;
+                        events.push(WorldEvent::PodUpserted(pod.info.clone()));
+                    }
+                }
+                Transition::Remove => {
+                    let gone = self.pods.swap_remove(i);
+                    events.push(WorldEvent::PodDeleted { uid: gone.info.uid });
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    fn scale_up(&mut self, events: &mut Vec<WorldEvent>) {
+        if self.pods.len() >= MAX_PODS {
+            return;
+        }
+        let Some((namespace, workloads)) = self.random_open_namespace() else {
+            return self.open_namespace(PodState::Pending, events);
+        };
+        let workload = *self.rng.pick(workloads);
+        self.spawn(namespace, workload, PodState::Pending, false, events);
+    }
+
+    fn scale_down(&mut self, events: &mut Vec<WorldEvent>) {
+        if let Some(i) = self.random_pod(|pod| pod.info.state == PodState::Running && !pod.job) {
+            self.set_state(i, PodState::Terminating, events);
+        }
+    }
+
+    fn crash(&mut self, events: &mut Vec<WorldEvent>) {
+        if let Some(i) = self.random_pod(|pod| pod.info.state == PodState::Running && !pod.job) {
+            self.set_state(i, PodState::CrashLoop, events);
+        }
+    }
+
+    fn rolling_restart(&mut self, events: &mut Vec<WorldEvent>) {
+        let Some((namespace, workloads)) = self.random_open_namespace() else {
+            return;
+        };
+        let workload = *self.rng.pick(workloads);
+        let old: Vec<usize> = (0..self.pods.len())
+            .filter(|&i| {
+                let info = &self.pods[i].info;
+                info.namespace == namespace && info.workload == workload && info.state != PodState::Terminating
+            })
+            .collect();
+        for _ in 0..old.len().max(1) {
+            self.spawn(namespace, workload, PodState::Pending, false, events);
+        }
+        for i in old {
+            self.set_state(i, PodState::Terminating, events);
+        }
+    }
+
+    fn open_namespace(&mut self, state: PodState, events: &mut Vec<WorldEvent>) {
+        let closed: Vec<usize> = (0..CATALOGUE.len()).filter(|i| !self.open.contains(i)).collect();
+        if closed.is_empty() {
+            return;
+        }
+        let entry = *self.rng.pick(&closed);
+        self.open.push(entry);
+        let (namespace, workloads) = CATALOGUE[entry];
+        for &workload in workloads {
+            for _ in 0..=self.rng.below(3) {
+                self.spawn(namespace, workload, state, false, events);
+            }
+        }
+    }
+
+    fn close_namespace(&mut self, events: &mut Vec<WorldEvent>) {
+        if self.open.len() <= 2 {
+            return;
+        }
+        let position = self.rng.below(self.open.len() as u64) as usize;
+        let (namespace, _) = CATALOGUE[self.open.swap_remove(position)];
+        for i in 0..self.pods.len() {
+            let info = &self.pods[i].info;
+            if info.namespace == namespace && info.state != PodState::Terminating {
+                self.set_state(i, PodState::Terminating, events);
+            }
+        }
+    }
+
+    fn run_job(&mut self, events: &mut Vec<WorldEvent>) {
+        if let Some((namespace, _)) = self.random_open_namespace() {
+            self.spawn(namespace, JOB_WORKLOAD, PodState::Pending, true, events);
+        }
+    }
+
+    fn random_open_namespace(&mut self) -> Option<(&'static str, &'static [&'static str])> {
+        if self.open.is_empty() {
+            return None;
+        }
+        Some(CATALOGUE[*self.rng.pick(&self.open)])
+    }
+
+    fn random_pod(&mut self, wanted: impl Fn(&SimPod) -> bool) -> Option<usize> {
+        let candidates: Vec<usize> = (0..self.pods.len()).filter(|&i| wanted(&self.pods[i])).collect();
+        (!candidates.is_empty()).then(|| *self.rng.pick(&candidates))
+    }
+
+    fn spawn(&mut self, namespace: &str, workload: &str, state: PodState, job: bool, events: &mut Vec<WorldEvent>) {
+        self.next_uid += 1;
+        let info = PodInfo {
+            uid: format!("demo-{}", self.next_uid),
+            namespace: namespace.to_owned(),
+            workload: workload.to_owned(),
+            state,
+        };
+        events.push(WorldEvent::PodUpserted(info.clone()));
+        self.pods.push(SimPod { info, age: 0, job });
+    }
+
+    fn set_state(&mut self, i: usize, state: PodState, events: &mut Vec<WorldEvent>) {
+        let pod = &mut self.pods[i];
+        pod.info.state = state;
+        pod.age = 0;
+        events.push(WorldEvent::PodUpserted(pod.info.clone()));
+    }
+}
+
+/// Feeds the simulation into `events` at `steps_per_second` until the
+/// receiver goes away.
+pub async fn run(seed: u64, steps_per_second: f64, events: UnboundedSender<WorldEvent>) {
+    let mut cluster = DemoCluster::new(seed);
+    let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / steps_per_second));
+    loop {
+        ticker.tick().await;
+        for event in cluster.step() {
+            if events.send(event).is_err() {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+    use crate::world::World;
+
+    fn run_steps(seed: u64, steps: usize) -> Vec<WorldEvent> {
+        let mut cluster = DemoCluster::new(seed);
+        (0..steps).flat_map(|_| cluster.step()).collect()
+    }
+
+    #[test]
+    fn the_same_seed_replays_the_same_city() {
+        assert_eq!(run_steps(7, 300), run_steps(7, 300));
+        assert_ne!(run_steps(7, 300), run_steps(8, 300));
+    }
+
+    #[test]
+    fn it_starts_with_a_running_city() {
+        let first = DemoCluster::new(1).step();
+        assert!(!first.is_empty());
+        assert!(first.iter().all(|e| matches!(e, WorldEvent::PodUpserted(p) if p.state == PodState::Running)));
+    }
+
+    #[test]
+    fn events_stay_consistent_and_bounded_over_a_long_run() {
+        let mut cluster = DemoCluster::new(1234);
+        let mut world = World::default();
+        let mut alive = HashSet::new();
+        let mut seen_states = HashSet::new();
+        for _ in 0..3000 {
+            for event in cluster.step() {
+                match &event {
+                    WorldEvent::PodUpserted(pod) => {
+                        alive.insert(pod.uid.clone());
+                        seen_states.insert(format!("{:?}", pod.state));
+                    }
+                    WorldEvent::PodDeleted { uid } => {
+                        assert!(alive.remove(uid), "deleted a pod that was never created: {uid}");
+                    }
+                }
+                world.apply(event);
+            }
+            assert_eq!(world.pod_count(), cluster.pods.len());
+            assert!(cluster.pods.len() < MAX_PODS * 2);
+        }
+        assert_eq!(seen_states.len(), 6, "every state shows up: {seen_states:?}");
+    }
+}
