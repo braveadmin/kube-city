@@ -2,71 +2,56 @@
 //!
 //! The city is painted on a pixel canvas, then packed into the terminal two
 //! pixels per cell with the upper half block `▀`. Those pixels are roughly
-//! square, so tiles get the classic 2:1 isometric diamond shape.
+//! square, so tiles get the classic 2:1 isometric diamond shape. What stands
+//! where comes from the world's layout; how it looks comes from the theme.
 
 mod canvas;
+mod scene;
+pub mod theme;
 
-use ratatui::{
-    Frame,
-    buffer::Buffer,
-    layout::Rect,
-    style::{Color, Style},
+use ratatui::{Frame, buffer::Buffer, layout::Rect, style::Style};
+
+pub use canvas::Canvas;
+pub use scene::Zoom;
+
+use self::{
+    scene::Scene,
+    theme::{BuildingLook, Ground, RoadDirection, Theme, UiColours},
 };
-
-pub use canvas::{Canvas, Rgb};
-
 use crate::{
     layout::{self, BLOCK_SIDE, BLOCK_STRIDE, Layout},
-    util::stable_hash,
-    world::{PodInfo, PodState, World},
+    util::{mix, stable_hash},
+    world::{PodInfo, World},
 };
 
-const TILE_W: i32 = 8;
-const TILE_H: i32 = 4;
-/// A building's footprint, smaller than its tile so lots read as separate.
-const FOOT_W: i32 = 6;
-const FOOT_H: i32 = 3;
-/// Shifts the view down so the centre block, not the sky above it, is centred.
-const CENTRE_Y: i32 = 8;
 const LABEL_MAX: usize = 18;
 
-const SKY: Rgb = Rgb(14, 17, 30);
-const GRASS: Rgb = Rgb(40, 62, 40);
-const ROAD: Rgb = Rgb(58, 58, 64);
-const SCAFFOLD: Rgb = Rgb(205, 145, 45);
-const FIRE: Rgb = Rgb(235, 75, 40);
-const LIT_WINDOW: Rgb = Rgb(250, 215, 110);
-const ASH: Rgb = Rgb(90, 90, 95);
-const DISTRICT_GROUNDS: [Rgb; 7] = [
-    Rgb(84, 110, 70),
-    Rgb(120, 110, 85),
-    Rgb(80, 95, 115),
-    Rgb(105, 85, 105),
-    Rgb(70, 105, 100),
-    Rgb(115, 95, 70),
-    Rgb(95, 105, 60),
-];
-const FACADES: [Rgb; 7] = [
-    Rgb(170, 170, 180),
-    Rgb(165, 95, 75),
-    Rgb(90, 130, 170),
-    Rgb(190, 170, 130),
-    Rgb(80, 150, 140),
-    Rgb(150, 120, 170),
-    Rgb(200, 200, 205),
-];
-
-/// Where the view looks, as a pixel offset from the city centre.
+/// What the screen shows: a pixel offset from the city centre and a zoom.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct Camera {
+pub struct View {
     pub x: i32,
     pub y: i32,
+    pub zoom: Zoom,
 }
 
-impl Camera {
+impl View {
     pub fn pan(&mut self, dx: i32, dy: i32) {
         self.x += dx;
         self.y += dy;
+    }
+
+    /// Switches zoom, keeping the same spot in the middle of the screen.
+    pub fn toggle_zoom(&mut self) {
+        let next = self.zoom.toggled();
+        let ratio = next.scale() / self.zoom.scale();
+        self.x = (self.x as f32 * ratio).round() as i32;
+        self.y = (self.y as f32 * ratio).round() as i32;
+        self.zoom = next;
+    }
+
+    pub fn recentre(&mut self) {
+        self.x = 0;
+        self.y = 0;
     }
 }
 
@@ -79,28 +64,32 @@ pub struct Label {
 }
 
 /// Draws the city over the whole frame, with a status bar on the last row.
-pub fn draw(frame: &mut Frame, world: &World, camera: Camera, source: &str) {
+/// `anim` counts 100 ms animation steps.
+pub fn draw(frame: &mut Frame, world: &World, view: View, theme: &dyn Theme, anim: u64, source: &str) {
     let area = frame.area();
     if area.width == 0 || area.height < 2 {
         return;
     }
     let city = Rect { height: area.height - 1, ..area };
     let mut canvas = Canvas::new(i32::from(city.width), i32::from(city.height) * 2);
-    let labels = paint(world, camera, &mut canvas);
+    let labels = paint(world, view, theme, anim, &mut canvas);
     let buf = frame.buffer_mut();
     canvas.blit(buf, city);
+    let ui = theme.ui();
     for label in &labels {
-        put_label(buf, city, label);
+        put_label(buf, city, label, ui);
     }
     let bar = Rect { y: area.bottom() - 1, height: 1, ..area };
-    draw_status(buf, bar, world, source);
+    draw_status(buf, bar, world, ui, view, source);
 }
 
-/// Paints ground, roads and buildings; returns the district labels to overlay.
-pub fn paint(world: &World, camera: Camera, canvas: &mut Canvas) -> Vec<Label> {
-    canvas.fill(SKY);
-    let ox = canvas.width() / 2 + camera.x;
-    let oy = canvas.height() / 2 + camera.y - CENTRE_Y;
+/// Paints ground and buildings; returns the district labels to overlay.
+pub fn paint(world: &World, view: View, theme: &dyn Theme, anim: u64, canvas: &mut Canvas) -> Vec<Label> {
+    canvas.fill(theme.sky());
+    let k = view.zoom.scale();
+    // The centre of the first block sits a little below the middle of the screen.
+    let origin = (canvas.width() / 2 + view.x, canvas.height() / 2 + view.y - (8.0 * k) as i32);
+    let mut scene = Scene::new(canvas, view.zoom, origin, anim);
     let layout = world.layout();
 
     // An island just big enough for the occupied blocks, ringed by road.
@@ -108,17 +97,28 @@ pub fn paint(world: &World, camera: Camera, canvas: &mut Canvas) -> Vec<Label> {
     let (lo, hi) = (-ring * BLOCK_STRIDE - 1, ring * BLOCK_STRIDE + BLOCK_SIDE);
     for ty in lo..=hi {
         for tx in lo..=hi {
-            let (sx, sy) = project(tx, ty);
-            fill_diamond(canvas, ox + sx, oy + sy, TILE_W, TILE_H, ground(layout, tx, ty));
+            if scene.visible(tx, ty, 0.0) {
+                theme.ground(&mut scene, tx, ty, ground_at(layout, tx, ty));
+            }
         }
     }
 
-    // Back to front, so nearer buildings cover the ones behind them.
-    let mut buildings: Vec<_> = world.buildings().map(|b| (Layout::tile(b.lot), &b.pod)).collect();
-    buildings.sort_by_key(|&((x, y), _)| (x + y, x));
-    for ((tx, ty), pod) in buildings {
-        let (sx, sy) = project(tx, ty);
-        paint_building(canvas, ox + sx, oy + sy, &Look::of(pod));
+    // Back to front, so nearer things cover the ones behind them.
+    let mut things: Vec<((i32, i32), Option<&PodInfo>)> = world
+        .buildings()
+        .map(|b| (Layout::tile(b.lot), Some(&b.pod)))
+        .chain(layout.empty_lots().map(|lot| (Layout::tile(lot), None)))
+        .collect();
+    things.sort_by_key(|&((x, y), _)| (x + y, x));
+    let reach = theme.max_height();
+    for ((tx, ty), pod) in things {
+        if !scene.visible(tx, ty, reach) {
+            continue;
+        }
+        match pod {
+            Some(pod) => theme.building(&mut scene, tx, ty, &look_of(pod)),
+            None => theme.empty_lot(&mut scene, tx, ty, mix(&[tx as u64, ty as u64])),
+        }
     }
 
     layout
@@ -126,127 +126,40 @@ pub fn paint(world: &World, camera: Camera, canvas: &mut Canvas) -> Vec<Label> {
         .map(|(block, namespace)| {
             // Under the block's front corner, on the road.
             let (bx, by) = layout::spiral(block);
-            let front = (bx * BLOCK_STRIDE + BLOCK_SIDE - 1, by * BLOCK_STRIDE + BLOCK_SIDE - 1);
-            let (sx, sy) = project(front.0, front.1);
-            Label { x: ox + sx, y: oy + sy + TILE_H + 1, text: namespace.to_owned() }
+            let corner = ((bx * BLOCK_STRIDE + BLOCK_SIDE) as f32, (by * BLOCK_STRIDE + BLOCK_SIDE) as f32);
+            let (x, y) = scene.project(corner.0, corner.1, 0.0);
+            Label { x: x as i32, y: (y + 2.0 * k) as i32, text: namespace.to_owned() }
         })
         .collect()
 }
 
-/// The top vertex of tile (tx, ty), in pixels relative to the city origin.
-fn project(tx: i32, ty: i32) -> (i32, i32) {
-    ((tx - ty) * TILE_W / 2, (tx + ty) * TILE_H / 2)
-}
-
-/// Rows of a `w`×`h` diamond whose top vertex is at (`cx`, `top`), as
-/// `(y, x_start, x_end_exclusive)`. Pixel centres are sampled, so diamonds of
-/// neighbouring tiles fit together without gaps or overlap.
-fn diamond_rows(cx: i32, top: i32, w: i32, h: i32) -> impl Iterator<Item = (i32, i32, i32)> {
-    (0..h).map(move |r| {
-        let distance = (2 * r + 1 - h).abs();
-        let half = (w * (h - distance) + h) / (2 * h);
-        (top + r, cx - half, cx + half)
+fn ground_at(layout: &Layout, tx: i32, ty: i32) -> Ground<'_> {
+    if !layout::is_road(tx, ty) {
+        return layout.block_at(tx, ty).map_or(Ground::Land, |block| Ground::Lot { namespace: &block.namespace });
+    }
+    let crosses_x = tx.rem_euclid(BLOCK_STRIDE) == BLOCK_SIDE;
+    let crosses_y = ty.rem_euclid(BLOCK_STRIDE) == BLOCK_SIDE;
+    Ground::Road(match (crosses_x, crosses_y) {
+        (true, true) => RoadDirection::Crossing,
+        (true, false) => RoadDirection::AlongY,
+        _ => RoadDirection::AlongX,
     })
 }
 
-fn fill_diamond(canvas: &mut Canvas, cx: i32, top: i32, w: i32, h: i32, colour: Rgb) {
-    for (y, x0, x1) in diamond_rows(cx, top, w, h) {
-        for x in x0..x1 {
-            canvas.set(x, y, colour);
-        }
+fn look_of(pod: &PodInfo) -> BuildingLook {
+    BuildingLook {
+        kind: pod.kind,
+        state: pod.state,
+        style: stable_hash(&format!("{}/{}", pod.namespace, pod.workload)),
+        seed: stable_hash(&pod.uid),
     }
 }
 
-fn ground(layout: &Layout, tx: i32, ty: i32) -> Rgb {
-    if layout::is_road(tx, ty) {
-        return ROAD;
-    }
-    let base = match layout.block_at(tx, ty) {
-        Some(block) => DISTRICT_GROUNDS[pick(stable_hash(&block.namespace), DISTRICT_GROUNDS.len())],
-        None => GRASS,
-    };
-    if (tx + ty).rem_euclid(2) == 0 { base } else { base.shade(0.94) }
-}
-
-fn pick(hash: u64, len: usize) -> usize {
-    (hash % len as u64) as usize
-}
-
-enum Windows {
-    None,
-    Lit,
-    Dark,
-}
-
-/// How a pod's building looks: workload decides shape and colour, state
-/// decides everything else.
-struct Look {
-    height: i32,
-    facade: Rgb,
-    roof: Rgb,
-    windows: Windows,
-}
-
-impl Look {
-    fn of(pod: &PodInfo) -> Self {
-        let hash = stable_hash(&format!("{}/{}", pod.namespace, pod.workload));
-        let facade = FACADES[pick(hash, FACADES.len())];
-        let height = 4 + ((hash >> 16) % 9) as i32;
-        match pod.state {
-            PodState::Running => Self { height, facade, roof: facade.shade(1.15), windows: Windows::Lit },
-            PodState::Pending => Self { height: 2, facade: SCAFFOLD, roof: SCAFFOLD.shade(1.15), windows: Windows::None },
-            PodState::CrashLoop => Self { height, facade: facade.shade(0.7), roof: FIRE, windows: Windows::Dark },
-            PodState::Terminating => {
-                let faded = facade.mix(ASH, 0.6);
-                Self { height, facade: faded, roof: faded.shade(1.1), windows: Windows::Dark }
-            }
-            PodState::Succeeded => {
-                Self { height: 2, facade: Rgb(120, 120, 125), roof: Rgb(140, 140, 145), windows: Windows::None }
-            }
-            PodState::Failed => Self { height: 3, facade: Rgb(110, 60, 60), roof: Rgb(130, 70, 70), windows: Windows::None },
-        }
-    }
-}
-
-/// A box standing on the tile whose top vertex is (`cx`, `tile_top`): two
-/// side faces of pixel columns, then the roof diamond on top of them.
-fn paint_building(canvas: &mut Canvas, cx: i32, tile_top: i32, look: &Look) {
-    let foot_top = tile_top + (TILE_H - FOOT_H + 1) / 2;
-    let footprint: Vec<_> = diamond_rows(cx, foot_top, FOOT_W, FOOT_H).collect();
-    for x in cx - FOOT_W / 2..cx + FOOT_W / 2 {
-        let Some(bottom) = footprint.iter().filter(|(_, x0, x1)| (*x0..*x1).contains(&x)).map(|(y, ..)| *y).max()
-        else {
-            continue;
-        };
-        let left = x < cx;
-        let face = look.facade.shade(if left { 0.62 } else { 0.85 });
-        // One column of windows in the middle of each face.
-        let window_column = x - cx == if left { -2 } else { 1 };
-        for level in 0..look.height {
-            let window = window_column && level % 2 == 1 && level < look.height - 1;
-            let colour = match (window, &look.windows) {
-                (true, Windows::Lit) => LIT_WINDOW,
-                (true, Windows::Dark) => face.shade(0.45),
-                _ => face,
-            };
-            canvas.set(x, bottom - level, colour);
-        }
-    }
-    fill_diamond(canvas, cx, foot_top - look.height, FOOT_W, FOOT_H, look.roof);
-}
-
-fn label_style() -> Style {
-    Style::new().fg(Color::Rgb(235, 235, 240)).bg(Color::Rgb(20, 22, 32))
-}
-
-fn status_style() -> Style {
-    Style::new().fg(Color::Rgb(200, 200, 210)).bg(Color::Rgb(30, 32, 45))
-}
-
-fn put_label(buf: &mut Buffer, area: Rect, label: &Label) {
+fn put_label(buf: &mut Buffer, area: Rect, label: &Label, ui: UiColours) {
     if label.y < 0 || label.y / 2 >= i32::from(area.height) {
         return;
     }
+    let style = Style::new().fg(ui.label_fg.into()).bg(ui.label_bg.into());
     let row = area.y + (label.y / 2) as u16;
     let text: Vec<char> = label.text.chars().take(LABEL_MAX).collect();
     let start = label.x - text.len() as i32 / 2;
@@ -255,41 +168,48 @@ fn put_label(buf: &mut Buffer, area: Rect, label: &Label) {
         if (0..i32::from(area.width)).contains(&col)
             && let Some(cell) = buf.cell_mut((area.x + col as u16, row))
         {
-            cell.set_char(ch).set_style(label_style());
+            cell.set_char(ch).set_style(style);
         }
     }
 }
 
-fn draw_status(buf: &mut Buffer, bar: Rect, world: &World, source: &str) {
+fn draw_status(buf: &mut Buffer, bar: Rect, world: &World, ui: UiColours, view: View, source: &str) {
+    let style = Style::new().fg(ui.status_fg.into()).bg(ui.status_bg.into());
     let left = format!(
         " kube-city · {source} · {} pods · {} namespaces",
         world.pod_count(),
         world.namespace_count()
     );
-    let right = "←↑↓→ pan · c centre · q quit ";
-    buf.set_style(bar, status_style());
-    buf.set_stringn(bar.x, bar.y, &left, usize::from(bar.width), status_style());
+    let zoom = match view.zoom {
+        Zoom::Detail => "z overview",
+        Zoom::Overview => "z detail",
+    };
+    let right = format!("←↑↓→ pan · {zoom} · c centre · q quit ");
+    buf.set_style(bar, style);
+    buf.set_stringn(bar.x, bar.y, &left, usize::from(bar.width), style);
     let (left_len, right_len) = (left.chars().count(), right.chars().count());
     if left_len + 2 + right_len <= usize::from(bar.width) {
-        buf.set_string(bar.right() - right_len as u16, bar.y, right, status_style());
+        buf.set_string(bar.right() - right_len as u16, bar.y, &right, style);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::{
         demo::DemoCluster,
-        world::tests::{delete, upsert},
+        render::theme::Metropolis,
+        world::{
+            PodState,
+            tests::{delete, upsert},
+        },
     };
 
-    fn painted(world: &World, camera: Camera) -> Canvas {
+    fn painted(world: &World, view: View) -> Canvas {
         let mut canvas = Canvas::new(160, 100);
-        paint(world, camera, &mut canvas);
+        paint(world, view, &Metropolis, 0, &mut canvas);
         canvas
     }
 
@@ -302,54 +222,51 @@ mod tests {
         world
     }
 
-    #[test]
-    fn tiles_cover_the_ground_exactly_once() {
-        let mut coverage: HashMap<(i32, i32), u32> = HashMap::new();
-        for ty in -5..=5 {
-            for tx in -5..=5 {
-                let (sx, sy) = project(tx, ty);
-                for (y, x0, x1) in diamond_rows(sx, sy, TILE_W, TILE_H) {
-                    for x in x0..x1 {
-                        *coverage.entry((x, y)).or_default() += 1;
-                    }
-                }
-            }
-        }
-        for y in -8..8 {
-            for x in -8..8 {
-                assert_eq!(coverage.get(&(x, y)), Some(&1), "pixel ({x}, {y})");
-            }
-        }
+    fn views() -> [View; 2] {
+        [View::default(), View { zoom: Zoom::Overview, ..View::default() }]
     }
 
     #[test]
     fn a_pod_appears_and_disappears_from_the_city() {
-        let mut world = World::default();
-        let empty = painted(&world, Camera::default());
-        world.apply(upsert("a", "shop", PodState::Running));
-        assert_ne!(painted(&world, Camera::default()), empty);
-        world.apply(delete("a"));
-        assert_eq!(painted(&world, Camera::default()), empty);
+        for view in views() {
+            let mut world = World::default();
+            let empty = painted(&world, view);
+            world.apply(upsert("a", "shop", PodState::Running));
+            assert_ne!(painted(&world, view), empty);
+            world.apply(delete("a"));
+            assert_eq!(painted(&world, view), empty);
+        }
     }
 
     #[test]
     fn a_state_change_repaints_the_building() {
         let mut world = World::default();
         world.apply(upsert("a", "shop", PodState::Running));
-        let running = painted(&world, Camera::default());
-        world.apply(upsert("a", "shop", PodState::CrashLoop));
-        assert_ne!(painted(&world, Camera::default()), running);
+        let running = painted(&world, View::default());
+        world.apply(upsert("a", "shop", PodState::Pending));
+        assert_ne!(painted(&world, View::default()), running);
     }
 
     #[test]
-    fn painting_never_panics_at_odd_sizes_or_far_cameras() {
+    fn painting_never_panics_at_odd_sizes_or_far_views() {
         let world = demo_world(400);
         for (w, h) in [(0, 0), (1, 1), (3, 2), (80, 48), (300, 160)] {
-            for camera in [Camera::default(), Camera { x: -5000, y: 5000 }, Camera { x: 37, y: -11 }] {
-                let mut canvas = Canvas::new(w, h);
-                paint(&world, camera, &mut canvas);
+            for zoom in [Zoom::Detail, Zoom::Overview] {
+                for (x, y) in [(0, 0), (-5000, 5000), (37, -11)] {
+                    let mut canvas = Canvas::new(w, h);
+                    paint(&world, View { x, y, zoom }, &Metropolis, 7, &mut canvas);
+                }
             }
         }
+    }
+
+    #[test]
+    fn toggling_zoom_twice_returns_to_the_same_view() {
+        let mut view = View { x: 40, y: -24, zoom: Zoom::Detail };
+        view.toggle_zoom();
+        assert_eq!((view.x, view.y, view.zoom), (20, -12, Zoom::Overview));
+        view.toggle_zoom();
+        assert_eq!(view, View { x: 40, y: -24, zoom: Zoom::Detail });
     }
 
     #[test]
@@ -357,12 +274,13 @@ mod tests {
         let mut world = World::default();
         world.apply(upsert("a", "shop", PodState::Running));
         world.apply(upsert("b", "bank", PodState::Pending));
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("test terminal");
-        terminal.draw(|frame| draw(frame, &world, Camera::default(), "test")).expect("draw");
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test terminal");
+        terminal.draw(|frame| draw(frame, &world, View::default(), &Metropolis, 0, "test")).expect("draw");
         let buf = terminal.backend().buffer();
-        let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
-        assert!(row(29).contains("test · 2 pods · 2 namespaces"), "status: {}", row(29));
-        assert!((0..29).any(|y| row(y).contains("shop")), "district label is drawn");
+        let row = |y: u16| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        assert!(row(39).contains("test · 2 pods · 2 namespaces"), "status: {}", row(39));
+        assert!(row(39).contains("z overview"), "status: {}", row(39));
+        assert!((0..39).any(|y| row(y).contains("shop")), "district label is drawn");
     }
 
     #[test]
@@ -370,7 +288,7 @@ mod tests {
         let world = demo_world(50);
         for (w, h) in [(1, 1), (10, 1), (1, 5)] {
             let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("test terminal");
-            terminal.draw(|frame| draw(frame, &world, Camera::default(), "demo")).expect("draw");
+            terminal.draw(|frame| draw(frame, &world, View::default(), &Metropolis, 0, "demo")).expect("draw");
         }
     }
 }

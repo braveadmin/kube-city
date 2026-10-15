@@ -15,7 +15,7 @@ use kube::{
 };
 use tokio::sync::{mpsc::UnboundedSender, watch};
 
-use crate::world::{PodInfo, PodState, WorldEvent};
+use crate::world::{PodInfo, PodState, WorkloadKind, WorldEvent};
 
 /// Long enough to finish an interactive (device code) login.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -154,12 +154,8 @@ impl Tracker {
 
 fn pod_info(pod: &Pod) -> Option<PodInfo> {
     let meta = &pod.metadata;
-    Some(PodInfo {
-        uid: meta.uid.clone()?,
-        namespace: meta.namespace.clone()?,
-        workload: workload_of(pod),
-        state: state_of(pod),
-    })
+    let (workload, kind) = workload_of(pod);
+    Some(PodInfo { uid: meta.uid.clone()?, namespace: meta.namespace.clone()?, workload, kind, state: state_of(pod) })
 }
 
 fn state_of(pod: &Pod) -> PodState {
@@ -185,14 +181,21 @@ fn is_broken(status: Option<&PodStatus>) -> bool {
         .any(|reason| BROKEN_REASONS.contains(&reason))
 }
 
-/// The name of the workload that owns the pod, so its pods share a look
-/// across restarts and rollouts: Deployment for ReplicaSet pods, CronJob for
-/// its Jobs' pods, the direct controller otherwise, the pod itself if none.
-fn workload_of(pod: &Pod) -> String {
+/// The workload that owns the pod, so its pods share a look across restarts
+/// and rollouts: the Deployment for ReplicaSet pods, the CronJob for its Jobs'
+/// pods, the direct controller otherwise, and the pod itself if nothing owns it.
+/// Controllers kube-city doesn't know (operators' custom resources) count as
+/// Deployments.
+fn workload_of(pod: &Pod) -> (String, WorkloadKind) {
     let meta = &pod.metadata;
-    let pod_name = meta.name.clone().unwrap_or_default();
     let Some(owner) = meta.owner_references.iter().flatten().find(|owner| owner.controller == Some(true)) else {
-        return pod_name;
+        return (meta.name.clone().unwrap_or_default(), WorkloadKind::Standalone);
+    };
+    let kind = match owner.kind.as_str() {
+        "StatefulSet" => WorkloadKind::StatefulSet,
+        "DaemonSet" => WorkloadKind::DaemonSet,
+        "Job" => WorkloadKind::Job,
+        _ => WorkloadKind::Deployment,
     };
     let name = owner.name.as_str();
     let base = match owner.kind.as_str() {
@@ -208,7 +211,7 @@ fn workload_of(pod: &Pod) -> String {
             .map(|(cron_job, _)| cron_job),
         _ => None,
     };
-    base.unwrap_or(name).to_owned()
+    (base.unwrap_or(name).to_owned(), kind)
 }
 
 #[cfg(test)]
@@ -291,13 +294,25 @@ mod tests {
 
     #[test]
     fn workloads_are_named_after_their_owners() {
+        let name = |pod: &Pod| workload_of(pod).0;
         let deployment = owned_by("ReplicaSet", "web-7d9f8b6c5", json!({ "pod-template-hash": "7d9f8b6c5" }));
-        assert_eq!(workload_of(&deployment), "web");
-        assert_eq!(workload_of(&owned_by("ReplicaSet", "bare-rs", json!({}))), "bare-rs");
-        assert_eq!(workload_of(&owned_by("StatefulSet", "kafka", json!({}))), "kafka");
-        assert_eq!(workload_of(&owned_by("Job", "nightly-report-29345760", json!({}))), "nightly-report");
-        assert_eq!(workload_of(&owned_by("Job", "migrate-1", json!({}))), "migrate-1");
-        assert_eq!(workload_of(&running("lonely")), "lonely");
+        assert_eq!(name(&deployment), "web");
+        assert_eq!(name(&owned_by("ReplicaSet", "bare-rs", json!({}))), "bare-rs");
+        assert_eq!(name(&owned_by("StatefulSet", "kafka", json!({}))), "kafka");
+        assert_eq!(name(&owned_by("Job", "nightly-report-29345760", json!({}))), "nightly-report");
+        assert_eq!(name(&owned_by("Job", "migrate-1", json!({}))), "migrate-1");
+        assert_eq!(name(&running("lonely")), "lonely");
+    }
+
+    #[test]
+    fn the_owner_decides_the_kind_of_building() {
+        let kind = |owner: &str| workload_of(&owned_by(owner, "x", json!({}))).1;
+        assert_eq!(kind("ReplicaSet"), WorkloadKind::Deployment);
+        assert_eq!(kind("StatefulSet"), WorkloadKind::StatefulSet);
+        assert_eq!(kind("DaemonSet"), WorkloadKind::DaemonSet);
+        assert_eq!(kind("Job"), WorkloadKind::Job);
+        assert_eq!(kind("StrimziPodSet"), WorkloadKind::Deployment);
+        assert_eq!(workload_of(&running("lonely")).1, WorkloadKind::Standalone);
     }
 
     #[test]

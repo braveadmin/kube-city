@@ -1,0 +1,200 @@
+<title>kube-city Building Styles</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a terminal-dark gallery; three samples side by side on wide screens, stacked on phones. */
+:root {
+  --bg: #0d1017;
+  --panel: #151a24;
+  --line: #262d3b;
+  --fg: #e6e9f0;
+  --muted: #9aa3b5;
+  --accent: #f2c94c;
+  --font-display: "Pixelify Sans", "Courier New", monospace;
+  --font-body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.55 var(--font-body);
+}
+.page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 40px;
+}
+header { display: grid; gap: 12px; max-width: 68ch; }
+.eyebrow {
+  font: 600 12px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+h1 {
+  font: 700 clamp(32px, 5vw, 48px)/1.05 var(--font-display);
+  margin: 0;
+  text-wrap: balance;
+}
+h2 { font: 700 26px/1.1 var(--font-display); margin: 0; }
+h3 { font: 700 15px/1.3 var(--font-body); margin: 0; }
+p { margin: 0; }
+.lede { color: var(--muted); font-size: 17px; }
+code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
+
+.samples {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 24px;
+}
+.sample {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 16px;
+  min-width: 0;
+}
+.shot {
+  border: 1px solid var(--line);
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+}
+.meta { display: grid; gap: 8px; }
+.tagline { color: var(--muted); }
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 14px;
+  align-content: start;
+}
+dt { color: var(--muted); font-family: var(--font-mono); font-size: 12px; padding-top: 2px; }
+dd { margin: 0; }
+
+.notes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 32px;
+}
+.note { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.note p, .note li { color: var(--muted); font-size: 15px; }
+.note ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.note strong { color: var(--fg); }
+.ask {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 20px 22px;
+  display: grid;
+  gap: 8px;
+  max-width: 76ch;
+}
+</style>
+
+<main class="page">
+  <header>
+    <span class="eyebrow">kube-city · step 5 · art direction</span>
+    <h1>Three ways to build the city</h1>
+    <p class="lede">The same namespace block drawn in three styles. Each image pixel is half a terminal character cell, so this is exactly the detail kube-city can draw. The images are only enlarged for viewing.</p>
+  </header>
+
+  <section class="samples" aria-label="Style samples">
+    <article class="sample">
+      <div class="shot"><img src="{{metropolis}}" alt="Metropolis style: daylight pixel-art block with office towers, grey storage tanks, red-roofed houses, a factory with a smoking chimney, a yellow construction crane, and a tower burning on the right corner." width="672" height="576"></div>
+      <div class="meta">
+        <h2>1 · Metropolis</h2>
+        <p class="tagline">Daylight pixel art in the spirit of SimCity 2000. Plenty of detail and easy to read at a glance.</p>
+      </div>
+      <dl>
+        <dt>Deployment</dt><dd>Office towers with window grids, a shop-front ground floor, setbacks, water tanks and antennas on top</dd>
+        <dt>StatefulSet</dt><dd>Banded storage tanks with domed tops</dd>
+        <dt>DaemonSet</dt><dd>Small houses with red roofs and chimneys, one per node</dd>
+        <dt>Job</dt><dd>A sawtooth-roof factory with a smoking chimney</dd>
+        <dt>Pending</dt><dd>Orange scaffolding and a tower crane</dd>
+        <dt>CrashLoop</dt><dd>Fire on the roof, a smoke trail, glowing windows</dd>
+        <dt>Terminating</dt><dd>Faded grey and half demolished, with dust</dd>
+        <dt>Succeeded</dt><dd>A low pavilion with a green tick</dd>
+      </dl>
+    </article>
+
+    <article class="sample">
+      <div class="shot"><img src="{{neon}}" alt="Neon style: dark block where buildings are near-black boxes outlined in cyan, magenta and lime neon, with scattered coloured windows, glowing roof signs, a red-outlined burning tower and a dotted cyan hologram for the construction site." width="672" height="576"></div>
+      <div class="meta">
+        <h2>2 · Neon night</h2>
+        <p class="tagline">A cyberpunk city at night. Colour and glow carry the meaning, and it blends into a dark terminal.</p>
+      </div>
+      <dl>
+        <dt>Deployment</dt><dd>Dark towers outlined in the workload's neon colour, with a sign and a red beacon on the roof</dd>
+        <dt>StatefulSet</dt><dd>Dark tanks wrapped in neon rings</dd>
+        <dt>DaemonSet</dt><dd>Low shops with a neon strip and a green roof line</dd>
+        <dt>Job</dt><dd>A factory with cyan vents and violet steam</dd>
+        <dt>Pending</dt><dd>A dotted cyan hologram of the building to come</dd>
+        <dt>CrashLoop</dt><dd>Neon turns red, with a red glow and sparks</dd>
+        <dt>Terminating</dt><dd>Neon off, windows dark</dd>
+        <dt>Succeeded</dt><dd>A green neon ring on the ground</dd>
+      </dl>
+    </article>
+
+    <article class="sample">
+      <div class="shot"><img src="{{toytown}}" alt="Toy town style: pastel block with mint and peach apartment houses under terracotta and teal gabled roofs, a domed tower with a flag, round towers with cone roofs, a windmill, wooden scaffolding, lollipop trees and a cartoon fire puffing grey smoke." width="672" height="576"></div>
+      <div class="meta">
+        <h2>3 · Toy town</h2>
+        <p class="tagline">Soft pastels with pitched roofs, like a board game or Townscaper. Friendly and calm as a companion pane.</p>
+      </div>
+      <dl>
+        <dt>Deployment</dt><dd>Pastel apartment houses with white cornices and gabled roofs; the biggest gets a dome and a flag</dd>
+        <dt>StatefulSet</dt><dd>Round towers with striped walls and cone roofs</dd>
+        <dt>DaemonSet</dt><dd>Cottages with flower boxes</dd>
+        <dt>Job</dt><dd>A windmill whose sails turn while it runs</dd>
+        <dt>Pending</dt><dd>Wooden scaffolding around a half-built ground floor</dd>
+        <dt>CrashLoop</dt><dd>A cartoon fire and grey smoke puffs</dd>
+        <dt>Terminating</dt><dd>Washed out to pale grey</dd>
+        <dt>Succeeded</dt><dd>A little gazebo</dd>
+      </dl>
+    </article>
+  </section>
+
+  <section class="notes" aria-label="Notes">
+    <div class="note">
+      <h3>What it costs in terminal space</h3>
+      <p>The detail needs bigger tiles: <span class="mono">16×8</span> pixels instead of today's <span class="mono">8×4</span>. One 4×4 block with its roads then fills about <strong class="mono">112×48</strong> characters, so a whole cluster no longer fits on one screen. That makes zoom part of this step:</p>
+      <ul>
+        <li><strong>Detailed</strong>: these samples, for one namespace or a big screen.</li>
+        <li><strong>Overview</strong>: today's small tiles in the chosen style's colours, to see the whole city.</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>Not shown yet</h3>
+      <ul>
+        <li>Animation: buildings rising floor by floor, demolition, flickering fire and blinking beacons.</li>
+        <li>Namespace name badges.</li>
+        <li>Variety within a style. Today one workload means one building; each style can get a few shapes per kind.</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>Terminal fit</h3>
+      <p>All three only need a terminal with true colour, which Windows Terminal has. The dark background around each scene matches a dark terminal. Toy town and Metropolis are bright scenes on that background, while Neon blends into it.</p>
+    </div>
+  </section>
+
+  <aside class="ask">
+    <h3>Your pick</h3>
+    <p class="tagline">Choose one style, or a mix, for example Metropolis buildings with Neon lighting. The chosen style becomes the default; the others can stay as a <span class="mono">--style</span> option if you like them.</p>
+  </aside>
+</main>

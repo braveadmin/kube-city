@@ -18,12 +18,24 @@ pub enum PodState {
     Failed,
 }
 
+/// What kind of workload owns a pod; it decides the type of building.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadKind {
+    Deployment,
+    StatefulSet,
+    DaemonSet,
+    Job,
+    /// A pod nothing owns.
+    Standalone,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PodInfo {
     pub uid: String,
     pub namespace: String,
     /// The owning workload (e.g. a Deployment); its pods share one look.
     pub workload: String,
+    pub kind: WorkloadKind,
     pub state: PodState,
 }
 
@@ -90,6 +102,7 @@ pub(crate) mod tests {
             uid: uid.to_owned(),
             namespace: namespace.to_owned(),
             workload: "web".to_owned(),
+            kind: WorkloadKind::Deployment,
             state,
         })
     }

@@ -62,7 +62,7 @@ fn main() -> Result<()> {
     };
 
     let mut terminal = ratatui::init();
-    let result = app::run(&mut terminal, &mut receiver, args.fps, &source);
+    let result = app::run(&mut terminal, &mut receiver, args.fps, &source, &render::theme::Metropolis);
     ratatui::restore();
     result
 }

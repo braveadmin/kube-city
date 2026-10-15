@@ -66,6 +66,79 @@ impl Canvas {
             .then(|| self.pixels[(y * self.width + x) as usize])
     }
 
+    /// Fills a polygon, sampling pixel centres, so polygons that share an
+    /// edge neither overlap nor leave a gap.
+    pub fn poly(&mut self, points: &[(f32, f32)], colour: Rgb) {
+        let Some((low, high)) = points.iter().map(|p| p.1).fold(None, |range: Option<(f32, f32)>, y| {
+            Some(range.map_or((y, y), |(low, high)| (low.min(y), high.max(y))))
+        }) else {
+            return;
+        };
+        let mut crossings = Vec::with_capacity(points.len());
+        for y in (low.floor() as i32).max(0)..=(high.ceil() as i32).min(self.height - 1) {
+            let centre = y as f32 + 0.5;
+            crossings.clear();
+            for (i, &(x1, y1)) in points.iter().enumerate() {
+                let (x2, y2) = points[(i + 1) % points.len()];
+                if (y1 <= centre && centre < y2) || (y2 <= centre && centre < y1) {
+                    crossings.push(x1 + (centre - y1) * (x2 - x1) / (y2 - y1));
+                }
+            }
+            crossings.sort_by(f32::total_cmp);
+            for &[start, end] in crossings.as_chunks::<2>().0 {
+                let from = ((start - 0.5).ceil() as i32).max(0);
+                let to = ((end - 0.5).ceil() as i32).min(self.width);
+                for x in from..to {
+                    self.set(x, y, colour);
+                }
+            }
+        }
+    }
+
+    /// A one-pixel line (Bresenham).
+    pub fn line(&mut self, from: (f32, f32), to: (f32, f32), colour: Rgb) {
+        let (mut x, mut y) = (from.0.round() as i32, from.1.round() as i32);
+        let (x1, y1) = (to.0.round() as i32, to.1.round() as i32);
+        let (dx, dy) = ((x1 - x).abs(), -(y1 - y).abs());
+        let (step_x, step_y) = ((x1 - x).signum(), (y1 - y).signum());
+        let mut error = dx + dy;
+        loop {
+            self.set(x, y, colour);
+            if x == x1 && y == y1 {
+                break;
+            }
+            let doubled = 2 * error;
+            if doubled >= dy {
+                error += dy;
+                x += step_x;
+            }
+            if doubled <= dx {
+                error += dx;
+                y += step_y;
+            }
+        }
+    }
+
+    /// A filled ellipse; `colour` gets the horizontal position from -1.0 (left
+    /// edge) to 1.0 (right edge), for shading round things.
+    pub fn ellipse(&mut self, cx: f32, cy: f32, rx: f32, ry: f32, colour: impl Fn(f32) -> Rgb) {
+        if rx <= 0.0 || ry <= 0.0 {
+            return;
+        }
+        for y in ((cy - ry).floor() as i32).max(0)..=((cy + ry).ceil() as i32).min(self.height - 1) {
+            let dy = (y as f32 + 0.5 - cy) / ry;
+            if dy.abs() >= 1.0 {
+                continue;
+            }
+            let half = rx * (1.0 - dy * dy).sqrt();
+            let from = ((cx - half - 0.5).ceil() as i32).max(0);
+            let to = ((cx + half - 0.5).ceil() as i32).min(self.width);
+            for x in from..to {
+                self.set(x, y, colour((x as f32 + 0.5 - cx) / rx));
+            }
+        }
+    }
+
     /// Writes pixel rows `2r` and `2r + 1` into cell row `r` as `▀`, with the
     /// upper pixel as foreground and the lower one as background.
     pub fn blit(&self, buf: &mut Buffer, area: Rect) {
@@ -107,6 +180,36 @@ mod tests {
         assert_eq!(cell.symbol(), "▀");
         assert_eq!(cell.fg, Color::Rgb(255, 0, 0));
         assert_eq!(cell.bg, Color::Rgb(0, 0, 255));
+    }
+
+    fn count(canvas: &Canvas, colour: Rgb) -> usize {
+        canvas.pixels.iter().filter(|&&p| p == colour).count()
+    }
+
+    #[test]
+    fn polygons_sharing_an_edge_neither_overlap_nor_leave_gaps() {
+        let ink = Rgb(1, 1, 1);
+        let left = [(3.0, 2.0), (11.0, 6.0), (7.5, 13.0), (1.0, 9.0)];
+        let right = [(11.0, 6.0), (19.0, 3.0), (17.0, 12.0), (7.5, 13.0)];
+        let alone = |shape: &[(f32, f32)]| {
+            let mut canvas = Canvas::new(24, 16);
+            canvas.poly(shape, ink);
+            count(&canvas, ink)
+        };
+        let mut both = Canvas::new(24, 16);
+        both.poly(&left, ink);
+        both.poly(&right, ink);
+        assert_eq!(count(&both, ink), alone(&left) + alone(&right));
+    }
+
+    #[test]
+    fn shapes_far_off_the_canvas_are_clipped() {
+        let mut canvas = Canvas::new(4, 4);
+        canvas.poly(&[(-1e6, -1e6), (1e6, -1e6), (0.0, 1e6)], Rgb(1, 1, 1));
+        canvas.line((-500.0, 2.0), (500.0, 2.0), Rgb(2, 2, 2));
+        canvas.ellipse(2.0, 2.0, 1e5, 1e5, |_| Rgb(3, 3, 3));
+        canvas.poly(&[], Rgb(4, 4, 4));
+        assert_eq!(count(&canvas, Rgb(3, 3, 3)), 16);
     }
 
     #[test]

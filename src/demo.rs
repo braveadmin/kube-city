@@ -10,21 +10,27 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     util::Rng,
-    world::{PodInfo, PodState, WorldEvent},
+    world::{PodInfo, PodState, WorkloadKind, WorldEvent},
 };
 
+type Workload = (&'static str, WorkloadKind);
+
+const DEP: WorkloadKind = WorkloadKind::Deployment;
+const STS: WorkloadKind = WorkloadKind::StatefulSet;
+const DS: WorkloadKind = WorkloadKind::DaemonSet;
+
 /// Namespaces the simulation can open, with their long-running workloads.
-const CATALOGUE: &[(&str, &[&str])] = &[
-    ("orders", &["kafka", "schema-registry", "orders-api", "orders-sink"]),
-    ("keycloak", &["keycloak", "postgres"]),
-    ("monitoring", &["prometheus", "grafana", "alertmanager"]),
-    ("catalog", &["catalog-api", "catalog-worker", "search-indexer"]),
-    ("ingress", &["ingress-nginx"]),
-    ("payments", &["payments-gateway", "fraud-check", "receipts"]),
-    ("shipping", &["carrier-connector", "carrier-simulator"]),
-    ("feature-preview", &["console", "middleware", "core"]),
+const CATALOGUE: &[(&str, &[Workload])] = &[
+    ("orders", &[("kafka", STS), ("schema-registry", DEP), ("orders-api", DEP), ("orders-sink", DEP)]),
+    ("keycloak", &[("keycloak", DEP), ("postgres", STS)]),
+    ("monitoring", &[("prometheus", STS), ("grafana", DEP), ("alertmanager", STS), ("node-exporter", DS)]),
+    ("catalog", &[("catalog-api", DEP), ("catalog-worker", DEP), ("search-indexer", DEP)]),
+    ("ingress", &[("ingress-nginx", DEP)]),
+    ("payments", &[("payments-gateway", DEP), ("fraud-check", DEP), ("receipts", DEP)]),
+    ("shipping", &[("carrier-connector", DEP), ("carrier-simulator", DEP)]),
+    ("feature-preview", &[("console", DEP), ("middleware", DEP), ("core", DEP), ("debug-shell", WorkloadKind::Standalone)]),
 ];
-const JOB_WORKLOAD: &str = "report-job";
+const JOB: Workload = ("report-job", WorkloadKind::Job);
 /// Scale-ups stop here; restarts and new namespaces may briefly exceed it.
 const MAX_PODS: usize = 120;
 const INITIAL_NAMESPACES: usize = 4;
@@ -33,7 +39,12 @@ const INITIAL_NAMESPACES: usize = 4;
 struct SimPod {
     info: PodInfo,
     age: u32,
-    job: bool,
+}
+
+impl SimPod {
+    fn is_job(&self) -> bool {
+        self.info.kind == WorkloadKind::Job
+    }
 }
 
 enum Transition {
@@ -91,7 +102,7 @@ impl DemoCluster {
                 PodState::Pending if pod.age >= 3 => {
                     Transition::To(if roll < 85 { PodState::Running } else { PodState::CrashLoop })
                 }
-                PodState::Running if pod.job && pod.age >= 5 => {
+                PodState::Running if pod.is_job() && pod.age >= 5 => {
                     Transition::To(if roll < 80 { PodState::Succeeded } else { PodState::Failed })
                 }
                 PodState::CrashLoop if pod.age >= 10 => {
@@ -129,17 +140,17 @@ impl DemoCluster {
             return self.open_namespace(PodState::Pending, events);
         };
         let workload = *self.rng.pick(workloads);
-        self.spawn(namespace, workload, PodState::Pending, false, events);
+        self.spawn(namespace, workload, PodState::Pending, events);
     }
 
     fn scale_down(&mut self, events: &mut Vec<WorldEvent>) {
-        if let Some(i) = self.random_pod(|pod| pod.info.state == PodState::Running && !pod.job) {
+        if let Some(i) = self.random_pod(|pod| pod.info.state == PodState::Running && !pod.is_job()) {
             self.set_state(i, PodState::Terminating, events);
         }
     }
 
     fn crash(&mut self, events: &mut Vec<WorldEvent>) {
-        if let Some(i) = self.random_pod(|pod| pod.info.state == PodState::Running && !pod.job) {
+        if let Some(i) = self.random_pod(|pod| pod.info.state == PodState::Running && !pod.is_job()) {
             self.set_state(i, PodState::CrashLoop, events);
         }
     }
@@ -152,11 +163,11 @@ impl DemoCluster {
         let old: Vec<usize> = (0..self.pods.len())
             .filter(|&i| {
                 let info = &self.pods[i].info;
-                info.namespace == namespace && info.workload == workload && info.state != PodState::Terminating
+                info.namespace == namespace && info.workload == workload.0 && info.state != PodState::Terminating
             })
             .collect();
         for _ in 0..old.len().max(1) {
-            self.spawn(namespace, workload, PodState::Pending, false, events);
+            self.spawn(namespace, workload, PodState::Pending, events);
         }
         for i in old {
             self.set_state(i, PodState::Terminating, events);
@@ -173,7 +184,7 @@ impl DemoCluster {
         let (namespace, workloads) = CATALOGUE[entry];
         for &workload in workloads {
             for _ in 0..=self.rng.below(3) {
-                self.spawn(namespace, workload, state, false, events);
+                self.spawn(namespace, workload, state, events);
             }
         }
     }
@@ -194,11 +205,11 @@ impl DemoCluster {
 
     fn run_job(&mut self, events: &mut Vec<WorldEvent>) {
         if let Some((namespace, _)) = self.random_open_namespace() {
-            self.spawn(namespace, JOB_WORKLOAD, PodState::Pending, true, events);
+            self.spawn(namespace, JOB, PodState::Pending, events);
         }
     }
 
-    fn random_open_namespace(&mut self) -> Option<(&'static str, &'static [&'static str])> {
+    fn random_open_namespace(&mut self) -> Option<(&'static str, &'static [Workload])> {
         if self.open.is_empty() {
             return None;
         }
@@ -210,16 +221,17 @@ impl DemoCluster {
         (!candidates.is_empty()).then(|| *self.rng.pick(&candidates))
     }
 
-    fn spawn(&mut self, namespace: &str, workload: &str, state: PodState, job: bool, events: &mut Vec<WorldEvent>) {
+    fn spawn(&mut self, namespace: &str, (workload, kind): Workload, state: PodState, events: &mut Vec<WorldEvent>) {
         self.next_uid += 1;
         let info = PodInfo {
             uid: format!("demo-{}", self.next_uid),
             namespace: namespace.to_owned(),
             workload: workload.to_owned(),
+            kind,
             state,
         };
         events.push(WorldEvent::PodUpserted(info.clone()));
-        self.pods.push(SimPod { info, age: 0, job });
+        self.pods.push(SimPod { info, age: 0 });
     }
 
     fn set_state(&mut self, i: usize, state: PodState, events: &mut Vec<WorldEvent>) {

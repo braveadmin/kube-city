@@ -39,6 +39,10 @@ impl Block {
         Some(index)
     }
 
+    fn free_lots(&self) -> impl Iterator<Item = usize> + '_ {
+        self.taken.iter().enumerate().filter(|(_, taken)| !**taken).map(|(index, _)| index)
+    }
+
     fn is_empty(&self) -> bool {
         !self.taken.contains(&true)
     }
@@ -108,6 +112,13 @@ impl Layout {
             })
             .max()
             .unwrap_or(0)
+    }
+
+    /// Free lots in blocks that a namespace owns.
+    pub fn empty_lots(&self) -> impl Iterator<Item = Lot> + '_ {
+        self.blocks.iter().enumerate().flat_map(|(block, slot)| {
+            slot.iter().flat_map(move |owned| owned.free_lots().map(move |index| Lot { block, index }))
+        })
     }
 
     /// Each namespace once, with its first (lowest-index) block.
@@ -218,6 +229,16 @@ mod tests {
         layout.release(a);
         assert_eq!(layout.districts().map(|(_, ns)| ns).collect::<Vec<_>>(), ["b"]);
         assert_eq!(layout.place("c").block, a.block);
+    }
+
+    #[test]
+    fn empty_lots_are_the_free_lots_of_owned_blocks() {
+        let mut layout = Layout::default();
+        assert_eq!(layout.empty_lots().count(), 0);
+        let first = layout.place("a");
+        layout.place("a");
+        assert_eq!(layout.empty_lots().count(), LOTS_PER_BLOCK - 2);
+        assert!(layout.empty_lots().all(|lot| lot.block == first.block && lot.index >= 2));
     }
 
     #[test]
