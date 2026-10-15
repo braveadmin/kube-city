@@ -1,6 +1,7 @@
 //! kube-city: a living isometric city of your Kubernetes cluster.
 
 mod app;
+mod cluster;
 mod demo;
 mod layout;
 mod render;
@@ -9,15 +10,24 @@ mod world;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 use clap::Parser;
+use tokio::sync::watch;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "A living isometric city of your Kubernetes cluster")]
 struct Args {
     /// Show a simulated cluster instead of a real one.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["context", "namespaces"])]
     demo: bool,
+
+    /// Kubeconfig context to show (default: the current context).
+    #[arg(long)]
+    context: Option<String>,
+
+    /// Only show this namespace; repeat for more (default: all namespaces).
+    #[arg(long = "namespace", short = 'n', value_name = "NAMESPACE")]
+    namespaces: Vec<String>,
 
     /// Demo simulation steps per second (0.1 to 100).
     #[arg(long, default_value_t = 3.0)]
@@ -34,18 +44,25 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if !args.demo {
-        bail!("watching a real cluster is not implemented yet; run with --demo for now");
-    }
     ensure!((0.1..=100.0).contains(&args.demo_rate), "--demo-rate must be between 0.1 and 100");
 
-    let seed = args.seed.unwrap_or_else(seed_from_clock);
     let runtime = tokio::runtime::Runtime::new()?;
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    runtime.spawn(demo::run(seed, args.demo_rate, sender));
+    let source = if args.demo {
+        let seed = args.seed.unwrap_or_else(seed_from_clock);
+        runtime.spawn(demo::run(seed, args.demo_rate, sender));
+        watch::channel(format!("demo seed {seed}")).1
+    } else {
+        // Connect before taking over the terminal, so login prompts and
+        // errors show up as plain text.
+        let (client, context) = runtime.block_on(cluster::connect(args.context.as_deref(), &args.namespaces))?;
+        let (status, source) = watch::channel(format!("{context} · connecting"));
+        runtime.spawn(cluster::watch(client, context, args.namespaces, sender, status));
+        source
+    };
 
     let mut terminal = ratatui::init();
-    let result = app::run(&mut terminal, &mut receiver, args.fps, &format!("demo seed {seed}"));
+    let result = app::run(&mut terminal, &mut receiver, args.fps, &source);
     ratatui::restore();
     result
 }

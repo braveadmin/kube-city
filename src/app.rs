@@ -7,7 +7,7 @@ use ratatui::{
     DefaultTerminal,
     crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
 };
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::{mpsc::UnboundedReceiver, watch};
 
 use crate::{
     render::{self, Camera},
@@ -22,7 +22,7 @@ pub fn run(
     terminal: &mut DefaultTerminal,
     events: &mut UnboundedReceiver<WorldEvent>,
     fps: u32,
-    source: &str,
+    source: &watch::Receiver<String>,
 ) -> Result<()> {
     let frame_time = Duration::from_secs(1) / fps;
     let mut world = World::default();
@@ -31,7 +31,8 @@ pub fn run(
         while let Ok(event) = events.try_recv() {
             world.apply(event);
         }
-        terminal.draw(|frame| render::draw(frame, &world, camera, source))?;
+        let source = source.borrow().clone();
+        terminal.draw(|frame| render::draw(frame, &world, camera, &source))?;
 
         let deadline = Instant::now() + frame_time;
         while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
