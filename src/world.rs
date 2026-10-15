@@ -5,10 +5,12 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::layout::{Layout, Lot};
 
 /// What a pod is doing, reduced to what the city can show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PodState {
     Pending,
     Running,
@@ -19,7 +21,7 @@ pub enum PodState {
 }
 
 /// What kind of workload owns a pod; it decides the type of building.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkloadKind {
     Deployment,
     StatefulSet,
@@ -29,7 +31,7 @@ pub enum WorkloadKind {
     Standalone,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PodInfo {
     pub uid: String,
     pub namespace: String,
@@ -40,7 +42,7 @@ pub struct PodInfo {
 }
 
 /// A change reported by a source.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorldEvent {
     PodUpserted(PodInfo),
     PodDeleted { uid: String },
