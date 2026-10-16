@@ -11,7 +11,7 @@ use tokio::sync::{mpsc::UnboundedReceiver, watch};
 
 use crate::{
     render::{self, View, theme::Theme},
-    world::{World, WorldEvent},
+    world::{Rules, World, WorldEvent},
 };
 
 /// Pixels moved per key press; horizontal steps are wider to match tiles.
@@ -26,10 +26,16 @@ pub fn run(
     fps: u32,
     source: &watch::Receiver<String>,
     theme: &dyn Theme,
+    rules: Rules,
+    pixels: bool,
 ) -> Result<()> {
+    #[cfg(feature = "sixel")]
+    let output = pixels.then(render::pixels::PixelOutput::detect).transpose()?;
+    #[cfg(not(feature = "sixel"))]
+    let _ = pixels;
     let frame_time = Duration::from_secs(1) / fps;
     let started = Instant::now();
-    let mut world = World::default();
+    let mut world = World::new(rules);
     let mut view = View::default();
     loop {
         while let Ok(event) = events.try_recv() {
@@ -37,7 +43,13 @@ pub fn run(
         }
         let source = source.borrow().clone();
         let anim = (started.elapsed().as_millis() / ANIMATION_STEP.as_millis()) as u64;
-        terminal.draw(|frame| render::draw(frame, &world, view, theme, anim, &source))?;
+        terminal.draw(|frame| {
+            #[cfg(feature = "sixel")]
+            if let Some(output) = &output {
+                return output.draw(frame, &world, view, theme, anim, &source);
+            }
+            render::draw(frame, &world, view, theme, anim, &source);
+        })?;
 
         let deadline = Instant::now() + frame_time;
         while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
@@ -57,7 +69,8 @@ pub fn run(
                 KeyCode::Right | KeyCode::Char('l') => view.pan(-PAN_X, 0),
                 KeyCode::Up | KeyCode::Char('k') => view.pan(0, PAN_Y),
                 KeyCode::Down | KeyCode::Char('j') => view.pan(0, -PAN_Y),
-                KeyCode::Char('z') => view.toggle_zoom(),
+                KeyCode::Char('z') => view.next_zoom(),
+                KeyCode::Char('f') => view.focus = !view.focus,
                 KeyCode::Char('c') => view.recentre(),
                 _ => {}
             }

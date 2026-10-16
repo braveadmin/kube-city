@@ -62,6 +62,9 @@ pub trait Theme {
     /// A pod's building on tile (tx, ty).
     fn building(&self, scene: &mut Scene, tx: i32, ty: i32, look: &BuildingLook);
 
+    /// A building's colour on the health map: calm when fine, loud when not.
+    fn map_colour(&self, look: &BuildingLook) -> Rgb;
+
     /// Decoration for a free lot in a namespace's block; `seed` is stable per lot.
     fn empty_lot(&self, scene: &mut Scene, tx: i32, ty: i32, seed: u64);
 }

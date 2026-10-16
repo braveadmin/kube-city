@@ -15,6 +15,8 @@ pub enum Zoom {
     #[default]
     Detail,
     Overview,
+    /// Buildings become small tiles coloured by state: a health map.
+    Map,
 }
 
 impl Zoom {
@@ -23,13 +25,15 @@ impl Zoom {
         match self {
             Zoom::Detail => 1.0,
             Zoom::Overview => 0.5,
+            Zoom::Map => 0.25,
         }
     }
 
-    pub fn toggled(self) -> Self {
+    pub fn next(self) -> Self {
         match self {
             Zoom::Detail => Zoom::Overview,
-            Zoom::Overview => Zoom::Detail,
+            Zoom::Overview => Zoom::Map,
+            Zoom::Map => Zoom::Detail,
         }
     }
 }
@@ -73,13 +77,31 @@ pub struct Scene<'a> {
     origin: (f32, f32),
     scale: f32,
     frame: u64,
+    /// While set, everything drawn is blended towards this colour.
+    mute: Option<(Rgb, f32)>,
+}
+
+fn ink(mute: Option<(Rgb, f32)>, colour: Rgb) -> Rgb {
+    mute.map_or(colour, |(towards, amount)| colour.mix(towards, amount))
 }
 
 impl<'a> Scene<'a> {
     /// `origin` is where the top corner of tile (0, 0) lands on the canvas;
     /// `frame` counts animation steps.
     pub fn new(canvas: &'a mut Canvas, zoom: Zoom, origin: (i32, i32), frame: u64) -> Self {
-        Self { canvas, origin: (origin.0 as f32, origin.1 as f32), scale: zoom.scale(), frame }
+        Self { canvas, origin: (origin.0 as f32, origin.1 as f32), scale: zoom.scale(), frame, mute: None }
+    }
+
+    /// Draws `density` times larger, for outputs with more pixels than half
+    /// blocks give.
+    pub fn magnified(mut self, density: f32) -> Self {
+        self.scale *= density;
+        self
+    }
+
+    /// Fades what is drawn next towards `towards` by `amount` (0.0 to 1.0).
+    pub fn set_mute(&mut self, mute: Option<(Rgb, f32)>) {
+        self.mute = mute;
     }
 
     pub fn frame(&self) -> u64 {
@@ -118,25 +140,26 @@ impl<'a> Scene<'a> {
 
     /// One screen pixel, for particles and other effects.
     pub fn dot(&mut self, at: (f32, f32), colour: Rgb) {
-        self.canvas.set(at.0.floor() as i32, at.1.floor() as i32, colour);
+        self.canvas.set(at.0.floor() as i32, at.1.floor() as i32, ink(self.mute, colour));
     }
 
     pub fn screen_line(&mut self, from: (f32, f32), to: (f32, f32), colour: Rgb) {
-        self.canvas.line(from, to, colour);
+        self.canvas.line(from, to, ink(self.mute, colour));
     }
 
     pub fn line(&mut self, from: (f32, f32, f32), to: (f32, f32, f32), colour: Rgb) {
         let (a, b) = (self.project(from.0, from.1, from.2), self.project(to.0, to.1, to.2));
-        self.canvas.line(a, b, colour);
+        self.canvas.line(a, b, ink(self.mute, colour));
     }
 
     pub fn ellipse(&mut self, centre: (f32, f32), rx: f32, ry: f32, colour: impl Fn(f32) -> Rgb) {
-        self.canvas.ellipse(centre.0, centre.1, rx, ry, colour);
+        let mute = self.mute;
+        self.canvas.ellipse(centre.0, centre.1, rx, ry, |t| ink(mute, colour(t)));
     }
 
     pub fn polygon(&mut self, points: &[(f32, f32, f32)], colour: Rgb) {
         let projected: Vec<_> = points.iter().map(|&(x, y, z)| self.project(x, y, z)).collect();
-        self.canvas.poly(&projected, colour);
+        self.canvas.poly(&projected, ink(self.mute, colour));
     }
 
     /// A horizontal rectangle at height `z`: ground, roofs, slabs.
@@ -178,7 +201,7 @@ impl<'a> Scene<'a> {
             let x = (ax + col as f32).floor() as i32;
             for z in bottom..top {
                 let colour = paint(FacePixel { col, cols, z: z - bottom, height: top - bottom });
-                self.canvas.set(x, (base - z as f32).floor() as i32, colour);
+                self.canvas.set(x, (base - z as f32).floor() as i32, ink(self.mute, colour));
             }
         }
     }
@@ -220,15 +243,16 @@ impl<'a> Scene<'a> {
     ) {
         let (sx, sy) = self.project(centre.0, centre.1, 0.0);
         let stretch = std::f32::consts::SQRT_2 * self.scale;
+        let mute = self.mute;
         let (bottom, top_px) = (self.z_px(z0), self.z_px(z1));
         for z in bottom..top_px {
             let world_z = z as f32 / self.scale;
             let r = radius(world_z) * stretch;
-            self.canvas.ellipse(sx, sy - z as f32, r * TILE_W / 2.0, r * TILE_H / 2.0, |t| side(t, world_z));
+            self.canvas.ellipse(sx, sy - z as f32, r * TILE_W / 2.0, r * TILE_H / 2.0, |t| ink(mute, side(t, world_z)));
         }
         if let Some(colour) = top {
             let r = radius(z1) * stretch;
-            self.canvas.ellipse(sx, sy - top_px as f32, r * TILE_W / 2.0, r * TILE_H / 2.0, |_| colour);
+            self.canvas.ellipse(sx, sy - top_px as f32, r * TILE_W / 2.0, r * TILE_H / 2.0, |_| ink(mute, colour));
         }
     }
 }
@@ -238,14 +262,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ground_tiles_cover_the_plane_without_gaps_at_both_zooms() {
+    fn ground_tiles_cover_the_plane_without_gaps_at_every_zoom() {
         let (hole, a, b) = (Rgb(0, 0, 0), Rgb(1, 1, 1), Rgb(2, 2, 2));
-        for zoom in [Zoom::Detail, Zoom::Overview] {
+        for zoom in [Zoom::Detail, Zoom::Overview, Zoom::Map] {
             let mut canvas = Canvas::new(64, 48);
             canvas.fill(hole);
             let mut scene = Scene::new(&mut canvas, zoom, (32, 4), 0);
-            for ty in -12..12 {
-                for tx in -12..12 {
+            for ty in -40..40 {
+                for tx in -40..40 {
                     let colour = if (tx + ty) % 2 == 0 { a } else { b };
                     scene.flat(Footprint::lot(tx, ty, 0.0), 0.0, colour);
                 }
@@ -264,6 +288,17 @@ mod tests {
         let detail = Scene::new(&mut canvas, Zoom::Detail, (0, 0), 0).project(2.0, 1.0, 10.0);
         let overview = Scene::new(&mut canvas, Zoom::Overview, (0, 0), 0).project(2.0, 1.0, 10.0);
         assert_eq!((detail.0 / 2.0, detail.1 / 2.0), overview);
+    }
+
+    #[test]
+    fn muting_fades_everything_drawn_until_it_is_lifted() {
+        let mut canvas = Canvas::new(4, 1);
+        let mut scene = Scene::new(&mut canvas, Zoom::Detail, (0, 0), 0);
+        scene.set_mute(Some((Rgb(0, 0, 0), 0.5)));
+        scene.dot((0.0, 0.0), Rgb(200, 100, 50));
+        scene.set_mute(None);
+        scene.dot((1.0, 0.0), Rgb(200, 100, 50));
+        assert_eq!((canvas.get(0, 0), canvas.get(1, 0)), (Some(Rgb(100, 50, 25)), Some(Rgb(200, 100, 50))));
     }
 
     #[test]

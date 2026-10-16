@@ -53,6 +53,16 @@ struct Args {
     #[arg(long)]
     seed: Option<u64>,
 
+    /// Evaluation: hide finished jobs and give each DaemonSet one building.
+    #[arg(long)]
+    prototype: bool,
+
+    /// Experimental: draw real pixels with the terminal's graphics protocol
+    /// (Sixel in Windows Terminal) instead of half blocks.
+    #[cfg(feature = "sixel")]
+    #[arg(long)]
+    sixel: bool,
+
     /// Frames per second.
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=60))]
     fps: u32,
@@ -94,7 +104,12 @@ fn main() -> Result<()> {
     };
 
     let mut terminal = ratatui::init();
-    let result = app::run(&mut terminal, &mut receiver, args.fps, &source, &render::theme::Metropolis);
+    let rules = world::Rules { hide_completed: args.prototype, group_daemonsets: args.prototype };
+    #[cfg(feature = "sixel")]
+    let pixels = args.sixel;
+    #[cfg(not(feature = "sixel"))]
+    let pixels = false;
+    let result = app::run(&mut terminal, &mut receiver, args.fps, &source, &render::theme::Metropolis, rules, pixels);
     ratatui::restore();
     result
 }

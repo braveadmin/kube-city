@@ -20,6 +20,8 @@ const LAND: Rgb = Rgb(70, 104, 58);
 const ROAD: Rgb = Rgb(74, 77, 85);
 const ROAD_LINE: Rgb = Rgb(230, 200, 74);
 const SIDEWALK: Rgb = Rgb(185, 180, 168);
+/// Healthy buildings on the health map: present but quiet.
+const MAP_CALM: Rgb = Rgb(120, 146, 136);
 /// Lot ground per namespace, so neighbouring districts read apart.
 const LOT_GROUNDS: [Rgb; 5] =
     [Rgb(111, 154, 79), Rgb(150, 144, 128), Rgb(176, 160, 124), Rgb(124, 138, 146), Rgb(92, 128, 86)];
@@ -44,12 +46,17 @@ const STEAM: (Rgb, Rgb) = (Rgb(232, 232, 236), Rgb(176, 176, 186));
 const ASH: Rgb = Rgb(138, 138, 138);
 const DUST: Rgb = Rgb(200, 184, 154);
 
-const TANK: Rgb = Rgb(184, 190, 198);
-const TANK_BAND: Rgb = Rgb(142, 149, 158);
-const TANK_DOME: Rgb = Rgb(214, 219, 225);
+const TANKS: [Rgb; 6] = [
+    Rgb(184, 190, 198),
+    Rgb(226, 224, 214),
+    Rgb(150, 180, 140),
+    Rgb(140, 170, 204),
+    Rgb(212, 190, 150),
+    Rgb(192, 124, 98),
+];
 const LADDER: Rgb = Rgb(92, 99, 108);
 
-const HOUSE_WALL: Rgb = Rgb(232, 220, 192);
+const HOUSE_WALLS: [Rgb; 4] = [Rgb(232, 220, 192), Rgb(214, 226, 236), Rgb(236, 214, 200), Rgb(220, 232, 206)];
 const HOUSE_ROOFS: [Rgb; 3] = [Rgb(181, 81, 62), Rgb(96, 112, 140), Rgb(140, 96, 70)];
 const DOOR: Rgb = Rgb(107, 74, 50);
 const HOUSE_WINDOW: Rgb = Rgb(93, 132, 168);
@@ -138,6 +145,17 @@ impl Theme for Metropolis {
                 WorkloadKind::Job => factory(s, tx, ty, look),
                 WorkloadKind::Standalone => kiosk(s, tx, ty, look),
             },
+        }
+    }
+
+    fn map_colour(&self, look: &BuildingLook) -> Rgb {
+        match look.state {
+            PodState::Running => MAP_CALM,
+            PodState::Pending => SCAFFOLD,
+            PodState::CrashLoop => FLAMES[2],
+            PodState::Failed => CROSS.shade(0.7),
+            PodState::Terminating => ASH,
+            PodState::Succeeded => CONCRETE,
         }
     }
 
@@ -309,38 +327,68 @@ fn tower(s: &mut Scene, tx: i32, ty: i32, look: &BuildingLook) {
     condition.aftermath(s, (centre.0, centre.1, height), look.seed);
 }
 
+/// StatefulSets: a storage tank, twin tanks or a tall silo, coloured per workload.
 fn tank(s: &mut Scene, tx: i32, ty: i32, look: &BuildingLook) {
     let condition = Condition::of(look.state);
+    let colour = condition.tint(pick(&TANKS, look.style >> 4));
     let height = 16.0 + ((look.style >> 8) % 8) as f32;
-    let (body, band, dome) = (condition.tint(TANK), condition.tint(TANK_BAND), condition.tint(TANK_DOME));
     let (x, y) = (tx as f32, ty as f32);
-    let centre = (x + 0.5, y + 0.5);
+    let top = match (look.style >> 20) % 3 {
+        0 => {
+            cylinder(s, (x + 0.5, y + 0.5), 0.36, height, colour, Roof::Dome);
+            if s.detailed() {
+                s.line((x + 0.62, y + 0.86, 1.0), (x + 0.62, y + 0.86, height - 2.0), LADDER);
+            }
+            (x + 0.5, y + 0.5, height + 4.0)
+        }
+        1 => {
+            cylinder(s, (x + 0.32, y + 0.32), 0.2, height, colour, Roof::Dome);
+            cylinder(s, (x + 0.68, y + 0.68), 0.2, height - 5.0, colour, Roof::Dome);
+            (x + 0.32, y + 0.32, height + 4.0)
+        }
+        _ => {
+            cylinder(s, (x + 0.5, y + 0.5), 0.26, height + 10.0, colour, Roof::Cone);
+            (x + 0.5, y + 0.5, height + 16.0)
+        }
+    };
+    condition.aftermath(s, top, look.seed);
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Roof {
+    Dome,
+    Cone,
+}
+
+/// A banded cylinder lit from the right, with a dome or a cone on top.
+fn cylinder(s: &mut Scene, centre: (f32, f32), radius: f32, height: f32, colour: Rgb, roof: Roof) {
+    let (band, cap) = (colour.shade(0.78), colour.shade(1.15));
     let lighting = |t: f32| 0.7 + 0.35 * (t + 1.0) / 2.0;
     s.revolve(
         centre,
         0.0,
         height,
-        |_| 0.36,
-        |t, z| (if z as i32 % 6 >= 4 { band } else { body }).shade(lighting(t)),
+        |_| radius,
+        |t, z| (if z as i32 % 6 >= 4 { band } else { colour }).shade(lighting(t)),
         None,
     );
+    let (rise, profile): (f32, fn(f32) -> f32) = match roof {
+        Roof::Dome => (4.0, |f| (1.0 - f * f).max(0.0).sqrt()),
+        Roof::Cone => (6.0, |f| 1.0 - f),
+    };
     s.revolve(
         centre,
         height,
-        height + 4.0,
-        |z| 0.36 * (1.0 - ((z - height) / 4.0).powi(2)).max(0.0).sqrt(),
-        |t, _| dome.shade(0.85 + 0.25 * (t + 1.0) / 2.0),
+        height + rise,
+        |z| radius * profile((z - height) / rise),
+        |t, _| cap.shade(0.85 + 0.25 * (t + 1.0) / 2.0),
         None,
     );
-    if s.detailed() {
-        s.line((x + 0.62, y + 0.86, 1.0), (x + 0.62, y + 0.86, height - 2.0), LADDER);
-    }
-    condition.aftermath(s, (centre.0, centre.1, height + 4.0), look.seed);
 }
 
 fn house(s: &mut Scene, tx: i32, ty: i32, look: &BuildingLook) {
     let condition = Condition::of(look.state);
-    let wall = condition.tint(HOUSE_WALL);
+    let wall = condition.tint(pick(&HOUSE_WALLS, look.style >> 4));
     let roof = condition.tint(pick(&HOUSE_ROOFS, look.style));
     let window = if condition.burning { EMBER } else { HOUSE_WINDOW };
     let (x, y) = (tx as f32, ty as f32);

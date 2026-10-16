@@ -6,6 +6,8 @@
 //! where comes from the world's layout; how it looks comes from the theme.
 
 mod canvas;
+#[cfg(feature = "sixel")]
+pub mod pixels;
 mod scene;
 pub mod theme;
 
@@ -15,23 +17,27 @@ pub use canvas::Canvas;
 pub use scene::Zoom;
 
 use self::{
-    scene::Scene,
+    scene::{Footprint, Scene},
     theme::{BuildingLook, Ground, RoadDirection, Theme, UiColours},
 };
 use crate::{
     layout::{self, BLOCK_SIDE, BLOCK_STRIDE, Layout},
     util::{mix, stable_hash},
-    world::{PodInfo, World},
+    world::{PodInfo, PodState, World},
 };
 
 const LABEL_MAX: usize = 18;
+/// How far focus mode fades healthy buildings into the background.
+const FOCUS_FADE: f32 = 0.7;
 
-/// What the screen shows: a pixel offset from the city centre and a zoom.
+/// What the screen shows: a pixel offset from the city centre, a zoom, and
+/// whether healthy buildings fade so problems stand out.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct View {
     pub x: i32,
     pub y: i32,
     pub zoom: Zoom,
+    pub focus: bool,
 }
 
 impl View {
@@ -40,9 +46,9 @@ impl View {
         self.y += dy;
     }
 
-    /// Switches zoom, keeping the same spot in the middle of the screen.
-    pub fn toggle_zoom(&mut self) {
-        let next = self.zoom.toggled();
+    /// Moves to the next zoom level, keeping the same spot in the middle.
+    pub fn next_zoom(&mut self) {
+        let next = self.zoom.next();
         let ratio = next.scale() / self.zoom.scale();
         self.x = (self.x as f32 * ratio).round() as i32;
         self.y = (self.y as f32 * ratio).round() as i32;
@@ -85,11 +91,27 @@ pub fn draw(frame: &mut Frame, world: &World, view: View, theme: &dyn Theme, ani
 
 /// Paints ground and buildings; returns the district labels to overlay.
 pub fn paint(world: &World, view: View, theme: &dyn Theme, anim: u64, canvas: &mut Canvas) -> Vec<Label> {
+    paint_magnified(world, view, theme, anim, canvas, 1.0)
+}
+
+/// [`paint`] at `density` canvas pixels per half-block pixel, for outputs with
+/// real pixels; the view's offsets stay in half-block pixels.
+pub fn paint_magnified(
+    world: &World,
+    view: View,
+    theme: &dyn Theme,
+    anim: u64,
+    canvas: &mut Canvas,
+    density: f32,
+) -> Vec<Label> {
     canvas.fill(theme.sky());
-    let k = view.zoom.scale();
+    let k = view.zoom.scale() * density;
     // The centre of the first block sits a little below the middle of the screen.
-    let origin = (canvas.width() / 2 + view.x, canvas.height() / 2 + view.y - (8.0 * k) as i32);
-    let mut scene = Scene::new(canvas, view.zoom, origin, anim);
+    let origin = (
+        canvas.width() / 2 + (view.x as f32 * density) as i32,
+        canvas.height() / 2 + (view.y as f32 * density) as i32 - (8.0 * k) as i32,
+    );
+    let mut scene = Scene::new(canvas, view.zoom, origin, anim).magnified(density);
     let layout = world.layout();
 
     // An island just big enough for the occupied blocks, ringed by road.
@@ -111,15 +133,23 @@ pub fn paint(world: &World, view: View, theme: &dyn Theme, anim: u64, canvas: &m
         .collect();
     things.sort_by_key(|&((x, y), _)| (x + y, x));
     let reach = theme.max_height();
+    let fade = Some((theme.sky(), FOCUS_FADE));
     for ((tx, ty), pod) in things {
         if !scene.visible(tx, ty, reach) {
             continue;
         }
-        match pod {
-            Some(pod) => theme.building(&mut scene, tx, ty, &look_of(pod)),
-            None => theme.empty_lot(&mut scene, tx, ty, mix(&[tx as u64, ty as u64])),
+        let calm = pod.is_none_or(|pod| pod.state == PodState::Running);
+        scene.set_mute(if view.focus && calm { fade } else { None });
+        match (pod, view.zoom) {
+            (Some(pod), Zoom::Map) => {
+                scene.flat(Footprint::lot(tx, ty, 0.1), 0.0, theme.map_colour(&look_of(pod)));
+            }
+            (Some(pod), _) => theme.building(&mut scene, tx, ty, &look_of(pod)),
+            (None, Zoom::Map) => {}
+            (None, _) => theme.empty_lot(&mut scene, tx, ty, mix(&[tx as u64, ty as u64])),
         }
     }
+    scene.set_mute(None);
 
     layout
         .districts()
@@ -150,7 +180,8 @@ fn look_of(pod: &PodInfo) -> BuildingLook {
     BuildingLook {
         kind: pod.kind,
         state: pod.state,
-        style: stable_hash(&format!("{}/{}", pod.namespace, pod.workload)),
+        // By name only, so a component looks the same in every namespace.
+        style: stable_hash(&pod.workload),
         seed: stable_hash(&pod.uid),
     }
 }
@@ -175,16 +206,21 @@ fn put_label(buf: &mut Buffer, area: Rect, label: &Label, ui: UiColours) {
 
 fn draw_status(buf: &mut Buffer, bar: Rect, world: &World, ui: UiColours, view: View, source: &str) {
     let style = Style::new().fg(ui.status_fg.into()).bg(ui.status_bg.into());
-    let left = format!(
+    let mut left = format!(
         " kube-city · {source} · {} pods · {} namespaces",
         world.pod_count(),
         world.namespace_count()
     );
-    let zoom = match view.zoom {
-        Zoom::Detail => "z overview",
-        Zoom::Overview => "z detail",
+    if world.hidden_count() > 0 {
+        left.push_str(&format!(" · {} finished hidden", world.hidden_count()));
+    }
+    let zoom = match view.zoom.next() {
+        Zoom::Detail => "z detail",
+        Zoom::Overview => "z overview",
+        Zoom::Map => "z map",
     };
-    let right = format!("←↑↓→ pan · {zoom} · c centre · q quit ");
+    let focus = if view.focus { "f all" } else { "f focus" };
+    let right = format!("←↑↓→ pan · {zoom} · {focus} · c centre · q quit ");
     buf.set_style(bar, style);
     buf.set_stringn(bar.x, bar.y, &left, usize::from(bar.width), style);
     let (left_len, right_len) = (left.chars().count(), right.chars().count());
@@ -222,8 +258,13 @@ mod tests {
         world
     }
 
-    fn views() -> [View; 2] {
-        [View::default(), View { zoom: Zoom::Overview, ..View::default() }]
+    fn views() -> [View; 4] {
+        [
+            View::default(),
+            View { zoom: Zoom::Overview, ..View::default() },
+            View { zoom: Zoom::Map, ..View::default() },
+            View { focus: true, ..View::default() },
+        ]
     }
 
     #[test]
@@ -251,22 +292,36 @@ mod tests {
     fn painting_never_panics_at_odd_sizes_or_far_views() {
         let world = demo_world(400);
         for (w, h) in [(0, 0), (1, 1), (3, 2), (80, 48), (300, 160)] {
-            for zoom in [Zoom::Detail, Zoom::Overview] {
+            for zoom in [Zoom::Detail, Zoom::Overview, Zoom::Map] {
                 for (x, y) in [(0, 0), (-5000, 5000), (37, -11)] {
                     let mut canvas = Canvas::new(w, h);
-                    paint(&world, View { x, y, zoom }, &Metropolis, 7, &mut canvas);
+                    paint(&world, View { x, y, zoom, focus: x == 0 }, &Metropolis, 7, &mut canvas);
                 }
             }
         }
     }
 
     #[test]
-    fn toggling_zoom_twice_returns_to_the_same_view() {
-        let mut view = View { x: 40, y: -24, zoom: Zoom::Detail };
-        view.toggle_zoom();
+    fn zoom_cycles_through_three_levels_keeping_the_spot() {
+        let mut view = View { x: 40, y: -24, ..View::default() };
+        view.next_zoom();
         assert_eq!((view.x, view.y, view.zoom), (20, -12, Zoom::Overview));
-        view.toggle_zoom();
-        assert_eq!(view, View { x: 40, y: -24, zoom: Zoom::Detail });
+        view.next_zoom();
+        assert_eq!((view.x, view.y, view.zoom), (10, -6, Zoom::Map));
+        view.next_zoom();
+        assert_eq!(view, View { x: 40, y: -24, ..View::default() });
+    }
+
+    #[test]
+    fn focus_fades_healthy_buildings_but_not_broken_ones() {
+        let mut world = World::default();
+        world.apply(upsert("a", "shop", PodState::Running));
+        let focused = View { focus: true, ..View::default() };
+        assert_ne!(painted(&world, focused), painted(&world, View::default()));
+        world.apply(upsert("a", "shop", PodState::CrashLoop));
+        let empty_city = World::default();
+        // Only the lot's trees fade; the burning building itself is untouched.
+        assert_ne!(painted(&world, focused), painted(&empty_city, focused));
     }
 
     #[test]
@@ -279,8 +334,40 @@ mod tests {
         let buf = terminal.backend().buffer();
         let row = |y: u16| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>();
         assert!(row(39).contains("test · 2 pods · 2 namespaces"), "status: {}", row(39));
-        assert!(row(39).contains("z overview"), "status: {}", row(39));
+        assert!(row(39).contains("z overview · f focus"), "status: {}", row(39));
         assert!((0..39).any(|y| row(y).contains("shop")), "district label is drawn");
+    }
+
+    /// A design tool: renders a recording as PPM images, one per view, at the
+    /// pixel size of a 200×55 terminal (times `KUBE_CITY_DENSITY`, if set).
+    ///
+    /// `KUBE_CITY_REPLAY=rec.jsonl KUBE_CITY_OUT=dir cargo test render_snapshots -- --ignored`
+    #[test]
+    #[ignore = "design tool: needs KUBE_CITY_REPLAY and KUBE_CITY_OUT"]
+    fn render_snapshots() {
+        let replay = std::env::var("KUBE_CITY_REPLAY").expect("KUBE_CITY_REPLAY names a recording");
+        let out = std::path::PathBuf::from(std::env::var("KUBE_CITY_OUT").expect("KUBE_CITY_OUT names a folder"));
+        let views = [
+            ("detail", View::default()),
+            ("overview", View { zoom: Zoom::Overview, ..View::default() }),
+            ("map", View { zoom: Zoom::Map, ..View::default() }),
+            ("focus", View { zoom: Zoom::Overview, focus: true, ..View::default() }),
+        ];
+        let rules = crate::world::Rules {
+            hide_completed: std::env::var_os("KUBE_CITY_PROTOTYPE").is_some(),
+            group_daemonsets: std::env::var_os("KUBE_CITY_PROTOTYPE").is_some(),
+        };
+        let mut world = World::new(rules);
+        for (_, event) in crate::recording::load(std::path::Path::new(&replay)).expect("recording loads") {
+            world.apply(event);
+        }
+        // KUBE_CITY_DENSITY=10 renders at the real pixel size of a terminal with 10×20 cells.
+        let density: i32 = std::env::var("KUBE_CITY_DENSITY").map_or(1, |d| d.parse().expect("a whole number"));
+        for (name, view) in views {
+            let mut canvas = Canvas::new(200 * density, 110 * density);
+            paint_magnified(&world, view, &Metropolis, 12, &mut canvas, density as f32);
+            std::fs::write(out.join(format!("{name}.ppm")), canvas.to_ppm()).expect("write snapshot");
+        }
     }
 
     #[test]

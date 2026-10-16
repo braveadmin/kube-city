@@ -139,6 +139,22 @@ impl Canvas {
         }
     }
 
+    /// The pixels as RGB bytes, row by row.
+    #[cfg(feature = "sixel")]
+    pub fn rgb_bytes(&self) -> Vec<u8> {
+        self.pixels.iter().flat_map(|&Rgb(r, g, b)| [r, g, b]).collect()
+    }
+
+    /// The canvas as a plain-text PPM image, for snapshots.
+    #[cfg(test)]
+    pub fn to_ppm(&self) -> String {
+        let mut out = format!("P3\n{} {}\n255\n", self.width, self.height);
+        for Rgb(r, g, b) in &self.pixels {
+            out.push_str(&format!("{r} {g} {b}\n"));
+        }
+        out
+    }
+
     /// Writes pixel rows `2r` and `2r + 1` into cell row `r` as `▀`, with the
     /// upper pixel as foreground and the lower one as background.
     pub fn blit(&self, buf: &mut Buffer, area: Rect) {
