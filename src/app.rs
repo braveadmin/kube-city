@@ -27,10 +27,10 @@ pub fn run(
     source: &watch::Receiver<String>,
     theme: &dyn Theme,
     rules: Rules,
-    pixels: bool,
+    pixels: Option<f32>,
 ) -> Result<()> {
     #[cfg(feature = "sixel")]
-    let output = pixels.then(render::pixels::PixelOutput::detect).transpose()?;
+    let output = pixels.map(render::pixels::PixelOutput::detect).transpose()?;
     #[cfg(not(feature = "sixel"))]
     let _ = pixels;
     let frame_time = Duration::from_secs(1) / fps;

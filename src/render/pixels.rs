@@ -1,9 +1,10 @@
 //! Experimental: the city as real pixels, sent with a terminal graphics
 //! protocol (Sixel, Kitty or iTerm2) instead of half blocks.
 //!
-//! The view keeps the same framing as the half-block renderer; every
-//! half-block pixel becomes about half a character cell of real pixels, so
-//! the same art gets roughly ten times the detail in each direction.
+//! The view keeps the same framing as the half-block renderer. The art is
+//! drawn `scale` times larger than with half blocks and enlarged without
+//! smoothing to the terminal's real pixel size, so it stays pixel art; a
+//! scale of half the cell height (about 10) uses every real pixel.
 
 use anyhow::{Context, Result};
 use image::{DynamicImage, RgbImage};
@@ -18,15 +19,16 @@ use crate::world::World;
 
 pub struct PixelOutput {
     picker: Picker,
+    scale: f32,
 }
 
 impl PixelOutput {
     /// Asks the terminal which graphics protocol it speaks and how big its
     /// character cells are. Call it after the terminal is set up and before
     /// reading key events.
-    pub fn detect() -> Result<Self> {
+    pub fn detect(scale: f32) -> Result<Self> {
         let picker = Picker::from_query_stdio().context("the terminal did not say which graphics it supports")?;
-        Ok(Self { picker })
+        Ok(Self { picker, scale })
     }
 
     pub fn draw(&self, frame: &mut Frame, world: &World, view: View, theme: &dyn Theme, anim: u64, source: &str) {
@@ -35,7 +37,7 @@ impl PixelOutput {
             return;
         }
         let city = Rect { height: area.height - 1, ..area };
-        let Ok(image) = render(world, view, theme, anim, city, &self.picker) else {
+        let Ok(image) = render(world, view, theme, anim, city, &self.picker, self.scale) else {
             return;
         };
         frame.render_widget(Image::new(&image), city);
@@ -45,8 +47,9 @@ impl PixelOutput {
     }
 }
 
-/// Paints the city at the terminal's real pixel size for `area` and encodes
-/// it for the picker's protocol.
+/// Paints the city at `scale` times the half-block size, enlarges it to the
+/// terminal's real pixel size for `area`, and encodes it for the picker's
+/// protocol.
 fn render(
     world: &World,
     view: View,
@@ -54,13 +57,18 @@ fn render(
     anim: u64,
     area: Rect,
     picker: &Picker,
+    scale: f32,
 ) -> Result<ratatui_image::protocol::Protocol> {
     let cell = picker.font_size();
     let (width, height) = (u32::from(area.width) * u32::from(cell.width), u32::from(area.height) * u32::from(cell.height));
-    let mut canvas = Canvas::new(width as i32, height as i32);
-    // A half-block pixel is half a cell tall.
-    paint_magnified(world, view, theme, anim, &mut canvas, f32::from(cell.height) / 2.0);
-    let image = RgbImage::from_raw(width, height, canvas.rgb_bytes()).context("canvas and image sizes differ")?;
+    // A half-block pixel is half a cell tall: that is the most detail there is.
+    let scale = scale.clamp(1.0, f32::from(cell.height) / 2.0);
+    let shrink = scale / (f32::from(cell.height) / 2.0);
+    let (small_w, small_h) = (((width as f32 * shrink) as u32).max(1), ((height as f32 * shrink) as u32).max(1));
+    let mut canvas = Canvas::new(small_w as i32, small_h as i32);
+    paint_magnified(world, view, theme, anim, &mut canvas, scale);
+    let image = RgbImage::from_raw(small_w, small_h, canvas.rgb_bytes()).context("canvas and image sizes differ")?;
+    let image = image::imageops::resize(&image, width, height, image::imageops::FilterType::Nearest);
     picker
         .new_protocol(DynamicImage::ImageRgb8(image), Size::new(area.width, area.height), Resize::Fit(None))
         .context("encoding the frame failed")
@@ -98,7 +106,7 @@ mod tests {
             let mut bytes = 0;
             for anim in 0..5 {
                 let started = Instant::now();
-                let protocol = render(&world, view, &Metropolis, anim, area, &picker).expect("frame renders");
+                let protocol = render(&world, view, &Metropolis, anim, area, &picker, 10.0).expect("frame renders");
                 timings.push(started.elapsed().as_millis());
                 if let Protocol::Sixel(sixel) = protocol {
                     bytes = sixel.data.len();

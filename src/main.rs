@@ -63,6 +63,12 @@ struct Args {
     #[arg(long)]
     sixel: bool,
 
+    /// With --sixel: how much larger than half blocks to draw. 3 keeps the
+    /// pixel-art look; about 10 uses every real pixel and is much slower.
+    #[cfg(feature = "sixel")]
+    #[arg(long, default_value_t = 3.0, requires = "sixel")]
+    pixel_scale: f32,
+
     /// Frames per second.
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=60))]
     fps: u32,
@@ -106,9 +112,9 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     let rules = world::Rules { hide_completed: args.prototype, group_daemonsets: args.prototype };
     #[cfg(feature = "sixel")]
-    let pixels = args.sixel;
+    let pixels = args.sixel.then_some(args.pixel_scale);
     #[cfg(not(feature = "sixel"))]
-    let pixels = false;
+    let pixels = None;
     let result = app::run(&mut terminal, &mut receiver, args.fps, &source, &render::theme::Metropolis, rules, pixels);
     ratatui::restore();
     result

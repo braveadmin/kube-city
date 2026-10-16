@@ -1,0 +1,233 @@
+<title>kube-city Rendering Evaluation</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a terminal-dark report; findings first, then before/after pairs, then numbers and decisions. */
+:root {
+  --bg: #0d1017;
+  --panel: #151a24;
+  --line: #262d3b;
+  --fg: #e6e9f0;
+  --muted: #9aa3b5;
+  --accent: #f2c94c;
+  --good: #6fe08a;
+  --bad: #ff7a5c;
+  --font-display: "Pixelify Sans", "Courier New", monospace;
+  --font-body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--font-body); }
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 56px;
+}
+section { display: grid; gap: 20px; }
+header, .intro { display: grid; gap: 12px; max-width: 70ch; }
+.eyebrow { font: 600 12px/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 700 clamp(32px, 5vw, 48px)/1.05 var(--font-display); margin: 0; text-wrap: balance; }
+h2 { font: 700 26px/1.15 var(--font-display); margin: 0; text-wrap: balance; }
+h3 { font: 700 15px/1.3 var(--font-body); margin: 0; }
+p { margin: 0; }
+.lede, .intro p { color: var(--muted); }
+.lede { font-size: 17px; }
+.mono { font-family: var(--font-mono); font-size: 0.88em; }
+strong { color: var(--fg); }
+
+.verdict {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 20px 22px;
+  display: grid;
+  gap: 10px;
+  max-width: 78ch;
+}
+.verdict ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px/1.3 var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); background: var(--panel); }
+tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.good { color: var(--good); }
+.bad { color: var(--bad); }
+
+.pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 20px;
+}
+.trio {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 20px;
+}
+figure { margin: 0; display: grid; gap: 10px; align-content: start; min-width: 0; }
+figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #000;
+  image-rendering: pixelated;
+}
+figure img.smooth { image-rendering: auto; }
+figcaption { font-size: 14px; color: var(--muted); }
+figcaption strong { display: block; font-size: 15px; margin-bottom: 2px; }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 20px;
+}
+.card { display: grid; gap: 8px; align-content: start; border-top: 1px solid var(--line); padding-top: 16px; min-width: 0; }
+.card p, .card li { color: var(--muted); font-size: 15px; }
+.card ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.tag { font: 600 11px/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; }
+pre {
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font: 13px/1.6 var(--font-mono);
+}
+</style>
+
+<main class="page">
+  <header>
+    <span class="eyebrow">kube-city · rendering evaluation · big-cluster recording</span>
+    <h1>Making a big cluster readable</h1>
+    <p class="lede">Tested on a recording of a big real cluster: 890 pods in 27 namespaces, replayed identically for every option. Each image is what kube-city actually draws, at the pixel size of a 200×55 terminal unless noted.</p>
+  </header>
+
+  <aside class="verdict" aria-label="Recommendation">
+    <h3>Recommendation</h3>
+    <ol>
+      <li><strong>Keep the information changes</strong> (landmarks, less noise, health map, focus). They fix most of the confusion, in any terminal, at no cost.</li>
+      <li><strong>Keep half blocks as the default output.</strong> It runs at 20 frames per second for about 9% of one CPU core.</li>
+      <li><strong>Offer Sixel at 3× as an optional high-resolution mode</strong> if it looks right in your Windows Terminal. It caps at about 6 frames per second, so it suits a mostly still view.</li>
+      <li><strong>No pre-rendered sprites needed.</strong> At 3× the existing art stays crisp and cheap to draw. Sprites only pay off for full-resolution graphics, and then a graphical window would do better than Sixel.</li>
+    </ol>
+  </aside>
+
+  <section aria-labelledby="why">
+    <div class="intro">
+      <h2 id="why">Why everything blurred together</h2>
+      <p>The library was only one of four causes.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Cause</th><th>On the big cluster</th><th>Fixed by</th></tr></thead>
+        <tbody>
+          <tr><td>Too few pixels per building</td><td class="num">780 live pods on ~200×110 px</td><td>Health map and focus (any terminal); Sixel (more pixels)</td></tr>
+          <tr><td>Half the city was one grey tank</td><td class="num">418 StatefulSet pods</td><td>Tank colours and three shapes per workload</td></tr>
+          <tr><td>Same component, different look per namespace</td><td class="num">~13 namespaces with the same stack</td><td>Look by workload name only: landmarks</td></tr>
+          <tr><td>Noise</td><td class="num">111 finished jobs, 153 DaemonSet pods</td><td>Finished jobs hidden and counted; one building per DaemonSet (153 → 9)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="terminal">
+    <div class="intro">
+      <h2 id="terminal">In the terminal, before and after</h2>
+      <p>Same renderer and same half-block output; only what the city shows changed. Run it with <span class="mono">--prototype</span>; <span class="mono">z</span> cycles detail, overview and map, <span class="mono">f</span> toggles focus.</p>
+    </div>
+    <div class="pair">
+      <figure><img src="{{base_overview}}" alt="Before, overview: a dense field of identical grey storage tanks with a few coloured towers; the city does not fit the screen." width="800" height="440"><figcaption><strong>Before · overview</strong>A sea of grey tanks. Fires are almost impossible to find.</figcaption></figure>
+      <figure><img src="{{proto_overview}}" alt="After, overview: the same city in many colours with tanks, twin tanks, silos and towers; small fires on the right edge." width="800" height="440"><figcaption><strong>After · overview</strong>Varied and colourful, but still crowded at this size.</figcaption></figure>
+      <figure><img src="{{base_detail}}" alt="Before, detail: rows of identical grey tanks around a few towers and a park." width="800" height="440"><figcaption><strong>Before · detail</strong>Every StatefulSet looks the same.</figcaption></figure>
+      <figure><img src="{{proto_detail}}" alt="After, detail: coloured tanks, cone-roofed silos, twin tanks and towers, each workload recognisable." width="800" height="440"><figcaption><strong>After · detail</strong>Each component has its own building, the same in every namespace.</figcaption></figure>
+      <figure><img src="{{proto_map}}" alt="Health map: the whole city as a grid of district blocks in calm grey-green, with red clusters marking crash loops and orange for pending pods." width="800" height="440"><figcaption><strong>New · map zoom</strong>The whole cluster fits. 21 crash loops show as red clusters, mostly in one district.</figcaption></figure>
+      <figure><img src="{{proto_focus}}" alt="Focus mode: healthy buildings faded into dark silhouettes while burning towers and a construction crane stay bright." width="800" height="440"><figcaption><strong>New · focus</strong>Healthy buildings fade; only problems keep their colour.</figcaption></figure>
+    </div>
+  </section>
+
+  <section aria-labelledby="pixels">
+    <div class="intro">
+      <h2 id="pixels">More pixels with Sixel</h2>
+      <p>Your Windows Terminal 1.24 understands Sixel, so kube-city can send real pixels instead of half blocks. Same area of the city, same terminal size, three densities:</p>
+    </div>
+    <div class="trio">
+      <figure><img src="{{crop_halfblock}}" alt="Half-block output, enlarged: chunky pixel art where neighbouring buildings merge." width="800" height="450"><figcaption><strong>Half blocks · today</strong>About 1 pixel per half character.</figcaption></figure>
+      <figure><img src="{{crop_x3}}" alt="Sixel at three times density: crisp pixel art with readable window grids, setbacks and tank bands." width="798" height="450"><figcaption><strong>Sixel at 3× · recommended</strong>Still pixel art, nine times the detail, cheap to draw.</figcaption></figure>
+      <figure><img class="smooth" src="{{crop_x10}}" alt="Sixel at full resolution: smooth flat-vector towers, tanks and trees; window grids become a fine dot texture." width="800" height="450"><figcaption><strong>Sixel at full resolution</strong>Very clear, but it stops looking like pixel art and is slow to draw.</figcaption></figure>
+    </div>
+    <figure><img class="smooth" src="{{hires_overview}}" alt="The whole 890-pod city at full Sixel resolution: hundreds of distinct towers, tanks, silos and parks on a grid of roads." width="2000" height="1100"><figcaption><strong>The 890-pod city at full Sixel resolution (overview zoom)</strong>Every building is distinguishable, which half blocks cannot offer at this scale.</figcaption></figure>
+  </section>
+
+  <section aria-labelledby="cost">
+    <div class="intro">
+      <h2 id="cost">What each option costs</h2>
+      <p>Measured on the 890-pod recording, full screen (200×54 cells of 10×20 pixels), release build.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Output</th><th>Draw</th><th>Encode</th><th>Per frame</th><th>Frame rate</th></tr></thead>
+        <tbody>
+          <tr><td>Half blocks, prototype</td><td class="num good" colspan="2">~9% of one core at 20 fps</td><td class="num">text cells</td><td class="num good">20 fps</td></tr>
+          <tr><td>Sixel at 3×, enlarged</td><td class="num">35–43 ms</td><td class="num">117–141 ms</td><td class="num">1.1–1.4 MB</td><td class="num">≤ 6 fps, one core</td></tr>
+          <tr><td>Sixel at full resolution, code-drawn art</td><td class="num bad">0.4–1.4 s</td><td class="num">0.1–0.26 s</td><td class="num">1.3–1.6 MB</td><td class="num bad">≤ 2 fps</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="lede">Not measured: how quickly Windows Terminal decodes and shows a 1 MB Sixel frame. That needs a run in your terminal; the command is below.</p>
+  </section>
+
+  <section aria-labelledby="options">
+    <div class="intro">
+      <h2 id="options">Where each option leads</h2>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="tag good">Recommended</span>
+        <h3>Half blocks plus information design</h3>
+        <ul>
+          <li>Works in every terminal, over SSH and in tmux.</li>
+          <li>Map and focus answer "is my cluster healthy?" at any size.</li>
+          <li>The roadmap continues as planned, with code-drawn art.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="tag">Optional add-on</span>
+        <h3>Sixel at 3× for big screens</h3>
+        <ul>
+          <li>Nine times the detail with the same art and themes.</li>
+          <li>Low frame rate: best redrawn only when something changes.</li>
+          <li>Labels and the status bar need care, since text over an image is unreliable.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="tag">Not recommended now</span>
+        <h3>Pre-rendered sprites, or a graphical window</h3>
+        <ul>
+          <li>Sprites need an asset pipeline per theme and only pay off at full resolution, where Sixel is too slow for animation.</li>
+          <li>A native window or browser view gives the best visuals and mouse interaction, but kube-city stops being a terminal companion.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="try">
+    <div class="intro">
+      <h2 id="try">Try it in your terminal</h2>
+      <p>On branch <span class="mono">eval/rendering</span> in <span class="mono">~/repos/.offtopic/kube-city</span>. The recording stays on your machine; it is not in git.</p>
+    </div>
+<pre>cargo run --release -- --replay recordings/big-cluster.jsonl --prototype
+cargo run --release --features sixel -- --replay recordings/big-cluster.jsonl --prototype --sixel --fps 3
+cargo run --release --features sixel -- --replay recordings/big-cluster.jsonl --prototype --sixel --fps 1 --pixel-scale 10</pre>
+    <p class="lede">The first is the recommended half-block version, the second Sixel at 3×, and the third full resolution (expect it to be slow). With Sixel, worth noting: does the image flicker, does the status bar stay readable, and how responsive are the keys?</p>
+  </section>
+</main>
