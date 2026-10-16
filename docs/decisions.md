@@ -179,10 +179,9 @@ box lines; a different style, not sharper).
 - Windows Terminal 1.24 with WSL; true colour works, Sixel does not.
 - `KUBECONFIG` lists `~/.kube/config` plus one file per context in
   `~/.kube/contexts`; kube-rs merges them correctly.
-- Working read-only right now: `my-cluster`, `dev-cluster`, `test-cluster`.
-- Azure contexts (`cluster-a`,
-  `cluster-b`) use a device-code kubelogin that hangs in
-  non-interactive shells. Workaround: a kubeconfig copy converted with
+- Contexts that use a device-code kubelogin hang in non-interactive shells.
+  Workaround: a kubeconfig copy converted with
   `kubelogin convert-kubeconfig -l azurecli` plus `az login` (tokens last
   12 hours).
-- `old-cluster` no longer resolves (stale context).
+- The owner's cluster names and which of them work: `docs/local-notes.md`
+  (git-ignored; it also maps the generic names used here to the real ones).
