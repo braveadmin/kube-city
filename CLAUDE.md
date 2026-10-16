@@ -14,6 +14,12 @@ cargo test
 cargo clippy --all-targets   # keep it warning-free
 ```
 
+Browser prototype from a recording (anonymised, writes `art/out/city.html`):
+
+```bash
+python3 art/web_prototype.py recordings/big-cluster.jsonl art/out
+```
+
 Snapshot images of a recording, for design work (writes PPM files):
 
 ```bash
@@ -26,7 +32,8 @@ KUBE_CITY_REPLAY=recordings/big-cluster.jsonl KUBE_CITY_OUT=/tmp/snap cargo test
 - `src/layout.rs`: stable lots; blocks handed out along a spiral
 - `src/cluster.rs`, `src/demo.rs`, `src/recording.rs`: event sources
 - `src/render/`: `scene.rs` (isometric primitives), `theme/` (all art; Metropolis)
-- `art/`: style samples script and evaluation page sources
+- `art/`: style samples script, evaluation page sources, browser prototype
+  (`web_prototype.py` + `city.template.html`)
 
 ## Conventions
 

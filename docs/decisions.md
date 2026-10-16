@@ -16,14 +16,17 @@ KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 
 - Repo: `~/repos/.offtopic/kube-city`. Local only, no remote yet.
 - `master` (`67852cc`): Metropolis theme, live cluster watching, demo mode.
-- `eval/rendering` (`03e4961`, not merged): recording/replay, the readable
+- `eval/rendering` (`b25058e`, not merged): recording/replay, the readable
   city for big clusters (below), evaluation page source. **Waiting for the
   owner's OK to merge into `master`.**
+- `proto/web` (from `eval/rendering`, not merged): the browser prototype
+  (below).
 - `recordings/big-cluster.jsonl`: a 65 s recording of a big real
   cluster (890 pods, 27 namespaces). Git-ignored: it holds real namespace
   and workload names. Anonymise before sharing anything made from it.
 - Evaluation page (private): https://claude.ai/artifact/5LBNjXKHiRMQLLoPJGhDCT
 - Style samples page (private): https://claude.ai/artifact/HQhiDTRhhnCZ4VitLRu1fb
+- Browser prototype (private): https://claude.ai/artifact/KmCkfNCaFEUc2yTUPvAbot
 
 ## Decisions
 
@@ -50,9 +53,50 @@ KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 2. **The furthest zoom does not show a big cluster properly.** The map zoom
    only shrinks buildings; 780 pods still fragment into tiny tiles.
 
-## Recommended next step: browser prototype
+## Browser prototype (built 2026-10-16, waiting for the owner's verdict)
 
-Not started; the owner asked about cost first.
+A self-contained page made from the big-cluster recording, to judge the
+direction before building a `--web` server.
+
+- Build: `python3 art/web_prototype.py recordings/big-cluster.jsonl art/out`
+  writes `art/out/city.html` (git-ignored). The script replaces every
+  namespace, workload and pod id with a consistent pseudonym and refuses to
+  write the page if a real name would leak into it.
+- Source: `art/city.template.html` (PixiJS 7.4.2 from cdnjs, WebGL).
+- Art: the Metropolis look drawn as vector shapes (one shared
+  `GraphicsGeometry` per look), so buildings stay sharp at every zoom.
+- **One building per workload**, not per pod as in the terminal. Towers grow
+  floors with replicas; a DaemonSet shows up to four houses, one per node.
+  622 buildings instead of 780.
+- Lots are planned from the whole recording: a namespace's workloads are
+  sorted by kind and name, so the same component sits in the same spot in
+  every branch namespace (landmarks by position as well as by look).
+- Semantic zoom with three levels:
+  - cluster: each namespace one district, tinted by health, a road-sign
+    label with pod and problem counts, a state bar, pulsing markers on
+    crashing workloads; click a district to fly to it
+  - district: buildings, fire, smoke, cranes, cars
+  - street: workload names with one dot per pod
+- Interaction: wheel or pinch zoom to the cursor, drag to pan, hover
+  tooltips, click to select (inspector with pods and "same component in N
+  other namespaces"), search with rings on every match, focus mode, a
+  "needs attention" list that flies to each problem, replay of the
+  recording, toggles for finished jobs and simulated restarts and crashes.
+- Deep links: `#district`, `#street` or `#<namespace>`.
+- `apply(event)` takes events in the recording's compact form, so a future
+  `kube-city --web` can stream the same events over a WebSocket.
+- Checked with headless Windows Chrome (SwiftShader WebGL): all three levels,
+  search, selection and fly-to render without console errors. Not checked
+  on a real phone.
+
+## Recommended next step
+
+If the owner likes the browser direction: add `kube-city --web` (serve the
+page, stream world events as JSON over a WebSocket from the existing
+watchers or a replay), then move the pseudonymising into an optional
+`--anonymise` flag. If not, the other options below remain.
+
+Original plan for the prototype, kept for reference:
 
 - `kube-city --web` would serve a local page (open in the Windows browser)
   fed by the existing event stream as JSON over a WebSocket. The Rust side
