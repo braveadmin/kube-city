@@ -83,6 +83,29 @@ direction before building a `--web` server.
   "needs attention" list that flies to each problem, replay of the
   recording, toggles for finished jobs and simulated restarts and crashes.
 - Deep links: `#district`, `#street` or `#<namespace>`.
+- **Two looks** behind a switch in the header (remembered per browser,
+  `#kenney.<deep link>` picks Kenney):
+  - Metropolis: the vector art above.
+  - Kenney: sprites from Kenney's *Isometric Buildings* and *Isometric City*
+    packs (CC0). Buildings are stacked from a ground floor, upper floors
+    (35 px each in sprite pixels) and a roof: Deployments are office blocks
+    with a storey per replica, StatefulSets brick halls with barrel roofs,
+    DaemonSets houses, Jobs works with a code-drawn chimney. Fire, smoke and
+    the crane stay code-drawn on top. The ground is Kenney tiles: asphalt,
+    pavement, planters, lamps and trees. Sprites go into one atlas at load
+    time (with mipmaps); ground floors lose their earth sides there so the
+    lot tile underneath shows them.
+  - Each look is an object with `body(look)` and `ground()` in the page; the
+    rest of the page does not know which look is active.
+  - Known weak spot of the Kenney look: StatefulSet halls and DaemonSet
+    houses are both brick with pitched or barrel roofs, so they are easy to
+    confuse from far away; the packs have no tanks.
+- Kenney packs are not in git. kenney.nl answers 403 to scripts, so take
+  them from OpenGameArt, unpack as `buildings/` and `city/`, and pass the
+  folder as the third argument of `art/web_prototype.py`:
+  - https://opengameart.org/content/isometric-buildings-1
+  - https://opengameart.org/content/isometric-city
+  Without the folder the page only has the Metropolis look.
 - `apply(event)` takes events in the recording's compact form, so a future
   `kube-city --web` can stream the same events over a WebSocket.
 - Checked with headless Windows Chrome (SwiftShader WebGL): all three levels,

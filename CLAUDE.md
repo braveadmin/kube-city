@@ -17,8 +17,10 @@ cargo clippy --all-targets   # keep it warning-free
 Browser prototype from a recording (anonymised, writes `art/out/city.html`):
 
 ```bash
-python3 art/web_prototype.py recordings/big-cluster.jsonl art/out
+python3 art/web_prototype.py recordings/big-cluster.jsonl art/out [KENNEY_DIR]
 ```
+
+`KENNEY_DIR` adds the Kenney look; see `docs/decisions.md` for where to get the packs.
 
 Snapshot images of a recording, for design work (writes PPM files):
 

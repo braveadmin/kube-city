@@ -69,6 +69,10 @@ button, input { font: inherit; color: inherit; }
 }
 .toggle[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
 .btn:hover, .toggle:hover { border-color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: var(--panel); padding: 6px 10px; cursor: pointer; font-size: 0.86rem; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--sign); color: var(--sign-ink); }
 kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; opacity: 0.6; }
 
 /* stage */
@@ -191,6 +195,10 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
       <button class="toggle" id="finished" aria-pressed="false" title="Show pods of finished jobs">Finished jobs</button>
       <button class="toggle" id="sim" aria-pressed="true" title="Restarts and crashes made up by the page, to show how changes look">Simulated changes</button>
       <button class="btn" id="replay" title="Build the city again from the recording">Replay</button>
+      <div class="seg" id="looks" role="group" aria-label="Look" hidden>
+        <button data-look="metropolis" aria-pressed="true" title="Code-drawn Metropolis buildings">Metropolis</button>
+        <button data-look="kenney" aria-pressed="false" title="Sprites from Kenney's isometric packs">Kenney</button>
+      </div>
     </div>
   </header>
 
@@ -225,6 +233,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
           <div class="legend" id="legend"></div>
         </section>
         <p class="note">An anonymised recording of a real cluster: every namespace and workload name is a pseudonym. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>c</kbd> fit, <kbd>/</kbd> find, <kbd>Esc</kbd> clear.</p>
+        <p class="note" id="credit" hidden>Kenney look: sprites from Kenney's Isometric Buildings and Isometric City packs (kenney.nl, CC0).</p>
       </div>
     </aside>
   </main>
@@ -444,6 +453,10 @@ function construction(g, v) {
   shadedBox(g, 0, 0, 0.36, 0.36, 1.5, 0xc2bdb2, 13);
   g.lineStyle(1.2, 0xe07a2a, 0.95);
   for (const z of [8, 15, 22]) { g.moveTo(...P(-0.36, 0.36, z)); g.lineTo(...P(0.36, 0.36, z)); g.lineTo(...P(0.36, -0.36, z)); }
+  return crane(g);
+}
+
+function crane(g) {
   g.lineStyle(1.6, ART.crane);
   const mast = [-0.32, -0.32], top = 64;
   g.moveTo(...P(mast[0] - 0.03, mast[1], 3)); g.lineTo(...P(mast[0] - 0.03, mast[1], top));
@@ -575,25 +588,19 @@ function lookOf(b) {
   if (counts[FAILED]) worst = FAILED;
   if (counts[CRASH]) worst = CRASH;
   const active = visible - counts[SUCCEEDED];
-  const look = { worst, counts, fire: counts[CRASH] > 0, fading: counts[TERMINATING] === visible, smoke: false };
-  if (active === 0) { look.key = "done"; look.draw = g => factory(g, v, true); return look; }
-  if (counts[PENDING] === active) { look.key = "build"; look.draw = g => construction(g, v); return look; }
-  if (counts[FAILED] && !counts[RUNNING] && !counts[CRASH]) { look.key = "scorched"; look.draw = g => scorched(g, v); return look; }
-  switch (b.kind) {
-    case "Deployment": {
-      const floors = v.floors + Math.min(3, Math.max(0, active - 1));
-      look.key = `tower:${v.h % 97}:${floors}`;
-      look.draw = g => tower(g, { ...v, floors });
-      break;
-    }
-    case "StatefulSet": look.key = `tank:${v.h % 61}`; look.draw = g => tankShape(g, v); break;
-    case "DaemonSet": {
-      const count = Math.min(4, active);
-      look.key = `house:${v.h % 53}:${count}`; look.draw = g => houses(g, { ...v, count }); break;
-    }
-    case "Job": look.key = `factory:${v.h % 37}`; look.draw = g => factory(g, v, false); look.smoke = counts[RUNNING] > 0; break;
-    default: look.key = `kiosk:${v.h % 29}`; look.draw = g => kiosk(g, v);
+  // A look is a category plus parameters; the active theme draws it.
+  const look = { worst, counts, fire: counts[CRASH] > 0, fading: counts[TERMINATING] === visible, smoke: false, p: { ...v } };
+  if (active === 0) look.cat = "done";
+  else if (counts[PENDING] === active) look.cat = "build";
+  else if (counts[FAILED] && !counts[RUNNING] && !counts[CRASH]) look.cat = "scorched";
+  else switch (b.kind) {
+    case "Deployment": look.cat = "tower"; look.p.floors = v.floors + Math.min(3, Math.max(0, active - 1)); break;
+    case "StatefulSet": look.cat = "tank"; break;
+    case "DaemonSet": look.cat = "house"; look.p.count = Math.min(4, active); break;
+    case "Job": look.cat = "factory"; look.smoke = counts[RUNNING] > 0; break;
+    default: look.cat = "kiosk";
   }
+  look.key = `${look.cat}:${v.h}:${look.p.floors}:${look.p.count || 0}`;
   return look;
 }
 
@@ -618,6 +625,21 @@ app.stage.addChild(root);
 const plan = planDistricts();
 world.districts = plan.districts;
 
+function laneMarkings(g) {
+  const { W } = plan, m = 2;
+  g.lineStyle(1.4, 0xf2efe6, 0.85);
+  for (const j of plan.roads.across) for (let i = -m; i < W + m; i += 1) { g.moveTo(...iso(i + 0.15, j)); g.lineTo(...iso(i + 0.55, j)); }
+  for (const r of plan.roads.along) for (let j = r.j0; j < r.j1; j += 1) { g.moveTo(...iso(r.i, j + 0.15)); g.lineTo(...iso(r.i, j + 0.55)); }
+  g.lineStyle(0);
+}
+
+// Static things a theme puts in the city layer (trees, lamps); removed when the look changes.
+const scenery = [];
+function addScenery(obj, i, j) {
+  const [x, y] = iso(i, j); obj.position.set(x, y); obj.zIndex = (i + j) * 10 - 1;
+  cityLayer.addChild(obj); scenery.push(obj);
+}
+
 function drawGround() {
   const g = new PIXI.Graphics();
   const { W, H } = plan;
@@ -631,11 +653,7 @@ function drawGround() {
   poly(g, 0x6e9a58, [base[3], base[2], [base[2][0], base[2][1] + 4], [base[3][0], base[3][1] + 4]]);
   poly(g, 0x5b8248, [base[2], base[1], [base[1][0], base[1][1] + 4], [base[2][0], base[2][1] + 4]]);
   poly(g, ART.asphalt, base);
-  // Lane markings on the roads.
-  g.lineStyle(1.4, 0xf2efe6, 0.85);
-  for (const j of plan.roads.across) for (let i = -m; i < W + m; i += 1) { g.moveTo(...iso(i + 0.15, j)); g.lineTo(...iso(i + 0.55, j)); }
-  for (const r of plan.roads.along) for (let j = r.j0; j < r.j1; j += 1) { g.moveTo(...iso(r.i, j + 0.15)); g.lineTo(...iso(r.i, j + 0.55)); }
-  g.lineStyle(0);
+  laneMarkings(g);
   for (const d of plan.districts) {
     // Kerb, sidewalk, then lawn or plaza with a pad on every lot.
     const s = rect(d.x, d.y, d.w, d.h);
@@ -650,7 +668,6 @@ function drawGround() {
   }
   groundLayer.addChild(g);
   // Trees on the empty lots and along the kerbs.
-  const t = new PIXI.Graphics();
   const spots = [];
   for (const d of plan.districts) {
     for (let k = d.lots.size; k < d.cols * d.rows; k++) spots.push([d.x + 1 + (k % d.cols) + 0.5, d.y + 1 + Math.floor(k / d.cols) + 0.5, 1.1, d.idx * 100 + k]);
@@ -659,11 +676,202 @@ function drawGround() {
   spots.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
   for (const [i, j, s, seed] of spots) {
     const tg = new PIXI.Graphics(); tree(tg, 0, 0, s, seed);
-    const [x, y] = iso(i, j); tg.position.set(x, y); tg.zIndex = (i + j) * 10 - 1;
-    cityLayer.addChild(tg);
+    addScenery(tg, i, j);
   }
 }
-drawGround();
+
+// ---------------------------------------------------------------- themes
+// A theme turns a look into a display object standing on its lot, and draws
+// the ground. Everything else (layout, zoom, labels, effects) is shared.
+
+const METROPOLIS = {
+  name: "metropolis",
+  draw: {
+    tower: tower, tank: tankShape, house: houses, kiosk, scorched,
+    factory: (g, p) => factory(g, p, false), done: (g, p) => factory(g, p, true), build: construction,
+  },
+  body(look) {
+    const geo = geometry(`m:${look.key}`, g => this.draw[look.cat](g, look.p));
+    return { obj: new PIXI.Graphics(geo.geometry), top: geo.top };
+  },
+  ground: drawGround,
+  chimney: [iso(-0.28, -0.22)[0], iso(-0.28, -0.22)[1] - 36],
+  legend: {
+    tower: "tower, floors grow with replicas", tank: "tank, twin tanks or silo", house: "a house per node, up to four",
+    factory: "factory, smoking while it runs", build: "construction site", scorched: "scorched shell", kiosk: "kiosk",
+  },
+};
+
+// Sprites from Kenney's Isometric Buildings and Isometric City packs (CC0,
+// kenney.nl), embedded by art/web_prototype.py --kenney. Buildings are stacked
+// from a ground floor, upper floors and a roof, the way the packs are built.
+const KENNEY_SPRITES = /*KENNEY_SPRITES*/null;
+const KS = TW / 132;     // sprite pixels to world pixels: a 132 px tile is one lot
+const STOREY = 35;       // height of one storey in sprite pixels
+const BOX = 24.75;       // a 99 px box's front corner below its centre, in sprite pixels
+const KIT = {
+  ground: {
+    office: ["b001", "b002", "b003", "b009", "b010", "b017", "b107", "b108", "b109", "b113", "b114", "b115", "b116", "b117", "b122", "b123", "b124", "b125"],
+    brick: ["b014", "b021", "b025", "b026", "b030", "b033", "b036", "b040", "b041", "b046", "b092", "b099", "b106"],
+    house: ["b022", "b029", "b037", "b042"],
+    works: ["b004", "b011", "b012", "b018", "b019", "b020", "b027", "b028", "b034", "b035"],
+  },
+  floors: {
+    office: ["b000", "b007", "b008", "b015", "b016", "b023", "b024", "b031"],
+    brick: ["b032", "b038", "b043", "b045", "b047", "b049", "b052", "b054"],
+    house: ["b039", "b044", "b048", "b050", "b051", "b053", "b055", "b056"],
+  },
+  roofs: {
+    office: ["b005", "b006", "b013", "b111", "b118", "b119", "b126", "b127"],
+    brick: ["b065", "b070", "b071", "b076", "b077", "b083", "b084", "b090", "b091", "b097", "b098", "b104", "b105", "b112"],
+    house: ["b057", "b058", "b059", "b060", "b061", "b062", "b063", "b064", "b066", "b067", "b068", "b069", "b073", "b074", "b075", "b082"],
+    works: ["b081", "b088", "b089", "b096"],
+  },
+  road: "c080", sidewalk: "c074", lot: "c066", parks: ["c059", "c069", "c067", "c076"], plaza: ["c072", "c072", "c072", "c072", "c072", "c067"],
+  pit: "c040", tree: "d010", lamp: "d005",
+};
+const TEX = {};
+let kenneyLoad = null;
+const kenneyReady = () => (kenneyLoad ||= loadKenney());
+
+// Packs every sprite into one atlas so the city draws in few batches, with
+// mipmaps for the far zoom levels. Ground floors and tiles used as buildings
+// lose their earth sides: the lot tile underneath already shows them.
+async function loadKenney() {
+  const names = Object.keys(KENNEY_SPRITES);
+  const images = await Promise.all(names.map(n => new Promise((ok, fail) => {
+    const im = new Image(); im.onload = () => ok([n, im]); im.onerror = () => fail(new Error(`sprite ${n}`)); im.src = KENNEY_SPRITES[n];
+  })));
+  const SIZE = 2048, frames = [];
+  let x = 1, y = 1, rowH = 0;
+  for (const [n, im] of images) {
+    if (x + im.width + 2 > SIZE) { x = 1; y += rowH + 3; rowH = 0; }
+    frames.push({ n, im, x, y }); x += im.width + 3; rowH = Math.max(rowH, im.height);
+  }
+  let height = 64; while (height < y + rowH + 2) height *= 2;
+  const canvas = document.createElement("canvas"); canvas.width = SIZE; canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  for (const f of frames) {
+    const { im } = f, w = im.width, h = im.height;
+    ctx.drawImage(im, f.x, f.y);
+    const groundFloor = f.n[0] === "b" && h >= 127, bodyTile = f.n === KIT.pit;
+    if (groundFloor || bodyTile) {
+      const cy = groundFloor ? h - 68 : 33;
+      ctx.save(); ctx.globalCompositeOperation = "destination-out"; ctx.beginPath();
+      ctx.moveTo(f.x - 1, f.y + cy); ctx.lineTo(f.x + w / 2, f.y + cy + 33.5); ctx.lineTo(f.x + w + 1, f.y + cy);
+      ctx.lineTo(f.x + w + 1, f.y + h + 1); ctx.lineTo(f.x - 1, f.y + h + 1); ctx.closePath(); ctx.fill(); ctx.restore();
+    }
+  }
+  const base = PIXI.BaseTexture.from(canvas, { mipmap: PIXI.MIPMAP_MODES.ON });
+  for (const f of frames) TEX[f.n] = new PIXI.Texture(base, new PIXI.Rectangle(f.x, f.y, f.im.width, f.im.height));
+}
+
+const pick = (list, h, salt) => list[(h >>> salt) % list.length];
+function ksprite(name, ax, ay, scale = KS) {
+  const s = new PIXI.Sprite(TEX[name]); s.anchor.set(ax, ay); s.scale.set(scale); return s;
+}
+function tileSprite(name) { const h = TEX[name].height; return ksprite(name, 0.5, (h > 101 ? h - 68 : 33) / h); }
+
+// A ground floor, `uppers` storeys of one kind and a roof, centred on the lot.
+function stack(c, set, h, uppers, roofSet, tint) {
+  const g = pick(KIT.ground[set], h, 0), gh = TEX[g].height;
+  const parts = [ksprite(g, 0.5, (gh - 68) / gh)];
+  const floor = KIT.floors[set] && pick(KIT.floors[set], h, 4);
+  for (let k = 1; k <= uppers && floor; k++) {
+    const s = ksprite(floor, 0.5, 1); s.y = (BOX - STOREY * k) * KS; parts.push(s);
+  }
+  const roof = roofSet && pick(KIT.roofs[roofSet], h, 9);
+  if (roof) {
+    const rh = TEX[roof].height, s = ksprite(roof, 0.5, (rh - 1) / rh);
+    s.y = (BOX - STOREY * (uppers + 1)) * KS; parts.push(s);
+  }
+  for (const p of parts) { if (tint) p.tint = tint; c.addChild(p); }
+}
+
+const KENNEY = {
+  name: "kenney",
+  body(look) {
+    const c = new PIXI.Container(), p = look.p;
+    switch (look.cat) {
+      case "tower": stack(c, "office", p.h, Math.max(0, p.floors - 2), "office"); break;
+      case "tank": stack(c, "brick", p.h, p.shape, "brick"); break;
+      case "house": stack(c, "house", p.h, p.count >= 3 ? 1 : 0, "house"); break;
+      case "factory": case "done": {
+        const g = new PIXI.Graphics();
+        shadedBox(g, -0.24, -0.24, 0.06, 0.06, 58, look.cat === "done" ? 0x9a9a9a : 0xa8553f);
+        shadedBox(g, -0.24, -0.24, 0.075, 0.075, 3, 0x6d6d6d, 58);
+        c.addChild(g);
+        stack(c, "works", p.h, 0, "works", look.cat === "done" ? 0xa0a0a0 : 0);
+        break;
+      }
+      case "kiosk": {
+        const s = ksprite("b016", 0.5, 1, KS * 0.6); s.y = BOX * 0.6 * KS; c.addChild(s);
+        const lamp = ksprite(KIT.lamp, 0.5, 0.95); lamp.position.set(...iso(0.32, 0.3)); c.addChild(lamp);
+        break;
+      }
+      case "build": {
+        c.addChild(tileSprite(KIT.pit));
+        const g = new PIXI.Graphics(); crane(g); c.addChild(g);
+        break;
+      }
+      case "scorched": stack(c, "brick", p.h, 0, null, 0x5a4f49); break;
+    }
+    return { obj: c, top: -c.getLocalBounds().y };
+  },
+  ground() {
+    const { W, H } = plan, m = 2;
+    const across = new Set(plan.roads.across.flatMap(j => [j - 1, j]));
+    const tiles = [];
+    for (let j = -m; j < H + m; j++) for (let i = -m; i < W + m; i++) {
+      const d = plan.districts.find(d => i >= d.x && i < d.x + d.w && j >= d.y && j < d.y + d.h);
+      let name;
+      if (d) {
+        const ring = i === d.x || j === d.y || i === d.x + d.w - 1 || j === d.y + d.h - 1;
+        const k = (j - d.y - 1) * d.cols + (i - d.x - 1);
+        name = ring ? KIT.sidewalk : k < d.lots.size ? KIT.lot : pick(KIT.parks, hash(`${i}/${j}`), 0);
+      } else {
+        const near = across.has(j) || plan.districts.some(d => i >= d.x - GAP && i < d.x + d.w + GAP && j >= d.y - GAP && j < d.y + d.h + GAP);
+        name = near ? KIT.road : pick(KIT.plaza, hash(`${i}/${j}`), 0);
+      }
+      tiles.push([i, j, name]);
+    }
+    tiles.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]) || a[0] - b[0]);
+    for (const [i, j, name] of tiles) {
+      const t = tileSprite(name); t.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(t);
+    }
+    const g = new PIXI.Graphics(); laneMarkings(g); groundLayer.addChild(g);
+    // Lamps on the corners of every block, trees along its front kerbs.
+    for (const d of plan.districts) {
+      for (const [i, j] of [[d.x, d.y], [d.x + d.w - 1, d.y], [d.x, d.y + d.h - 1], [d.x + d.w - 1, d.y + d.h - 1]])
+        addScenery(ksprite(KIT.lamp, 0.5, 0.95), i + 0.5, j + 0.5);
+      for (let i = d.x + 2; i < d.x + d.w - 1; i += 2) addScenery(ksprite(KIT.tree, 0.5, 43 / 45), i + 0.5, d.y + d.h - 0.5);
+      for (let j = d.y + 2; j < d.y + d.h - 1; j += 2) addScenery(ksprite(KIT.tree, 0.5, 43 / 45), d.x + d.w - 0.5, j + 0.5);
+    }
+  },
+  chimney: [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - 62],
+  legend: {
+    tower: "office block, a storey per replica", tank: "brick hall with a barrel roof", house: "house with a pitched roof",
+    factory: "works with a chimney, smoking while it runs", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
+  },
+};
+
+const THEMES = { metropolis: METROPOLIS, kenney: KENNEY };
+let theme = METROPOLIS;
+
+async function setLook(name) {
+  if (!KENNEY_SPRITES || !THEMES[name]) name = "metropolis";
+  if (name === "kenney") await kenneyReady();
+  theme = THEMES[name];
+  for (const s of scenery) s.destroy({ children: true });
+  scenery.length = 0;
+  for (const c of groundLayer.removeChildren()) c.destroy({ children: true });
+  theme.ground();
+  for (const b of world.buildings.values()) if (b.view && b.look) setBody(b, b.look);
+  document.querySelectorAll("[data-look]").forEach(btn => btn.setAttribute("aria-pressed", String(btn.dataset.look === name)));
+  try { localStorage.setItem("kube-city-look", name); } catch { /* per-viewer convenience only */ }
+  renderLegend();
+  panelDirty = true;
+}
 
 // ---------------------------------------------------------------- buildings
 
@@ -693,10 +901,9 @@ function mount(b, look, delay) {
 }
 
 function setBody(b, look) {
-  const geo = geometry(look.key, look.draw);
-  const body = new PIXI.Graphics(geo.geometry);
-  if (b.body) { body.scale.copyFrom(b.body.scale); b.body.destroy(); }
-  b.body = body; b.top = geo.top; b.look = look;
+  const { obj: body, top } = theme.body(look);
+  if (b.body) { body.scale.copyFrom(b.body.scale); b.body.destroy({ children: true }); }
+  b.body = body; b.top = top; b.look = look;
   b.view.addChildAt(body, 0);
   if (b.fx) { b.fx.destroy({ children: true }); b.fx = null; }
   if (b.puffs) { for (const p of b.puffs) p.destroy(); b.puffs = null; }
@@ -720,7 +927,7 @@ function setBody(b, look) {
       const p = new PIXI.Graphics(geometry(look.fire ? "smoke-dark" : "smoke", g => { g.beginFill(look.fire ? 0x4a4a4a : 0xf2f2f2); g.drawCircle(0, 0, 5); g.endFill(); return 0; }).geometry);
       b.view.addChild(p); b.puffs.push(p);
     }
-    b.puffBase = look.fire ? [0, -Math.min(b.top, 46) - 12] : [iso(-0.28, -0.22)[0], iso(-0.28, -0.22)[1] - 36];
+    b.puffBase = look.fire ? [0, -Math.min(b.top, 46) - 12] : theme.chimney;
     smoking.add(b);
   } else b.puffs = null;
 }
@@ -1018,11 +1225,14 @@ function districtTip(d) {
 }
 
 const ICONS = new Map();
-async function icon(key, draw) {
+async function icon(look, withFire = false) {
+  const key = `${theme.name}:${look.key}:${withFire}`;
   if (ICONS.has(key)) return ICONS.get(key);
-  const g = new PIXI.Graphics(geometry(key, draw).geometry);
-  const url = await app.renderer.extract.base64(g, "image/png");
-  g.destroy();
+  const { obj, top } = theme.body(look);
+  const c = new PIXI.Container(); c.addChild(obj);
+  if (withFire) { const f = new PIXI.Graphics(geometry("flame", g => (flame(g), 20)).geometry); f.y = -Math.min(top, 46) + 6; c.addChild(f); }
+  const url = await app.renderer.extract.base64(c, "image/png");
+  c.destroy({ children: true });
   ICONS.set(key, url);
   return url;
 }
@@ -1049,7 +1259,7 @@ async function renderPanel() {
   const shown = [...world.buildings.values()].filter(b => b.view).length;
   const nsCount = world.districts.filter(d => d.stats && d.stats.pods).length;
   document.getElementById("source").textContent =
-    `Recorded cluster: ${total} pods in ${nsCount} namespaces, names anonymised${flags.sim ? ", with simulated changes" : ""}`;
+    `Recording: ${total} pods, ${nsCount} namespaces, anonymised${flags.sim ? ", plus simulated changes" : ""}`;
   const stat = (n, l, cls = "") => `<div class="stat ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
   document.getElementById("stats").innerHTML =
     stat(nsCount, "namespaces") + stat(shown, "buildings") + stat(total, "pods") +
@@ -1071,7 +1281,7 @@ async function renderPanel() {
   if (!selected) { sel.hidden = true; return; }
   const b = selected;
   const twins = [...world.buildings.values()].filter(o => o !== b && o.name === b.name && o.view);
-  const img = b.look ? await icon(b.look.key, b.look.draw) : "";
+  const img = b.look ? await icon(b.look) : "";
   const pods = [...b.pods].map(([id, s]) => `<div><span class="dot s${s}"></span>pod-${id.toString(36).padStart(4, "0")}<span style="color:var(--muted)">${STATE_WORDS[s]}</span></div>`).join("");
   sel.hidden = false;
   sel.innerHTML = `<div class="card">
@@ -1092,26 +1302,21 @@ document.getElementById("inspector").addEventListener("click", (e) => {
 
 async function renderLegend() {
   const v = variantOf("legend", "Deployment");
+  const look = (cat, p = {}) => ({ cat, p: { ...v, ...p }, key: `legend:${cat}:${JSON.stringify(p)}` });
+  const t = theme.legend;
   const items = [
-    ["Deployment", "tower, floors grow with replicas", "legend:tower", g => tower(g, { ...v, floors: 4 })],
-    ["StatefulSet", "tank, twin tanks or silo", "legend:tank", g => tankShape(g, { ...v, shape: 2 })],
-    ["DaemonSet", "a house per node, up to four", "legend:house", g => houses(g, { ...v, count: 3, wall: ART.walls[0] })],
-    ["Job", "factory, smoking while it runs", "legend:factory", g => factory(g, { ...v, wall: ART.walls[1] }, false)],
-    ["Pending", "construction site", "legend:build", g => construction(g, v)],
-    ["Crashing", "on fire", "legend:fire", g => tower(g, { ...v, floors: 3 })],
-    ["Failed", "scorched shell", "legend:scorched", g => scorched(g, v)],
-    ["Pod without owner", "kiosk", "legend:kiosk", g => kiosk(g, v)],
+    ["Deployment", t.tower, look("tower", { floors: 4 })],
+    ["StatefulSet", t.tank, look("tank", { shape: 2 })],
+    ["DaemonSet", t.house, look("house", { count: 3, wall: ART.walls[0] })],
+    ["Job", t.factory, look("factory", { wall: ART.walls[1] })],
+    ["Pending", t.build, look("build")],
+    ["Crashing", "on fire", look("tower", { floors: 3 }), true],
+    ["Failed", t.scorched, look("scorched")],
+    ["Pod without owner", t.kiosk, look("kiosk")],
   ];
   const html = [];
-  for (const [title, sub, key, draw] of items) {
-    let url;
-    if (key === "legend:fire") {
-      const c = new PIXI.Container();
-      const body = new PIXI.Graphics(geometry(key, draw).geometry); c.addChild(body);
-      const f = new PIXI.Graphics(geometry("flame", g => (flame(g), 20)).geometry); f.y = -geometry(key, draw).top + 6; c.addChild(f);
-      url = await app.renderer.extract.base64(c, "image/png");
-      c.destroy({ children: true });
-    } else url = await icon(key, draw);
+  for (const [title, sub, l, fire] of items) {
+    const url = await icon(l, !!fire);
     html.push(`<div><img src="${url}" alt=""><span>${title}<small>${sub}</small></span></div>`);
   }
   document.getElementById("legend").innerHTML = html.join("");
@@ -1189,7 +1394,7 @@ function renderLabels(level) {
 
 // ---------------------------------------------------------------- replay and simulation
 
-const replay = { start: 0, idx: 0, end: DATA.events.length ? DATA.events[DATA.events.length - 1][0] : 0 };
+const replay = { start: 0, idx: DATA.events.length, end: DATA.events.length ? DATA.events[DATA.events.length - 1][0] : 0 };
 function startReplay() {
   resetWorld();
   replay.start = performance.now(); replay.idx = 0;
@@ -1413,12 +1618,20 @@ addEventListener("resize", () => {
   cam.dirty = true;
 });
 
+document.querySelectorAll("[data-look]").forEach(btn => btn.addEventListener("click", () => setLook(btn.dataset.look)));
+if (KENNEY_SPRITES) { document.getElementById("looks").hidden = false; document.getElementById("credit").hidden = false; }
+
+// #district and #street open the biggest branch namespace at that zoom;
+// a namespace name opens that namespace at street zoom. A "kenney." prefix
+// picks the Kenney look.
+let deep = decodeURIComponent(location.hash.slice(1));
+let initialLook = "metropolis";
+try { initialLook = localStorage.getItem("kube-city-look") || initialLook; } catch { /* no storage */ }
+if (/^(kenney|metropolis)(\.|$)/.test(deep)) { initialLook = deep.split(".")[0]; deep = deep.split(".").slice(1).join("."); }
+
 makeCars();
 fitCamera(false);
-startReplay();
-// #district and #street open the biggest branch namespace at that zoom;
-// a namespace name opens that namespace at street zoom.
-const deep = decodeURIComponent(location.hash.slice(1));
+setLook(initialLook).catch(() => setLook("metropolis")).then(() => startReplay());
 const named = world.districts.find(d => d.name === deep);
 if (deep === "district" || deep === "street" || named) {
   const d = named || [...world.districts].filter(d => d.branch).sort((a, b) => b.lots.size - a.lots.size)[0];
@@ -1427,5 +1640,4 @@ if (deep === "district" || deep === "street" || named) {
   flyTo(x + (inspectorWidth() / 2) / s, y, s, false);
 }
 districtStats();
-renderLegend();
 </script>

@@ -7,9 +7,15 @@ always gets the same pseudonym, so a component deployed in many namespaces
 still looks the same everywhere. The page is written to `art/out/city.html`
 and refuses to be written if a real name would leak into it.
 
-    python3 art/web_prototype.py recordings/big-cluster.jsonl art/out
+    python3 art/web_prototype.py recordings/big-cluster.jsonl art/out [KENNEY_DIR]
+
+KENNEY_DIR, when given, holds Kenney's "Isometric Buildings" and "Isometric
+City" packs (CC0, kenney.nl) unpacked as `buildings/` and `city/`. The sprites
+the page uses are embedded and the page offers a Kenney look next to
+Metropolis. The packs are not kept in git.
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -147,10 +153,25 @@ def leaks(page, real, data):
     return found
 
 
+SPRITE_DIRS = {"b": ("buildings/PNG", "buildingTiles"), "c": ("city/PNG", "cityTiles"), "d": ("city/Details", "cityDetails")}
+
+
+def kenney_sprites(template, pack_dir):
+    """Data URIs of every Kenney sprite the template names, like "b001"."""
+    sprites = {}
+    for name in sorted(set(re.findall(r'"([bcd]\d{3})"', template))):
+        folder, prefix = SPRITE_DIRS[name[0]]
+        path = os.path.join(pack_dir, folder, f"{prefix}_{name[1:]}.png")
+        with open(path, "rb") as f:
+            sprites[name] = "data:image/png;base64," + base64.b64encode(f.read()).decode()
+    return sprites
+
+
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 4):
         sys.exit(__doc__)
-    source, out_dir = sys.argv[1:]
+    source, out_dir = sys.argv[1:3]
+    pack_dir = sys.argv[3] if len(sys.argv) == 4 else None
     with open(source) as f:
         data, real = anonymise(f)
     with open(os.path.join(HERE, "city.template.html")) as f:
@@ -160,12 +181,14 @@ def main():
     found = leaks(page, real, data)
     if found:
         sys.exit(f"refusing to write the page: {len(found)} real names would leak, e.g. {found[:3]}")
+    sprites = kenney_sprites(template, pack_dir) if pack_dir else None
+    page = page.replace("/*KENNEY_SPRITES*/null", json.dumps(sprites, separators=(",", ":")))
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, "city.html")
     with open(out, "w") as f:
         f.write(page)
     print(f"{out}: {len(data['events'])} events, {len(data['ns'])} namespaces, "
-          f"{len(data['wl'])} workloads, {len(page) // 1024} KiB")
+          f"{len(data['wl'])} workloads, {len(sprites or {})} sprites, {len(page) // 1024} KiB")
 
 
 if __name__ == "__main__":
