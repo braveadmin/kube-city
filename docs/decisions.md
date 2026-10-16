@@ -45,6 +45,8 @@ KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 | Recording | `--record FILE` / `--replay FILE` (JSON lines of world events) | Reproducible tests on real clusters without access |
 | Sixel | Ruled out and removed | Sixel images do not get from WSL to Windows Terminal 1.24: even a test bar printed from the shell does not appear (ConPTY) |
 | Pre-rendered sprites | Not in the terminal | Only pay off with more pixels than half blocks give |
+| Renderer | Browser (PixiJS/WebGL) is the main view; half blocks stay as terminal fallback | The owner liked the browser prototype ("I love the feeling it has now") |
+| Look | Kenney sprites (CC0) as the default theme; Metropolis stays as a second theme | The owner, 2026-10-16: "I love kenney's assets!" |
 
 ## Open problems (owner's feedback, 2026-10-16)
 
