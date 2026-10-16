@@ -69,6 +69,13 @@ struct Args {
     #[arg(long, default_value_t = 3.0, requires = "sixel")]
     pixel_scale: f32,
 
+    /// With --sixel: the size of a character cell in pixels, like 10x20, when
+    /// the terminal doesn't report it. Too small and the city is cut off at
+    /// the right and bottom; too large and it doesn't fill the window.
+    #[cfg(feature = "sixel")]
+    #[arg(long, value_name = "WxH", value_parser = parse_cell_size, requires = "sixel")]
+    cell_size: Option<(u16, u16)>,
+
     /// Frames per second.
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=60))]
     fps: u32,
@@ -112,7 +119,7 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     let rules = world::Rules { hide_completed: args.prototype, group_daemonsets: args.prototype };
     #[cfg(feature = "sixel")]
-    let pixels = args.sixel.then_some(args.pixel_scale);
+    let pixels = args.sixel.then_some((args.pixel_scale, args.cell_size));
     #[cfg(not(feature = "sixel"))]
     let pixels = None;
     let result = app::run(&mut terminal, &mut receiver, args.fps, &source, &render::theme::Metropolis, rules, pixels);
@@ -120,6 +127,31 @@ fn main() -> Result<()> {
     result
 }
 
+#[cfg(feature = "sixel")]
+fn parse_cell_size(text: &str) -> Result<(u16, u16), String> {
+    let invalid = || format!("{text:?} is not a cell size like 10x20");
+    let (width, height) = text.split_once(['x', 'X', '×']).ok_or_else(invalid)?;
+    let (width, height) = (width.trim().parse().map_err(|_| invalid())?, height.trim().parse().map_err(|_| invalid())?);
+    if width == 0 || height == 0 {
+        return Err(invalid());
+    }
+    Ok((width, height))
+}
+
 fn seed_from_clock() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |elapsed| elapsed.as_nanos() as u64)
+}
+
+#[cfg(all(test, feature = "sixel"))]
+mod tests {
+    use super::parse_cell_size;
+
+    #[test]
+    fn cell_sizes_read_like_10x20() {
+        assert_eq!(parse_cell_size("10x20"), Ok((10, 20)));
+        assert_eq!(parse_cell_size("9×19"), Ok((9, 19)));
+        assert!(parse_cell_size("10").is_err());
+        assert!(parse_cell_size("0x20").is_err());
+        assert!(parse_cell_size("tenxtwenty").is_err());
+    }
 }

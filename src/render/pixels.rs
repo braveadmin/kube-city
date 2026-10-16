@@ -12,23 +12,45 @@ use ratatui::{
     Frame,
     layout::{Rect, Size},
 };
-use ratatui_image::{Image, Resize, picker::Picker};
+use ratatui_image::{
+    FontSize, Image, Resize,
+    picker::{Picker, ProtocolType},
+};
 
 use super::{Canvas, View, draw_status, paint_magnified, theme::Theme};
 use crate::world::World;
 
+/// Cell size to assume when the terminal doesn't say: Windows Terminal's
+/// default font at 100% scaling is close to this.
+const DEFAULT_CELL: (u16, u16) = (10, 20);
+
 pub struct PixelOutput {
     picker: Picker,
     scale: f32,
+    /// What the status bar says about how the output was chosen.
+    note: String,
 }
 
 impl PixelOutput {
-    /// Asks the terminal which graphics protocol it speaks and how big its
-    /// character cells are. Call it after the terminal is set up and before
-    /// reading key events.
-    pub fn detect(scale: f32) -> Result<Self> {
-        let picker = Picker::from_query_stdio().context("the terminal did not say which graphics it supports")?;
-        Ok(Self { picker, scale })
+    /// Sets up Sixel output. The terminal is asked for its capabilities and
+    /// cell size, but Sixel is used even when it doesn't answer: between
+    /// Windows Terminal and WSL, ConPTY often swallows the answers, and the
+    /// library would then silently fall back to half blocks. `cell` overrides
+    /// the cell size in pixels. Call it after the terminal is set up and
+    /// before reading key events.
+    pub fn sixel(scale: f32, cell: Option<(u16, u16)>) -> Self {
+        let answered = Picker::from_query_stdio().ok().filter(|picker| picker.protocol_type() == ProtocolType::Sixel);
+        let (width, height, source) = match (cell, &answered) {
+            (Some((width, height)), _) => (width, height, "given"),
+            (None, Some(picker)) => (picker.font_size().width, picker.font_size().height, "detected"),
+            (None, None) => (DEFAULT_CELL.0, DEFAULT_CELL.1, "assumed"),
+        };
+        // The only way to give the cell size ourselves.
+        #[allow(deprecated)]
+        let mut picker = Picker::from_fontsize(FontSize::new(width, height));
+        picker.set_protocol_type(ProtocolType::Sixel);
+        let support = if answered.is_some() { "sixel" } else { "sixel (not confirmed by the terminal)" };
+        Self { picker, scale, note: format!("{support} · cells {width}×{height} {source}") }
     }
 
     pub fn draw(&self, frame: &mut Frame, world: &World, view: View, theme: &dyn Theme, anim: u64, source: &str) {
@@ -42,8 +64,7 @@ impl PixelOutput {
         };
         frame.render_widget(Image::new(&image), city);
         let bar = Rect { y: area.bottom() - 1, height: 1, ..area };
-        let protocol = format!("{:?}", self.picker.protocol_type()).to_lowercase();
-        draw_status(frame.buffer_mut(), bar, world, theme.ui(), view, &format!("{source} · {protocol}"));
+        draw_status(frame.buffer_mut(), bar, world, theme.ui(), view, &format!("{source} · {}", self.note));
     }
 }
 
