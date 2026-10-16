@@ -9,10 +9,9 @@ and refuses to be written if a real name would leak into it.
 
     python3 art/web_prototype.py recordings/big-cluster.jsonl art/out [KENNEY_DIR]
 
-KENNEY_DIR, when given, holds Kenney's "Isometric Buildings" and "Isometric
-City" packs (CC0, kenney.nl) unpacked as `buildings/` and `city/`. The sprites
-the page uses are embedded and the page offers a Kenney look next to
-Metropolis. The packs are not kept in git.
+The page embeds the Kenney sprites it uses (CC0, kenney.nl) from
+`assets/kenney`, or from KENNEY_DIR when given (a folder holding the packs
+unpacked as `buildings/` and `city/`).
 """
 
 import base64
@@ -23,6 +22,7 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+KENNEY_DIR = os.path.join(HERE, "..", "assets", "kenney")
 SALT = "kube-city-web"
 
 KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "Standalone"]
@@ -171,7 +171,7 @@ def main():
     if len(sys.argv) not in (3, 4):
         sys.exit(__doc__)
     source, out_dir = sys.argv[1:3]
-    pack_dir = sys.argv[3] if len(sys.argv) == 4 else None
+    pack_dir = sys.argv[3] if len(sys.argv) == 4 else KENNEY_DIR
     with open(source) as f:
         data, real = anonymise(f)
     with open(os.path.join(HERE, "city.template.html")) as f:
@@ -181,7 +181,7 @@ def main():
     found = leaks(page, real, data)
     if found:
         sys.exit(f"refusing to write the page: {len(found)} real names would leak, e.g. {found[:3]}")
-    sprites = kenney_sprites(template, pack_dir) if pack_dir else None
+    sprites = kenney_sprites(template, pack_dir)
     page = page.replace("/*KENNEY_SPRITES*/null", json.dumps(sprites, separators=(",", ":")))
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, "city.html")

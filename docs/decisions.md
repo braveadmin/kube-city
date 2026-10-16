@@ -15,12 +15,9 @@ KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 ## Where things are
 
 - Repo: `~/repos/.offtopic/kube-city`. Local only, no remote yet.
-- `master` (`67852cc`): Metropolis theme, live cluster watching, demo mode.
-- `eval/rendering` (`b25058e`, not merged): recording/replay, the readable
-  city for big clusters (below), evaluation page source. **Waiting for the
-  owner's OK to merge into `master`.**
-- `proto/web` (from `eval/rendering`, not merged): the browser prototype
-  (below).
+- `master`: everything below, merged 2026-10-16 (fast-forward from
+  `proto/web`, which contains `eval/rendering`). Both branches were left in
+  place.
 - `recordings/big-cluster.jsonl`: a 65 s recording of a big real
   cluster (890 pods, 27 namespaces). Git-ignored: it holds real namespace
   and workload names. Anonymise before sharing anything made from it.
@@ -55,7 +52,7 @@ KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 2. **The furthest zoom does not show a big cluster properly.** The map zoom
    only shrinks buildings; 780 pods still fragment into tiny tiles.
 
-## Browser prototype (built 2026-10-16, waiting for the owner's verdict)
+## Browser prototype (built 2026-10-16; the owner chose it, with the Kenney look)
 
 A self-contained page made from the big-cluster recording, to judge the
 direction before building a `--web` server.
@@ -85,8 +82,8 @@ direction before building a `--web` server.
   "needs attention" list that flies to each problem, replay of the
   recording, toggles for finished jobs and simulated restarts and crashes.
 - Deep links: `#district`, `#street` or `#<namespace>`.
-- **Two looks** behind a switch in the header (remembered per browser,
-  `#kenney.<deep link>` picks Kenney):
+- **Two looks** behind a switch in the header (Kenney by default, remembered
+  per browser; `#metropolis.<deep link>` or `#kenney.<deep link>` picks one):
   - Metropolis: the vector art above.
   - Kenney: sprites from Kenney's *Isometric Buildings* and *Isometric City*
     packs (CC0). Buildings are stacked from a ground floor, upper floors
@@ -102,12 +99,8 @@ direction before building a `--web` server.
   - Known weak spot of the Kenney look: StatefulSet halls and DaemonSet
     houses are both brick with pitched or barrel roofs, so they are easy to
     confuse from far away; the packs have no tanks.
-- Kenney packs are not in git. kenney.nl answers 403 to scripts, so take
-  them from OpenGameArt, unpack as `buildings/` and `city/`, and pass the
-  folder as the third argument of `art/web_prototype.py`:
-  - https://opengameart.org/content/isometric-buildings-1
-  - https://opengameart.org/content/isometric-city
-  Without the folder the page only has the Metropolis look.
+- The sprites the page uses are in `assets/kenney/` (CC0, with Kenney's
+  licence files); `assets/kenney/README.md` says where the full packs are.
 - `apply(event)` takes events in the recording's compact form, so a future
   `kube-city --web` can stream the same events over a WebSocket.
 - Checked with headless Windows Chrome (SwiftShader WebGL): all three levels,

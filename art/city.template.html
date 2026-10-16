@@ -196,8 +196,8 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
       <button class="toggle" id="sim" aria-pressed="true" title="Restarts and crashes made up by the page, to show how changes look">Simulated changes</button>
       <button class="btn" id="replay" title="Build the city again from the recording">Replay</button>
       <div class="seg" id="looks" role="group" aria-label="Look" hidden>
-        <button data-look="metropolis" aria-pressed="true" title="Code-drawn Metropolis buildings">Metropolis</button>
-        <button data-look="kenney" aria-pressed="false" title="Sprites from Kenney's isometric packs">Kenney</button>
+        <button data-look="kenney" aria-pressed="true" title="Sprites from Kenney's isometric packs">Kenney</button>
+        <button data-look="metropolis" aria-pressed="false" title="Code-drawn Metropolis buildings">Metropolis</button>
       </div>
     </div>
   </header>
@@ -1625,7 +1625,7 @@ if (KENNEY_SPRITES) { document.getElementById("looks").hidden = false; document.
 // a namespace name opens that namespace at street zoom. A "kenney." prefix
 // picks the Kenney look.
 let deep = decodeURIComponent(location.hash.slice(1));
-let initialLook = "metropolis";
+let initialLook = KENNEY_SPRITES ? "kenney" : "metropolis";
 try { initialLook = localStorage.getItem("kube-city-look") || initialLook; } catch { /* no storage */ }
 if (/^(kenney|metropolis)(\.|$)/.test(deep)) { initialLook = deep.split(".")[0]; deep = deep.split(".").slice(1).join("."); }
 

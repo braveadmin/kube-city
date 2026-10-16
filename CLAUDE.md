@@ -17,10 +17,10 @@ cargo clippy --all-targets   # keep it warning-free
 Browser prototype from a recording (anonymised, writes `art/out/city.html`):
 
 ```bash
-python3 art/web_prototype.py recordings/big-cluster.jsonl art/out [KENNEY_DIR]
+python3 art/web_prototype.py recordings/big-cluster.jsonl art/out
 ```
 
-`KENNEY_DIR` adds the Kenney look; see `docs/decisions.md` for where to get the packs.
+Kenney sprites (CC0) live in `assets/kenney/`; see its README to add more.
 
 Snapshot images of a recording, for design work (writes PPM files):
 
@@ -34,6 +34,7 @@ KUBE_CITY_REPLAY=recordings/big-cluster.jsonl KUBE_CITY_OUT=/tmp/snap cargo test
 - `src/layout.rs`: stable lots; blocks handed out along a spiral
 - `src/cluster.rs`, `src/demo.rs`, `src/recording.rs`: event sources
 - `src/render/`: `scene.rs` (isometric primitives), `theme/` (all art; Metropolis)
+- `assets/kenney/`: the Kenney sprites the browser view uses (CC0)
 - `art/`: style samples script, evaluation page sources, browser prototype
   (`web_prototype.py` + `city.template.html`)
 
