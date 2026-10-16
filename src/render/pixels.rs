@@ -113,6 +113,20 @@ mod tests {
             picker.new_protocol(image, Size::new(200, 54), Resize::Fit(None)).expect("encodes");
             let encode = started.elapsed().as_millis();
             eprintln!("{zoom:?}: {timings:?} ms per frame (paint {paint} ms, encode {encode} ms), {} KB per frame", bytes / 1024);
+            // The middle ground: pixel art drawn at 3× and enlarged without smoothing.
+            let started = Instant::now();
+            let mut small = Canvas::new(600, 324);
+            paint_magnified(&world, view, &Metropolis, 0, &mut small, 3.0);
+            let paint_x3 = started.elapsed().as_millis();
+            let image = RgbImage::from_raw(600, 324, small.rgb_bytes()).expect("sizes match");
+            let enlarged = image::imageops::resize(&image, 2000, 1080, image::imageops::FilterType::Nearest);
+            let started = Instant::now();
+            let protocol = picker
+                .new_protocol(DynamicImage::ImageRgb8(enlarged), Size::new(200, 54), Resize::Fit(None))
+                .expect("encodes");
+            let encode_x3 = started.elapsed().as_millis();
+            let bytes_x3 = if let Protocol::Sixel(sixel) = protocol { sixel.data.len() } else { 0 };
+            eprintln!("{zoom:?} at 3x: paint {paint_x3} ms, encode {encode_x3} ms, {} KB per frame", bytes_x3 / 1024);
         }
     }
 }
