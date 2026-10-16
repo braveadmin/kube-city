@@ -6,8 +6,6 @@
 //! where comes from the world's layout; how it looks comes from the theme.
 
 mod canvas;
-#[cfg(feature = "sixel")]
-pub mod pixels;
 mod scene;
 pub mod theme;
 
@@ -91,27 +89,11 @@ pub fn draw(frame: &mut Frame, world: &World, view: View, theme: &dyn Theme, ani
 
 /// Paints ground and buildings; returns the district labels to overlay.
 pub fn paint(world: &World, view: View, theme: &dyn Theme, anim: u64, canvas: &mut Canvas) -> Vec<Label> {
-    paint_magnified(world, view, theme, anim, canvas, 1.0)
-}
-
-/// [`paint`] at `density` canvas pixels per half-block pixel, for outputs with
-/// real pixels; the view's offsets stay in half-block pixels.
-pub fn paint_magnified(
-    world: &World,
-    view: View,
-    theme: &dyn Theme,
-    anim: u64,
-    canvas: &mut Canvas,
-    density: f32,
-) -> Vec<Label> {
     canvas.fill(theme.sky());
-    let k = view.zoom.scale() * density;
+    let k = view.zoom.scale();
     // The centre of the first block sits a little below the middle of the screen.
-    let origin = (
-        canvas.width() / 2 + (view.x as f32 * density) as i32,
-        canvas.height() / 2 + (view.y as f32 * density) as i32 - (8.0 * k) as i32,
-    );
-    let mut scene = Scene::new(canvas, view.zoom, origin, anim).magnified(density);
+    let origin = (canvas.width() / 2 + view.x, canvas.height() / 2 + view.y - (8.0 * k) as i32);
+    let mut scene = Scene::new(canvas, view.zoom, origin, anim);
     let layout = world.layout();
 
     // An island just big enough for the occupied blocks, ringed by road.
@@ -339,7 +321,8 @@ mod tests {
     }
 
     /// A design tool: renders a recording as PPM images, one per view, at the
-    /// pixel size of a 200×55 terminal (times `KUBE_CITY_DENSITY`, if set).
+    /// pixel size of a 200×55 terminal. `KUBE_CITY_ALL_PODS=1` turns the
+    /// default rules off.
     ///
     /// `KUBE_CITY_REPLAY=rec.jsonl KUBE_CITY_OUT=dir cargo test render_snapshots -- --ignored`
     #[test]
@@ -353,19 +336,15 @@ mod tests {
             ("map", View { zoom: Zoom::Map, ..View::default() }),
             ("focus", View { zoom: Zoom::Overview, focus: true, ..View::default() }),
         ];
-        let rules = crate::world::Rules {
-            hide_completed: std::env::var_os("KUBE_CITY_PROTOTYPE").is_some(),
-            group_daemonsets: std::env::var_os("KUBE_CITY_PROTOTYPE").is_some(),
-        };
+        let grouped = std::env::var_os("KUBE_CITY_ALL_PODS").is_none();
+        let rules = crate::world::Rules { hide_completed: grouped, group_daemonsets: grouped };
         let mut world = World::new(rules);
         for (_, event) in crate::recording::load(std::path::Path::new(&replay)).expect("recording loads") {
             world.apply(event);
         }
-        // KUBE_CITY_DENSITY=10 renders at the real pixel size of a terminal with 10×20 cells.
-        let density: i32 = std::env::var("KUBE_CITY_DENSITY").map_or(1, |d| d.parse().expect("a whole number"));
         for (name, view) in views {
-            let mut canvas = Canvas::new(200 * density, 110 * density);
-            paint_magnified(&world, view, &Metropolis, 12, &mut canvas, density as f32);
+            let mut canvas = Canvas::new(200, 110);
+            paint(&world, view, &Metropolis, 12, &mut canvas);
             std::fs::write(out.join(format!("{name}.ppm")), canvas.to_ppm()).expect("write snapshot");
         }
     }

@@ -92,13 +92,6 @@ impl<'a> Scene<'a> {
         Self { canvas, origin: (origin.0 as f32, origin.1 as f32), scale: zoom.scale(), frame, mute: None }
     }
 
-    /// Draws `density` times larger, for outputs with more pixels than half
-    /// blocks give.
-    pub fn magnified(mut self, density: f32) -> Self {
-        self.scale *= density;
-        self
-    }
-
     /// Fades what is drawn next towards `towards` by `amount` (0.0 to 1.0).
     pub fn set_mute(&mut self, mute: Option<(Rgb, f32)>) {
         self.mute = mute;

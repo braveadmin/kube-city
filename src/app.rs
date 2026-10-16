@@ -27,12 +27,7 @@ pub fn run(
     source: &watch::Receiver<String>,
     theme: &dyn Theme,
     rules: Rules,
-    pixels: Option<(f32, Option<(u16, u16)>)>,
 ) -> Result<()> {
-    #[cfg(feature = "sixel")]
-    let output = pixels.map(|(scale, cell)| render::pixels::PixelOutput::sixel(scale, cell));
-    #[cfg(not(feature = "sixel"))]
-    let _ = pixels;
     let frame_time = Duration::from_secs(1) / fps;
     let started = Instant::now();
     let mut world = World::new(rules);
@@ -43,13 +38,7 @@ pub fn run(
         }
         let source = source.borrow().clone();
         let anim = (started.elapsed().as_millis() / ANIMATION_STEP.as_millis()) as u64;
-        terminal.draw(|frame| {
-            #[cfg(feature = "sixel")]
-            if let Some(output) = &output {
-                return output.draw(frame, &world, view, theme, anim, &source);
-            }
-            render::draw(frame, &world, view, theme, anim, &source);
-        })?;
+        terminal.draw(|frame| render::draw(frame, &world, view, theme, anim, &source))?;
 
         let deadline = Instant::now() + frame_time;
         while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {

@@ -139,12 +139,6 @@ impl Canvas {
         }
     }
 
-    /// The pixels as RGB bytes, row by row.
-    #[cfg(feature = "sixel")]
-    pub fn rgb_bytes(&self) -> Vec<u8> {
-        self.pixels.iter().flat_map(|&Rgb(r, g, b)| [r, g, b]).collect()
-    }
-
     /// The canvas as a plain-text PPM image, for snapshots.
     #[cfg(test)]
     pub fn to_ppm(&self) -> String {
