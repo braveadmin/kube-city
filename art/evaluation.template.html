@@ -117,8 +117,8 @@ pre {
     <ol>
       <li><strong>Keep the information changes</strong> (landmarks, less noise, health map, focus). They fix most of the confusion, in any terminal, at no cost.</li>
       <li><strong>Keep half blocks as the default output.</strong> It runs at 20 frames per second for about 9% of one CPU core.</li>
-      <li><strong>Offer Sixel at 3× as an optional high-resolution mode</strong> if it looks right in your Windows Terminal. It caps at about 6 frames per second, so it suits a mostly still view.</li>
-      <li><strong>No pre-rendered sprites needed.</strong> At 3× the existing art stays crisp and cheap to draw. Sprites only pay off for full-resolution graphics, and then a graphical window would do better than Sixel.</li>
+      <li><strong>Drop Sixel.</strong> Tested in your setup: Sixel images do not get from WSL to Windows Terminal, not even a single still image, so no high-resolution mode is possible there.</li>
+      <li><strong>No pre-rendered sprites.</strong> They only pay off with more pixels than half blocks give, which in your setup would mean leaving the terminal for a graphical window.</li>
     </ol>
   </aside>
 
@@ -143,7 +143,7 @@ pre {
   <section aria-labelledby="terminal">
     <div class="intro">
       <h2 id="terminal">In the terminal, before and after</h2>
-      <p>Same renderer and same half-block output; only what the city shows changed. Run it with <span class="mono">--prototype</span>; <span class="mono">z</span> cycles detail, overview and map, <span class="mono">f</span> toggles focus.</p>
+      <p>Same renderer and same half-block output; only what the city shows changed. Now the default; <span class="mono">z</span> cycles detail, overview and map, <span class="mono">f</span> toggles focus.</p>
     </div>
     <div class="pair">
       <figure><img src="{{base_overview}}" alt="Before, overview: a dense field of identical grey storage tanks with a few coloured towers; the city does not fit the screen." width="800" height="440"><figcaption><strong>Before · overview</strong>A sea of grey tanks. Fires are almost impossible to find.</figcaption></figure>
@@ -183,7 +183,7 @@ pre {
         </tbody>
       </table>
     </div>
-    <p class="lede">Not measured: how quickly Windows Terminal decodes and shows a 1 MB Sixel frame. That needs a run in your terminal; the command is below.</p>
+    <p class="lede">Result in your terminal: no Sixel image appears at all when sent from WSL, even a 200×24 test bar printed directly from the shell. kube-city's frames never reach the screen, whatever their size.</p>
   </section>
 
   <section aria-labelledby="options">
@@ -201,12 +201,12 @@ pre {
         </ul>
       </div>
       <div class="card">
-        <span class="tag">Optional add-on</span>
-        <h3>Sixel at 3× for big screens</h3>
+        <span class="tag bad">Ruled out</span>
+        <h3>Sixel</h3>
         <ul>
-          <li>Nine times the detail with the same art and themes.</li>
-          <li>Low frame rate: best redrawn only when something changes.</li>
-          <li>Labels and the status bar need care, since text over an image is unreliable.</li>
+          <li>Would have given nine times the detail at 3×, at up to about 6 frames per second.</li>
+          <li>Sixel images sent from WSL never reach Windows Terminal, so it cannot work in your setup.</li>
+          <li>Removed from kube-city along with its two extra dependencies.</li>
         </ul>
       </div>
       <div class="card">
@@ -223,11 +223,9 @@ pre {
   <section aria-labelledby="try">
     <div class="intro">
       <h2 id="try">Try it in your terminal</h2>
-      <p>On branch <span class="mono">eval/rendering</span> in <span class="mono">~/repos/.offtopic/kube-city</span>. The recording stays on your machine; it is not in git.</p>
+      <p>On branch <span class="mono">eval/rendering</span> in <span class="mono">~/repos/.offtopic/kube-city</span>. The changes above are now the default; <span class="mono">--all-pods</span> shows every pod as its own building again. The recording stays on your machine; it is not in git.</p>
     </div>
-<pre>cargo run --release -- --replay recordings/big-cluster.jsonl --prototype
-cargo run --release --features sixel -- --replay recordings/big-cluster.jsonl --prototype --sixel --fps 3
-cargo run --release --features sixel -- --replay recordings/big-cluster.jsonl --prototype --sixel --fps 1 --pixel-scale 10</pre>
-    <p class="lede">The first is the recommended half-block version, the second Sixel at 3×, and the third full resolution (expect it to be slow). With Sixel, worth noting: does the image flicker, does the status bar stay readable, and how responsive are the keys?</p>
+<pre>cargo run --release -- --replay recordings/big-cluster.jsonl</pre>
+    <p class="lede">Press <span class="mono">z</span> to cycle detail, overview and map, and <span class="mono">f</span> to fade healthy buildings.</p>
   </section>
 </main>
