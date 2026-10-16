@@ -40,7 +40,7 @@
 
 [hidden] { display: none !important; }
 html, body { height: 100%; }
-body { background: var(--sky); color: var(--ink); font-family: var(--body); overflow: hidden; }
+body { margin: 0; font-size: 14px; background: var(--sky); color: var(--ink); font-family: var(--body); overflow: hidden; }
 button, input { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -122,6 +122,10 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 .clock .bar-track { width: 90px; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .clock .bar-fill { height: 100%; width: 0; background: var(--accent); }
 
+.empty {
+  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  font-family: var(--display); font-weight: 600; font-size: 1.3rem; letter-spacing: 0.03em; color: var(--muted);
+}
 #tip {
   position: absolute; pointer-events: none; z-index: 6; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
   box-shadow: var(--shadow); padding: 7px 9px; font-size: 0.8rem; max-width: 260px; line-height: 1.35;
@@ -145,12 +149,12 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 .note { font-size: 0.76rem; color: var(--muted); line-height: 1.4; margin: 0; }
 .list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .list button {
-  width: 100%; display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; text-align: left;
+  width: 100%; display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 2px 8px; align-items: center; text-align: left;
   border: 0; background: none; padding: 5px 6px; border-radius: 5px; cursor: pointer; font-size: 0.82rem;
 }
 .list button:hover { background: var(--panel-2); }
 .list .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.list .ns { color: var(--muted); font-size: 0.72rem; font-family: var(--mono); white-space: nowrap; }
+.list .ns { grid-column: 2; color: var(--muted); font-size: 0.72rem; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sev { width: 10px; height: 10px; border-radius: 2px; }
 .sev.bad { background: var(--bad); } .sev.warn { background: var(--warn); } .sev.failed { background: #4b3d36; } .sev.ok { background: var(--ok); }
 .card { display: flex; flex-direction: column; gap: 10px; }
@@ -184,7 +188,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 
 <div class="app">
   <header class="bar">
-    <div class="brand"><h1>kube-city</h1><span class="tag">Web prototype</span></div>
+    <div class="brand"><h1>kube-city</h1><span class="tag" id="tag">Web prototype</span></div>
     <div class="source" id="source">Loading the recording…</div>
     <div class="tools">
       <label class="search" for="q">
@@ -206,6 +210,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
     <div id="scene" aria-label="Isometric city of the cluster: drag to pan, scroll or pinch to zoom" role="img"></div>
     <div id="labels"></div>
     <div id="tip" hidden></div>
+    <div class="empty" id="empty" hidden>Waiting for the cluster…</div>
 
     <nav class="levels" aria-label="Zoom level">
       <button data-level="cluster" title="Every namespace as one district">Cluster</button>
@@ -232,7 +237,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
           <h2>Legend</h2>
           <div class="legend" id="legend"></div>
         </section>
-        <p class="note">An anonymised recording of a real cluster: every namespace and workload name is a pseudonym. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>c</kbd> fit, <kbd>/</kbd> find, <kbd>Esc</kbd> clear.</p>
+        <p class="note" id="about">An anonymised recording of a real cluster: every namespace and workload name is a pseudonym. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>c</kbd> fit, <kbd>/</kbd> find, <kbd>Esc</kbd> clear.</p>
         <p class="note" id="credit" hidden>Kenney look: sprites from Kenney's Isometric Buildings and Isometric City packs (kenney.nl, CC0).</p>
       </div>
     </aside>
@@ -523,38 +528,53 @@ const world = {
   showFinished: false,
 };
 
-// Lots are planned from the whole recording: a district's workloads sorted by
-// kind and name, so the same component sits in the same spot in every
-// namespace that has it.
+// A workload keeps the lot it got first. A batch of new workloads (a
+// recording, or a cluster's first list) is sorted by kind and name before it
+// gets lots, so the same component sits in the same spot in every namespace
+// that has it. Live districts keep spare lots, so a new workload rarely
+// makes the city re-pack.
+const registry = [];   // namespace index -> Map(workload index -> lot number)
+const SPARE = DATA.live ? 0.3 : 0;
+let planDirty = false;
+function registerBatch(events) {
+  const fresh = new Map();
+  for (const e of events) {
+    if (e.length < 3 || (registry[e[2]] && registry[e[2]].has(e[3]))) continue;
+    fresh.set(`${e[2]}/${e[3]}`, [e[2], e[3], KINDS[e[4]]]);
+  }
+  const order = [...fresh.values()].sort((a, b) => KIND_ORDER[a[2]] - KIND_ORDER[b[2]] || DATA.wl[a[1]].localeCompare(DATA.wl[b[1]]));
+  for (const [ns, wl] of order) {
+    const lots = registry[ns] ||= new Map();
+    lots.set(wl, lots.size);
+    const d = world.districts[ns];
+    if (!d || lots.size > d.cols * d.rows) planDirty = true;
+  }
+}
+
 function planDistricts() {
-  const seen = DATA.ns.map(() => new Map());
-  for (const e of DATA.events) if (e.length > 2) seen[e[2]].set(e[3], e[4]);
   const districts = DATA.ns.map((name, idx) => {
-    const wls = [...seen[idx]].map(([wl, kind]) => ({ wl, kind: KINDS[kind], name: DATA.wl[wl] }));
-    wls.sort((x, y) => KIND_ORDER[x.kind] - KIND_ORDER[y.kind] || x.name.localeCompare(y.name));
-    const n = Math.max(1, wls.length);
+    const lots = registry[idx] || new Map();
+    const n = Math.max(1, Math.ceil(lots.size * (1 + SPARE)) + (SPARE ? 1 : 0));
     const cols = Math.max(2, Math.ceil(Math.sqrt(n * 1.15)));
     const rows = Math.max(2, Math.ceil(n / cols));
-    const lots = new Map(wls.map((w, k) => [w.wl, k]));
     const branch = /^(feature|bugfix)-/.test(name);
     return { idx, name, branch, cols, rows, w: cols + 2, h: rows + 2, lots, x: 0, y: 0, stats: null, health: "ok" };
   });
-  // Shelf packing: platform namespaces first, then branch namespaces, big ones first.
-  const order = [...districts].sort((a, b) => (a.branch - b.branch) || (b.h - a.h) || (b.w - a.w));
+  // Shelf packing, tallest first: rows of districts with roads between them.
+  const order = [...districts].sort((a, b) => (b.h - a.h) || (b.w - a.w) || a.name.localeCompare(b.name));
   const area = districts.reduce((s, d) => s + (d.w + GAP) * (d.h + GAP), 0);
-  const maxW = Math.ceil(Math.sqrt(area) * 1.2);
+  const maxW = Math.max(Math.ceil(Math.sqrt(area) * 1.15), ...districts.map(d => d.w));
   const roads = { across: [], along: [] };
-  let x = 0, y = 0, shelfH = 0, group = null;
+  let x = 0, y = 0, shelfH = 0;
   for (const d of order) {
-    if (x > 0 && (x + d.w > maxW || d.branch !== group)) {
+    if (x > 0 && x + d.w > maxW) {
       y += shelfH + GAP; x = 0; shelfH = 0;
       roads.across.push(y - GAP / 2);
     }
     if (x > 0) roads.along.push({ i: x - GAP / 2, j0: y, j1: y + d.h });
-    d.x = x; d.y = y; x += d.w + GAP; shelfH = Math.max(shelfH, d.h); group = d.branch;
+    d.x = x; d.y = y; x += d.w + GAP; shelfH = Math.max(shelfH, d.h);
   }
-  const W = Math.max(...districts.map(d => d.x + d.w)), H = y + shelfH;
-  // Stretch the along-roads to the full shelf height.
+  const W = districts.length ? Math.max(...districts.map(d => d.x + d.w)) : 0, H = y + shelfH;
   return { districts, W, H, roads };
 }
 
@@ -622,8 +642,7 @@ const markers = new PIXI.Graphics();
 root.addChild(groundLayer, cityLayer, overlay, markers);
 app.stage.addChild(root);
 
-const plan = planDistricts();
-world.districts = plan.districts;
+const plan = { districts: [], W: 0, H: 0, roads: { across: [], along: [] } };
 
 function laneMarkings(g) {
   const { W } = plan, m = 2;
@@ -858,14 +877,39 @@ const KENNEY = {
 const THEMES = { metropolis: METROPOLIS, kenney: KENNEY };
 let theme = METROPOLIS;
 
-async function setLook(name) {
-  if (!KENNEY_SPRITES || !THEMES[name]) name = "metropolis";
-  if (name === "kenney") await kenneyReady();
-  theme = THEMES[name];
+function rebuildGround() {
   for (const s of scenery) s.destroy({ children: true });
   scenery.length = 0;
   for (const c of groundLayer.removeChildren()) c.destroy({ children: true });
   theme.ground();
+}
+
+// Lays the districts out again (a namespace appeared or one ran out of lots)
+// and moves everything onto the new plan.
+function replan() {
+  planDirty = false;
+  Object.assign(plan, planDistricts());
+  world.districts = plan.districts;
+  bounds = computeBounds();
+  rebuildGround();
+  makeCars();
+  for (const b of world.buildings.values()) {
+    if (!b.view) continue;
+    b.lot = lotOf(b);
+    b.view.position.set(...iso(b.lot.i, b.lot.j));
+    b.view.zIndex = (b.lot.i + b.lot.j) * 10;
+  }
+  districtStats();
+  cam.fit = fitScale(); cam.min = cam.fit * 0.55;
+  if (!cam.moved) { fitCamera(false); applyDeepLink(); }
+  cam.dirty = true;
+}
+
+async function setLook(name) {
+  if (!KENNEY_SPRITES || !THEMES[name]) name = "metropolis";
+  if (name === "kenney") await kenneyReady();
+  theme = THEMES[name];
+  rebuildGround();
   for (const b of world.buildings.values()) if (b.view && b.look) setBody(b, b.look);
   document.querySelectorAll("[data-look]").forEach(btn => btn.setAttribute("aria-pressed", String(btn.dataset.look === name)));
   try { localStorage.setItem("kube-city-look", name); } catch { /* per-viewer convenience only */ }
@@ -881,7 +925,7 @@ class Building {
     this.key = `${ns}/${wl}`;
     this.pods = new Map();
     this.variant = variantOf(this.name, kind);
-    this.lot = lotOf(this);
+    this.lot = null;
     this.look = null; this.view = null; this.body = null; this.top = 20;
     this.anim = null; this.fx = null; this.alpha = 1;
   }
@@ -953,8 +997,9 @@ function refresh(b) {
     return;
   }
   if (!b.view) {
+    b.lot = lotOf(b);
     let delay = 0;
-    if (riseOrigin) delay = Math.hypot(b.lot.i - riseOrigin[0], b.lot.j - riseOrigin[1]) * 28 + Math.random() * 80;
+    if (riseOrigin) delay = Math.hypot(b.lot.i - plan.W / 2, b.lot.j - plan.H / 2) * 28 + Math.random() * 80;
     mount(b, look, delay);
     return;
   }
@@ -1009,12 +1054,14 @@ function districtStats() {
 
 // ---------------------------------------------------------------- camera
 
-const cam = { x: 0, y: 0, s: 1, fit: 1, min: 0.1, max: 3.2, fly: null, dirty: true };
-const bounds = (() => {
+// `moved` turns true once the viewer pans or zooms; until then a new plan refits the view.
+const cam = { x: 0, y: 0, s: 1, fit: 1, min: 0.1, max: 3.2, fly: null, dirty: true, moved: false };
+function computeBounds() {
   const { W, H } = plan;
   const l = iso(-2, H + 2)[0], r = iso(W + 2, -2)[0], t = iso(-2, -2)[1] - 60, b = iso(W + 2, H + 2)[1] + 24;
   return { l, r, t, b };
-})();
+}
+let bounds = computeBounds();
 function viewSize() { return [app.screen.width, app.screen.height]; }
 function inspectorWidth() { const el = document.getElementById("inspector"); return innerWidth > 760 ? el.offsetWidth + 16 : 0; }
 function fitScale() {
@@ -1029,13 +1076,14 @@ function fitCamera(animate) {
 }
 function flyTo(x, y, s, animate = true) {
   s = clamp(s, cam.min, cam.max);
+  if (animate) cam.moved = true;
   if (!animate || reducedMotion) { cam.x = x; cam.y = y; cam.s = s; cam.fly = null; cam.dirty = true; return; }
   cam.fly = { from: { x: cam.x, y: cam.y, s: cam.s }, to: { x, y, s }, t0: performance.now(), dur: 700 };
 }
 const s2w = (sx, sy) => { const [vw, vh] = viewSize(); return [(sx - vw / 2) / cam.s + cam.x, (sy - vh / 2) / cam.s + cam.y]; };
 const w2s = (wx, wy) => { const [vw, vh] = viewSize(); return [(wx - cam.x) * cam.s + vw / 2, (wy - cam.y) * cam.s + vh / 2]; };
 function zoomAt(sx, sy, factor) {
-  cam.fly = null;
+  cam.fly = null; cam.moved = true;
   const before = s2w(sx, sy);
   cam.s = clamp(cam.s * factor, cam.min, cam.max);
   const after = s2w(sx, sy);
@@ -1082,7 +1130,7 @@ sceneEl.addEventListener("pointermove", (e) => {
   if (drag) {
     const dx = e.offsetX - drag.x, dy = e.offsetY - drag.y;
     if (Math.hypot(dx, dy) > 4) { drag.moved = true; sceneEl.classList.add("dragging"); }
-    if (drag.moved) { cam.fly = null; cam.x = drag.cx - dx / cam.s; cam.y = drag.cy - dy / cam.s; cam.dirty = true; tip.hidden = true; return; }
+    if (drag.moved) { cam.fly = null; cam.moved = true; cam.x = drag.cx - dx / cam.s; cam.y = drag.cy - dy / cam.s; cam.dirty = true; tip.hidden = true; return; }
   }
   updateHover(e.offsetX, e.offsetY);
 });
@@ -1164,7 +1212,7 @@ addEventListener("keydown", (e) => {
     c: () => fitCamera(true), f: () => toggle("focus"), "/": () => document.getElementById("q").focus(),
     Escape: () => { select(null); setQuery(""); },
   };
-  if (keys[e.key]) { e.preventDefault(); cam.fly = null; keys[e.key](); cam.dirty = true; }
+  if (keys[e.key]) { e.preventDefault(); cam.fly = null; cam.moved = true; keys[e.key](); cam.dirty = true; }
 });
 
 // ---------------------------------------------------------------- toolbar
@@ -1258,8 +1306,10 @@ async function renderPanel() {
   for (const p of world.pods.values()) counts[p.state]++;
   const shown = [...world.buildings.values()].filter(b => b.view).length;
   const nsCount = world.districts.filter(d => d.stats && d.stats.pods).length;
-  document.getElementById("source").textContent =
-    `Recording: ${total} pods, ${nsCount} namespaces, anonymised${flags.sim ? ", plus simulated changes" : ""}`;
+  document.getElementById("source").textContent = live
+    ? `Live: ${live.status}${live.connected ? "" : " (reconnecting)"} · ${total} pods, ${nsCount} namespaces`
+    : `Recording: ${total} pods, ${nsCount} namespaces, anonymised${flags.sim ? ", plus simulated changes" : ""}`;
+  document.getElementById("empty").hidden = !live || total > 0;
   const stat = (n, l, cls = "") => `<div class="stat ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
   document.getElementById("stats").innerHTML =
     stat(nsCount, "namespaces") + stat(shown, "buildings") + stat(total, "pods") +
@@ -1325,9 +1375,13 @@ async function renderLegend() {
 // ---------------------------------------------------------------- labels
 
 const labelsEl = document.getElementById("labels");
-const signs = world.districts.map(d => {
-  const el = document.createElement("div"); el.className = "sign"; el.hidden = true; labelsEl.appendChild(el); return el;
-});
+const signs = [];
+function signFor(d) {
+  if (!signs[d.idx]) {
+    const el = document.createElement("div"); el.className = "sign"; el.hidden = true; labelsEl.appendChild(el); signs[d.idx] = el;
+  }
+  return signs[d.idx];
+}
 const bLabels = new Map();
 function bLabel(b) {
   let el = bLabels.get(b.key);
@@ -1347,7 +1401,7 @@ function renderLabels(level) {
   const placed = [];
   const order = [...world.districts].sort((a, b) => (b.stats.pods - a.stats.pods));
   for (const d of order) {
-    const el = signs[d.idx];
+    const el = signFor(d);
     if (!d.stats.pods) { el.hidden = true; continue; }
     const big = level === "cluster";
     const [wx, wy] = big ? iso(d.x + d.w / 2, d.y + d.h / 2) : iso(d.x + 0.4, d.y + 0.4);
@@ -1398,8 +1452,7 @@ const replay = { start: 0, idx: DATA.events.length, end: DATA.events.length ? DA
 function startReplay() {
   resetWorld();
   replay.start = performance.now(); replay.idx = 0;
-  const { W, H } = plan;
-  riseOrigin = [W / 2, H / 2];
+  riseOrigin = { until: replay.start + (DATA.events.length ? DATA.events[0][0] : 0) + 700 };
 }
 const sim = { next: 0, pending: [], nextPod: 1e6 };
 function later(ms, fn) { sim.pending.push({ at: performance.now() + ms, fn }); }
@@ -1441,12 +1494,17 @@ app.ticker.add(() => {
   // Feed recorded events whose time has come.
   const t = now - replay.start;
   while (replay.idx < DATA.events.length && DATA.events[replay.idx][0] <= t) apply(DATA.events[replay.idx++]);
-  if (riseOrigin && (replay.idx >= DATA.events.length || t > DATA.events[0][0] + 600)) riseOrigin = null;
-  const shownT = Math.min(t, replay.end);
-  clockText.textContent = replay.idx < DATA.events.length ? `recording ${fmt(shownT)} / ${fmt(replay.end)}` : (flags.sim ? "recording played · simulating" : "recording played");
-  clockFill.style.width = `${(shownT / Math.max(1, replay.end)) * 100}%`;
+  if (riseOrigin && now > riseOrigin.until) riseOrigin = null;
+  if (live) {
+    clockText.textContent = live.connected ? `live · ${live.status}` : "disconnected, reconnecting…";
+  } else {
+    const shownT = Math.min(t, replay.end);
+    clockText.textContent = replay.idx < DATA.events.length ? `recording ${fmt(shownT)} / ${fmt(replay.end)}` : (flags.sim ? "recording played · simulating" : "recording played");
+    clockFill.style.width = `${(shownT / Math.max(1, replay.end)) * 100}%`;
+  }
   simulate(now);
 
+  if (planDirty) replan();
   if (dirty.size) {
     for (const b of dirty) refresh(b);
     dirty.clear();
@@ -1581,6 +1639,8 @@ app.ticker.add(() => {
 
 const cars = [];
 function makeCars() {
+  for (const c of cars) c.g.destroy();
+  cars.length = 0;
   const colors = [0xd8453a, 0x2f6fb5, 0xf2c14e, 0xf4f4f0, 0x3b8f5a, 0x333a40];
   const { W } = plan;
   for (const j of plan.roads.across) {
@@ -1629,15 +1689,71 @@ let initialLook = KENNEY_SPRITES ? "kenney" : "metropolis";
 try { initialLook = localStorage.getItem("kube-city-look") || initialLook; } catch { /* no storage */ }
 if (/^(kenney|metropolis)(\.|$)/.test(deep)) { initialLook = deep.split(".")[0]; deep = deep.split(".").slice(1).join("."); }
 
-makeCars();
-fitCamera(false);
-setLook(initialLook).catch(() => setLook("metropolis")).then(() => startReplay());
-const named = world.districts.find(d => d.name === deep);
-if (deep === "district" || deep === "street" || named) {
-  const d = named || [...world.districts].filter(d => d.branch).sort((a, b) => b.lots.size - a.lots.size)[0];
+// Applies the deep link once its target exists; true when done.
+function applyDeepLink() {
+  if (!deep) return true;
+  const named = world.districts.find(d => d.name === deep);
+  if (!named && deep !== "district" && deep !== "street") return false;
+  const d = named || [...world.districts].sort((a, b) => (b.branch - a.branch) || (b.lots.size - a.lots.size))[0];
+  if (!d) return false;
   const [x, y] = iso(d.x + d.w / 2, d.y + d.h / 2);
   const s = deep !== "district" ? STREET * 1.6 : (clusterLimit() + STREET) / 2;
   flyTo(x + (inspectorWidth() / 2) / s, y, s, false);
+  deep = "";
+  return true;
 }
+
+// ---------------------------------------------------------------- live feed (kube-city --web)
+// The server sends JSON arrays of {"PodUpserted": pod}, {"PodDeleted": {uid}},
+// {"Status": text} and {"Reset": null} (a full list of the pods follows).
+
+const live = DATA.live ? { connected: false, retries: 0, status: "connecting", pods: new Map(), ns: new Map(), wl: new Map(), next: 0 } : null;
+function intern(map, list, key, name) {
+  let i = map.get(key);
+  if (i === undefined) { i = list.length; list.push(name); map.set(key, i); }
+  return i;
+}
+function liveBatch(items) {
+  let events = [];
+  const flush = () => { registerBatch(events); for (const e of events) apply(e); events = []; };
+  for (const it of items) {
+    if ("Reset" in it) { flush(); resetWorld(); riseOrigin = { until: performance.now() + 900 }; }
+    else if ("Status" in it) live.status = it.Status;
+    else if (it.PodUpserted) {
+      const p = it.PodUpserted;
+      let id = live.pods.get(p.uid);
+      if (id === undefined) { id = live.next++; live.pods.set(p.uid, id); }
+      events.push([0, id, intern(live.ns, DATA.ns, p.namespace, p.namespace),
+        intern(live.wl, DATA.wl, `${p.kind}/${p.workload}`, p.workload), KINDS.indexOf(p.kind), STATES.indexOf(p.state)]);
+    } else if (it.PodDeleted) {
+      const id = live.pods.get(it.PodDeleted.uid);
+      if (id !== undefined) { events.push([0, id]); live.pods.delete(it.PodDeleted.uid); }
+    }
+  }
+  flush();
+  panelDirty = true;
+}
+function connectLive() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`);
+  ws.onopen = () => { live.connected = true; live.retries = 0; panelDirty = true; };
+  ws.onmessage = (m) => liveBatch(JSON.parse(m.data));
+  ws.onclose = () => {
+    live.connected = false; panelDirty = true;
+    setTimeout(connectLive, Math.min(10000, 500 * 2 ** live.retries++));
+  };
+}
+
+if (live) {
+  for (const id of ["replay", "sim"]) document.getElementById(id).hidden = true;
+  document.getElementById("tag").textContent = "Live";
+  flags.sim = false;
+  document.getElementById("sim").setAttribute("aria-pressed", "false");
+  document.querySelector(".bar-track").hidden = true;
+  document.getElementById("about").textContent =
+    "A live, read-only view of your cluster. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, + and - zoom, c fit, / find, Esc clear.";
+}
+registerBatch(DATA.events);
+replan();
+setLook(initialLook).catch(() => setLook("metropolis")).then(() => (live ? connectLive() : startReplay()));
 districtStats();
 </script>

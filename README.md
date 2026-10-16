@@ -1,6 +1,31 @@
 # kube-city
 
-A living isometric city of your Kubernetes cluster, drawn in the terminal.
+A living isometric city of your Kubernetes cluster, in the browser or the
+terminal.
+
+```bash
+cargo install --path .                               # puts kube-city in ~/.cargo/bin
+
+kube-city --web                                      # the city in your browser
+kube-city --web --context my-cluster              # another context
+kube-city --web --replay city.jsonl                  # a saved city
+kube-city --web --demo                               # a simulated cluster
+```
+
+`--web` serves the city on `http://127.0.0.1:7700/` (`--port` to change it)
+and opens it in a browser: under WSL the Windows one (`--no-open` just prints
+the address). The page and its sprites are built into the binary. It takes
+the same sources as the terminal view (`--context`, `-n`, `--replay`,
+`--demo`, `--record`), stays read-only, and keeps updating while it is open;
+a page opened later, or one that lost the connection, gets the whole city
+again. Zoom with the mouse wheel through three levels: cluster (one district
+per namespace, coloured by health), district (buildings) and street (names,
+one dot per pod). Hover for details, click a building for its pods and the
+same component in other namespaces, search, and `f` to fade healthy
+buildings. The header switches between the Kenney look (sprites from Kenney's
+CC0 packs, in `assets/kenney/`) and the code-drawn Metropolis look.
+
+The terminal view:
 
 ```bash
 cargo run --release                                  # current kubectl context
@@ -26,7 +51,7 @@ healthy buildings so problems stand out, `c` re-centre, `q` / `Esc` /
 `--replay FILE` plays it back (`--replay-speed 10` for ten times faster): a
 real cluster's city without access to the cluster.
 
-## The city
+## The terminal city
 
 Drawn in the Metropolis theme: daylight pixel art in the spirit of SimCity
 2000. Each image pixel is half a terminal cell (`▀` with true colour).

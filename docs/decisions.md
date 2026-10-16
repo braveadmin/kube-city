@@ -107,14 +107,43 @@ direction before building a `--web` server.
   search, selection and fly-to render without console errors. Not checked
   on a real phone.
 
-## Recommended next step
+## `kube-city --web` (built 2026-10-16)
 
-If the owner likes the browser direction: add `kube-city --web` (serve the
-page, stream world events as JSON over a WebSocket from the existing
-watchers or a replay), then move the pseudonymising into an optional
-`--anonymise` flag. If not, the other options below remain.
+- `src/web.rs` (axum 0.8): serves the page (`art/city.template.html`, built
+  in with `include_str!`) and the Kenney sprites (embedded by `build.rs`
+  from `assets/kenney`) on 127.0.0.1:7700, and streams events over `/ws`.
+- Messages are JSON arrays of the recording's events
+  (`{"PodUpserted": pod}`, `{"PodDeleted": {"uid"}}`) plus
+  `{"Status": text}` and `{"Reset": null}`. A new or lagging page gets
+  Reset, the status and every current pod; the server keeps the current pods
+  for that. Events are batched (up to 2000 per message).
+- The page plans lots incrementally: a workload keeps its first lot; a batch
+  of new workloads is sorted by kind and name first (landmarks); live
+  districts keep 30 % spare lots plus one, and the city re-packs only when a
+  district overflows or a namespace appears. Districts are shelf-packed
+  tallest first (the platform/branch split left large empty areas on small
+  clusters).
+- Live mode hides replay and simulated changes; the header shows the source
+  status ("my-cluster · live"); the page reconnects with backoff.
+- Opening the browser: `wslview` or `explorer.exe` under WSL, `open` on
+  macOS, `xdg-open` elsewhere; `--no-open` to skip.
+- Checked: Windows Chrome reaches the WSL server through localhost
+  forwarding; live on `my-cluster` (158 pods) about 30 MB and 1 % of a
+  core for the server; replay and demo work; a WebSocket probe saw the
+  snapshot then 29 batches in 3 s of demo.
+- Real names are shown: the server only listens on 127.0.0.1. An
+  `--anonymise` flag (reusing `art/web_prototype.py`'s pseudonyms) is a
+  possible addition for sharing screenshots.
 
-Original plan for the prototype, kept for reference:
+## Next steps
+
+1. Polish the Kenney look: tell StatefulSets and DaemonSets apart, Kenney
+   road tiles with crossings, more variety.
+2. Richer pod details in the inspector (restarts, age, node, image).
+3. More objects: Services, Ingresses, Nodes.
+4. Config file, remote repo, krew packaging.
+
+Original plan for the browser prototype, kept for reference:
 
 - `kube-city --web` would serve a local page (open in the Windows browser)
   fed by the existing event stream as JSON over a WebSocket. The Rust side

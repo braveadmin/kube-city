@@ -7,6 +7,7 @@ mod layout;
 mod recording;
 mod render;
 mod util;
+mod web;
 mod world;
 
 use std::{
@@ -59,6 +60,18 @@ struct Args {
     #[arg(long)]
     all_pods: bool,
 
+    /// Show the city in a browser instead of the terminal.
+    #[arg(long)]
+    web: bool,
+
+    /// Port for --web; the page is only served on 127.0.0.1.
+    #[arg(long, default_value_t = 7700, requires = "web")]
+    port: u16,
+
+    /// With --web, do not open a browser; just print the address.
+    #[arg(long, requires = "web")]
+    no_open: bool,
+
     /// Frames per second.
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=60))]
     fps: u32,
@@ -98,6 +111,10 @@ fn main() -> Result<()> {
             receiver
         }
     };
+
+    if args.web {
+        return runtime.block_on(web::serve(receiver, source, args.port, !args.no_open));
+    }
 
     let mut terminal = ratatui::init();
     let rules = world::Rules { hide_completed: !args.all_pods, group_daemonsets: !args.all_pods };
