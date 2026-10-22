@@ -188,11 +188,8 @@ fn put_label(buf: &mut Buffer, area: Rect, label: &Label, ui: UiColours) {
 
 fn draw_status(buf: &mut Buffer, bar: Rect, world: &World, ui: UiColours, view: View, source: &str) {
     let style = Style::new().fg(ui.status_fg.into()).bg(ui.status_bg.into());
-    let mut left = format!(
-        " kube-city · {source} · {} pods · {} namespaces",
-        world.pod_count(),
-        world.namespace_count()
-    );
+    let mut left =
+        format!(" kube-city · {source} · {} pods · {} namespaces", world.pod_count(), world.namespace_count());
     if world.hidden_count() > 0 {
         left.push_str(&format!(" · {} finished hidden", world.hidden_count()));
     }

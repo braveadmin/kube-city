@@ -24,7 +24,9 @@ pub enum Ground<'a> {
     Land,
     Road(RoadDirection),
     /// A lot in a namespace's block, built on or not.
-    Lot { namespace: &'a str },
+    Lot {
+        namespace: &'a str,
+    },
 }
 
 /// What a theme needs to know to draw one pod's building.

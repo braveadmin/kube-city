@@ -28,7 +28,10 @@ const CATALOGUE: &[(&str, &[Workload])] = &[
     ("ingress", &[("ingress-nginx", DEP)]),
     ("payments", &[("payments-gateway", DEP), ("fraud-check", DEP), ("receipts", DEP)]),
     ("shipping", &[("carrier-connector", DEP), ("carrier-simulator", DEP)]),
-    ("feature-preview", &[("console", DEP), ("middleware", DEP), ("core", DEP), ("debug-shell", WorkloadKind::Standalone)]),
+    (
+        "feature-preview",
+        &[("console", DEP), ("middleware", DEP), ("core", DEP), ("debug-shell", WorkloadKind::Standalone)],
+    ),
 ];
 const JOB: Workload = ("report-job", WorkloadKind::Job);
 /// Scale-ups stop here; restarts and new namespaces may briefly exceed it.

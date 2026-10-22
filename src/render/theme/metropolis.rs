@@ -267,7 +267,11 @@ fn office_window(seed: u64, wall: u64, (col, row): (i32, i32), state: PodState, 
             if mix(&[pane, shift]) % 100 < 25 { LIT } else { GLASS }
         }
         PodState::CrashLoop if pane % 100 < 30 => {
-            if (frame + pane) % 4 < 2 { EMBER } else { FLAMES[1] }
+            if (frame + pane) % 4 < 2 {
+                EMBER
+            } else {
+                FLAMES[1]
+            }
         }
         _ => GLASS.shade(0.6),
     }
@@ -487,7 +491,14 @@ fn kiosk(s: &mut Scene, tx: i32, ty: i32, look: &BuildingLook) {
 fn construction_site(s: &mut Scene, tx: i32, ty: i32, look: &BuildingLook) {
     let height = 14.0 + ((look.style >> 8) % 6) as f32;
     let (x, y) = (tx as f32, ty as f32);
-    s.cuboid(Footprint::lot(tx, ty, 0.15), 0.0, 4.0, CONCRETE, solid(CONCRETE.shade(0.76)), solid(CONCRETE.shade(0.88)));
+    s.cuboid(
+        Footprint::lot(tx, ty, 0.15),
+        0.0,
+        4.0,
+        CONCRETE,
+        solid(CONCRETE.shade(0.76)),
+        solid(CONCRETE.shade(0.88)),
+    );
     let frame = Footprint::lot(tx, ty, 0.12);
     let mut level = 8.0;
     while level <= height {
@@ -635,18 +646,26 @@ mod tests {
 
     #[test]
     fn a_workloads_pods_look_alike_and_kinds_look_different() {
-        let draw = |kind, style| painted(Zoom::Detail, 0, |s| Metropolis.building(s, 0, 0, &look(kind, PodState::Pending, style)));
+        let draw = |kind, style| {
+            painted(Zoom::Detail, 0, |s| Metropolis.building(s, 0, 0, &look(kind, PodState::Pending, style)))
+        };
         // Construction sites only depend on the workload, not on the pod.
         assert_eq!(draw(WorkloadKind::Deployment, 3), draw(WorkloadKind::Deployment, 3));
-        let tower = painted(Zoom::Detail, 0, |s| Metropolis.building(s, 0, 0, &look(WorkloadKind::Deployment, PodState::Running, 3)));
-        let tank = painted(Zoom::Detail, 0, |s| Metropolis.building(s, 0, 0, &look(WorkloadKind::StatefulSet, PodState::Running, 3)));
+        let tower = painted(Zoom::Detail, 0, |s| {
+            Metropolis.building(s, 0, 0, &look(WorkloadKind::Deployment, PodState::Running, 3))
+        });
+        let tank = painted(Zoom::Detail, 0, |s| {
+            Metropolis.building(s, 0, 0, &look(WorkloadKind::StatefulSet, PodState::Running, 3))
+        });
         assert_ne!(tower, tank);
     }
 
     #[test]
     fn fire_moves_between_frames() {
         let burning = |frame| {
-            painted(Zoom::Detail, frame, |s| Metropolis.building(s, 0, 0, &look(WorkloadKind::Deployment, PodState::CrashLoop, 3)))
+            painted(Zoom::Detail, frame, |s| {
+                Metropolis.building(s, 0, 0, &look(WorkloadKind::Deployment, PodState::CrashLoop, 3))
+            })
         };
         assert_ne!(burning(0), burning(1));
     }

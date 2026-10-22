@@ -46,7 +46,12 @@ struct Shared {
 }
 
 /// Serves the city until Ctrl+C, opening it in a browser when `open` is set.
-pub async fn serve(events: UnboundedReceiver<WorldEvent>, status: watch::Receiver<String>, port: u16, open: bool) -> Result<()> {
+pub async fn serve(
+    events: UnboundedReceiver<WorldEvent>,
+    status: watch::Receiver<String>,
+    port: u16,
+    open: bool,
+) -> Result<()> {
     let shared = Shared { pods: Arc::default(), batches: broadcast::channel(BACKLOG).0, status, page: page().into() };
     tokio::spawn(pump(events, shared.clone()));
     let app = Router::new()
@@ -74,9 +79,11 @@ fn page() -> String {
     let data = json!({ "ns": [], "wl": [], "events": [], "live": true });
     let sprites: serde_json::Map<String, Value> =
         SPRITES.iter().map(|(name, _)| (name.to_string(), Value::from(format!("sprites/{name}.png")))).collect();
-    let body = TEMPLATE
-        .replacen("/*CITY_DATA*/null", &data.to_string(), 1)
-        .replacen("/*KENNEY_SPRITES*/null", &Value::Object(sprites).to_string(), 1);
+    let body = TEMPLATE.replacen("/*CITY_DATA*/null", &data.to_string(), 1).replacen(
+        "/*KENNEY_SPRITES*/null",
+        &Value::Object(sprites).to_string(),
+        1,
+    );
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n{body}\n</html>\n"

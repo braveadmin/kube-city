@@ -111,10 +111,7 @@ impl<'a> Scene<'a> {
     }
 
     pub fn project(&self, x: f32, y: f32, z: f32) -> (f32, f32) {
-        (
-            self.origin.0 + (x - y) * TILE_W / 2.0 * self.scale,
-            self.origin.1 + ((x + y) * TILE_H / 2.0 - z) * self.scale,
-        )
+        (self.origin.0 + (x - y) * TILE_W / 2.0 * self.scale, self.origin.1 + ((x + y) * TILE_H / 2.0 - z) * self.scale)
     }
 
     /// Whether something on tile (tx, ty) rising `up` world pixels can reach the canvas.

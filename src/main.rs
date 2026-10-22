@@ -126,4 +126,3 @@ fn main() -> Result<()> {
 fn seed_from_clock() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |elapsed| elapsed.as_nanos() as u64)
 }
-
