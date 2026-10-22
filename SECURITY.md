@@ -18,6 +18,8 @@ Only the latest release gets fixes.
   anything in a cluster.
 - `--web` serves its page on 127.0.0.1 only, without authentication: any
   program on the same machine can read the city, including namespace and
-  workload names.
+  workload names, and switch it to another context of your kubeconfig.
+  Web pages from other sites cannot: the WebSocket only accepts the city's
+  own page.
 - Recordings (`--record`) contain namespace and workload names; treat them
   like the cluster information they are.

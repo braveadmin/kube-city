@@ -31,6 +31,15 @@ const BROKEN_REASONS: [&str; 7] = [
     "RunContainerError",
 ];
 
+/// Every context in the kubeconfig, sorted.
+pub fn contexts() -> Result<Vec<String>> {
+    let kubeconfig = Kubeconfig::read().context("cannot read the kubeconfig")?;
+    let mut names: Vec<String> = kubeconfig.contexts.into_iter().map(|named| named.name).collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
 /// Picks the context from `KUBECONFIG` (all files, merged like kubectl does)
 /// and checks the pods can be listed, before the terminal switches to the city.
 /// Exec login plugins run here, so their prompts reach the user.
