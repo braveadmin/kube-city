@@ -1,60 +1,112 @@
 # kube-city
 
-A living isometric city of your Kubernetes cluster, in the browser or the
-terminal.
+A living isometric city of your Kubernetes cluster. Namespaces are
+districts, workloads are buildings, and pods coming and going make the city
+grow, burn and rebuild, live.
+
+![kube-city in the browser: districts of office blocks, houses and brick halls, one of them on fire](docs/screenshot.png)
+
+- **One binary, two views.** `kube-city --web` opens the city in your browser
+  (WebGL, mouse-wheel zoom, search, details on click); plain `kube-city`
+  draws it in the terminal.
+- **Read-only.** It only lists and watches pods, the way `kubectl get pods -w`
+  does, and never changes anything in the cluster.
+- **Big clusters stay readable.** Zoom out to one district per namespace,
+  coloured by health; zoom in for buildings, then names and individual pods.
+- **Problems stand out.** Crashing workloads burn, pending ones are
+  construction sites, failed ones are burnt-out shells; `f` fades everything
+  that is healthy.
+
+## Install
+
+Linux and macOS:
 
 ```bash
-cargo install --path .                               # puts kube-city in ~/.cargo/bin
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/braveadmin/kube-city/releases/latest/download/kube-city-installer.sh | sh
+```
 
-kube-city --web                                      # the city in your browser
-kube-city --web --context my-cluster              # another context
-kube-city --web --replay city.jsonl                  # a saved city
-kube-city --web --demo                               # a simulated cluster
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/braveadmin/kube-city/releases/latest/download/kube-city-installer.ps1 | iex"
+```
+
+Or download an archive for your platform from the
+[releases page](https://github.com/braveadmin/kube-city/releases), or build
+it yourself with Rust: `cargo install --git https://github.com/braveadmin/kube-city`.
+
+The binaries are not signed. On macOS, if Gatekeeper refuses to open a
+downloaded binary, run `xattr -d com.apple.quarantine kube-city` once.
+
+## Use
+
+```bash
+kube-city --web                         # current kubectl context, in the browser
+kube-city --web --context my-cluster    # another context
+kube-city --web -n shop -n payments     # only these namespaces
+kube-city --web --demo                  # a simulated cluster, no cluster needed
+kube-city                               # the terminal view
 ```
 
 `--web` serves the city on `http://127.0.0.1:7700/` (`--port` to change it)
-and opens it in a browser: under WSL the Windows one (`--no-open` just prints
-the address). The page and its sprites are built into the binary. It takes
-the same sources as the terminal view (`--context`, `-n`, `--replay`,
-`--demo`, `--record`), stays read-only, and keeps updating while it is open;
-a page opened later, or one that lost the connection, gets the whole city
-again. Zoom with the mouse wheel through three levels: cluster (one district
-per namespace, coloured by health), district (buildings) and street (names,
-one dot per pod). Hover for details, click a building for its pods and the
-same component in other namespaces, search, and `f` to fade healthy
-buildings. The header switches between the Kenney look (sprites from Kenney's
-CC0 packs, in `assets/kenney/`) and the code-drawn Metropolis look.
+and opens it in your browser; under WSL that is the Windows browser.
+`--no-open` only prints the address. The page stays live while it is open; a
+page opened later, or one that lost the connection, gets the whole city
+again.
 
-The terminal view:
+In the browser: scroll or pinch to zoom through three levels (cluster,
+district, street), drag to pan, hover for details, click a building for its
+pods and the same component in other namespaces. Keys: arrows pan, `+` `-`
+zoom, `c` fits the city, `/` searches, `f` fades healthy buildings, `Esc`
+clears. The header switches between two looks: Kenney (sprites) and
+Metropolis (drawn in code).
 
-```bash
-cargo run --release                                  # current kubectl context
-cargo run --release -- --context my-cluster       # another context
-cargo run --release -- -n kube-system -n monitoring  # only these namespaces
-cargo run --release -- --demo                        # simulated cluster
-cargo run --release -- --demo --seed 7               # replay the same city
-cargo run --release -- --record city.jsonl           # also save what happens
-cargo run --release -- --replay city.jsonl           # play a saved city back
-```
+`--record city.jsonl` saves everything that happens and `--replay
+city.jsonl` plays it back later (`--replay-speed 10` for ten times faster):
+handy for showing a cluster without access to it. Recordings contain your
+namespace and workload names.
 
-Contexts come from `KUBECONFIG` (all listed files, merged like kubectl does).
-kube-city only lists and watches pods. It connects before taking over the
-terminal, so login prompts (e.g. kubelogin device code) and access errors show
-up as plain text. If the watch drops, the status bar says so and it reconnects;
-pods deleted in the meantime disappear once it has relisted.
+### What it needs
 
-Keys: arrows / `hjkl` pan, `z` cycle detail, overview and map, `f` fade
-healthy buildings so problems stand out, `c` re-centre, `q` / `Esc` /
-`Ctrl+C` quit.
+- A kubeconfig: `KUBECONFIG` (all listed files, merged like kubectl does) or
+  `~/.kube/config`. Exec plugins such as `kubelogin` or `aws eks get-token`
+  work; kube-city connects before it starts, so login prompts show up as
+  plain text.
+- Permission to `list` and `watch` pods, in all namespaces or in the ones
+  you pass with `-n`.
+- For `--web`, a browser with WebGL. The page is served only on 127.0.0.1;
+  it loads its fonts from Google Fonts and falls back to system fonts
+  without internet. Everything else (PixiJS, sprites) is in the binary.
 
-`--record FILE` writes every change as JSON lines while the city runs, and
-`--replay FILE` plays it back (`--replay-speed 10` for ten times faster): a
-real cluster's city without access to the cluster.
+## The browser city
+
+| Kubernetes        | Kenney look                                  |
+|-------------------|----------------------------------------------|
+| Namespace         | A block with its name on a road sign         |
+| Deployment        | Office block, a storey per replica           |
+| StatefulSet       | Brick hall with a barrel roof                |
+| DaemonSet         | House with a pitched roof                    |
+| Job               | Works with a chimney, smoking while it runs  |
+| Pod without owner | Kiosk                                        |
+| Pending           | Dug foundation with a crane                  |
+| Crashing          | On fire (CrashLoopBackOff, ImagePullBackOff and similar) |
+| Failed            | Burnt-out shell                              |
+| Terminating       | Fading                                       |
+
+One building stands for one workload; zoom to street level for one dot per
+pod. A workload looks the same, and stands in the same spot, in every
+namespace that has it, so environments that deploy the same stack are easy
+to compare.
 
 ## The terminal city
 
 Drawn in the Metropolis theme: daylight pixel art in the spirit of SimCity
 2000. Each image pixel is half a terminal cell (`▀` with true colour).
+
+Run `kube-city` without `--web`; it needs a true-colour terminal. Keys:
+arrows / `hjkl` pan, `z` cycles detail, overview and map, `f` fades healthy
+buildings, `c` re-centres, `q` / `Esc` / `Ctrl+C` quit. If the watch drops,
+the status bar says so and it reconnects.
 
 | Kubernetes          | City                                                       |
 |---------------------|------------------------------------------------------------|
@@ -97,3 +149,28 @@ window patterns, pitched roofs, round solids), and works at both zooms.
 Metropolis is the only theme so far. `art/samples.py` renders the three
 candidate styles (Metropolis, Neon night, Toy town) as reference images:
 `python3 art/samples.py art/out`.
+
+## Development
+
+```bash
+cargo run --release -- --web --demo   # browser view of the simulated cluster
+cargo test
+cargo clippy --all-targets
+```
+
+The browser page is `art/city.template.html`; `src/web.rs` serves it.
+`docs/decisions.md` records how the project got here and why.
+
+## License
+
+kube-city is licensed under either of [Apache License 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option.
+
+It includes:
+
+- Sprites from Kenney's *Isometric Buildings* and *Isometric City* packs
+  (CC0, [kenney.nl](https://kenney.nl)), in `assets/kenney/`.
+- [PixiJS](https://pixijs.com) 7.4.2 (MIT, see `assets/pixi/LICENSE`).
+
+The page uses the Barlow, Barlow Condensed and IBM Plex Mono fonts from
+Google Fonts (SIL Open Font License).
