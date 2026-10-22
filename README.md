@@ -39,6 +39,13 @@ brew install braveadmin/tap/kube-city
 
 With Rust: `cargo install kube-city`.
 
+As a kubectl plugin (`kubectl city --web`), link it under a name kubectl
+looks for, in a directory on your `PATH`:
+
+```bash
+ln -s "$(command -v kube-city)" ~/.local/bin/kubectl-city
+```
+
 Or download an archive for your platform from the
 [releases page](https://github.com/braveadmin/kube-city/releases).
 

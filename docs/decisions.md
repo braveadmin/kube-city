@@ -165,9 +165,14 @@ direction before building a `--web` server.
 The public roadmap is [`ROADMAP.md`](../ROADMAP.md); keep it up to date when
 a step starts or ends. Notes that do not belong there:
 
-- Easier installs (PR #7, replaces #5): waits for the `HOMEBREW_TAP_TOKEN`
-  secret, `cargo login` and a krew plugin name. Do not push a version tag
-  before the secret exists: the release would not be published.
+- Homebrew and crates.io shipped with 0.1.1. The release needs the
+  `HOMEBREW_TAP_TOKEN` secret (set); without it a release is not published.
+- krew is last on purpose (owner, 2026-10-22): it is optional, and the
+  central index needs the CNCF CLA (commits with a GitHub noreply email, not
+  the empty one), a review, and a name: `kube-` is not allowed, `city` may
+  be called too generic, `pod-city` is the safe choice. A self-hosted index
+  (`braveadmin/krew-index`) needs none of that. Archives are already
+  `.tar.gz`, which krew requires.
 - All contexts at the same time needs a watcher per context and
   context-aware layout and labels.
 
