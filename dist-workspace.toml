@@ -13,3 +13,6 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Build every platform on pull requests too, so a release never breaks first
 pr-run-mode = "upload"
+# Let Dependabot keep the actions in the release workflow up to date; run
+# `dist generate` after changing dist settings to refresh the rest of it
+allow-dirty = ["ci"]
