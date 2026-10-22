@@ -31,6 +31,10 @@ use crate::world::{PodInfo, WorldEvent};
 
 const TEMPLATE: &str = include_str!("../art/city.template.html");
 include!(concat!(env!("OUT_DIR"), "/sprites.rs"));
+/// PixiJS (MIT), served from the binary so the city needs no CDN.
+const PIXI: &str = include_str!("../assets/pixi/pixi.min.js");
+/// Where the template loads PixiJS from when it is published as a page.
+const PIXI_CDN: &str = "https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js";
 
 /// Batches a page may fall behind before it is sent the whole city again.
 const BACKLOG: usize = 1024;
@@ -58,6 +62,7 @@ pub async fn serve(
         .route("/", get(index))
         .route("/ws", get(socket))
         .route("/sprites/{file}", get(sprite))
+        .route("/pixi.min.js", get(pixi))
         .with_state(shared);
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
         .await
@@ -79,11 +84,10 @@ fn page() -> String {
     let data = json!({ "ns": [], "wl": [], "events": [], "live": true });
     let sprites: serde_json::Map<String, Value> =
         SPRITES.iter().map(|(name, _)| (name.to_string(), Value::from(format!("sprites/{name}.png")))).collect();
-    let body = TEMPLATE.replacen("/*CITY_DATA*/null", &data.to_string(), 1).replacen(
-        "/*KENNEY_SPRITES*/null",
-        &Value::Object(sprites).to_string(),
-        1,
-    );
+    let body = TEMPLATE
+        .replacen("/*CITY_DATA*/null", &data.to_string(), 1)
+        .replacen("/*KENNEY_SPRITES*/null", &Value::Object(sprites).to_string(), 1)
+        .replacen(PIXI_CDN, "pixi.min.js", 1);
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n{body}\n</html>\n"
@@ -128,6 +132,10 @@ async fn sprite(Path(file): Path<String>) -> Response {
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+async fn pixi() -> Response {
+    ([(header::CONTENT_TYPE, "text/javascript"), (header::CACHE_CONTROL, "max-age=86400")], PIXI).into_response()
 }
 
 async fn socket(upgrade: WebSocketUpgrade, State(shared): State<Shared>) -> Response {
@@ -220,6 +228,9 @@ mod tests {
         let page = page();
         assert!(!page.contains("/*CITY_DATA*/") && !page.contains("/*KENNEY_SPRITES*/"));
         assert!(page.contains(r#""live":true"#));
+        // The built-in PixiJS must be the version the template asks for.
+        assert!(TEMPLATE.contains(PIXI_CDN) && PIXI.starts_with("/*!\n * pixi.js - v7.4.2"));
+        assert!(page.contains(r#"<script src="pixi.min.js">"#) && !page.contains("cdnjs"));
         let named: Vec<&str> = TEMPLATE
             .split('"')
             .filter(|s| s.len() == 4 && s[1..].bytes().all(|b| b.is_ascii_digit()) && "bcd".contains(&s[..1]))
