@@ -4,7 +4,7 @@ A living isometric city of your Kubernetes cluster. Namespaces are
 districts, workloads are buildings, and pods coming and going make the city
 grow, burn and rebuild, live.
 
-![kube-city in the browser: districts of office blocks, houses and brick halls, one of them on fire](docs/screenshot.png)
+![kube-city in the browser: districts of office blocks, houses and brick halls, one of them on fire](https://raw.githubusercontent.com/braveadmin/kube-city/master/docs/screenshot.png)
 
 - **One binary, two views.** `kube-city --web` opens the city in your browser
   (WebGL, mouse-wheel zoom, search, details on click); plain `kube-city`
@@ -31,12 +31,20 @@ Windows (PowerShell):
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/braveadmin/kube-city/releases/latest/download/kube-city-installer.ps1 | iex"
 ```
 
+Homebrew (macOS and Linux):
+
+```bash
+brew install braveadmin/tap/kube-city
+```
+
+With Rust: `cargo install kube-city`.
+
 Or download an archive for your platform from the
-[releases page](https://github.com/braveadmin/kube-city/releases), or build
-it yourself with Rust: `cargo install --git https://github.com/braveadmin/kube-city`.
+[releases page](https://github.com/braveadmin/kube-city/releases).
 
 The binaries are not signed. On macOS, if Gatekeeper refuses to open a
-downloaded binary, run `xattr -d com.apple.quarantine kube-city` once.
+downloaded binary, run `xattr -d com.apple.quarantine kube-city` once
+(Homebrew installs do not need this).
 
 ## Use
 

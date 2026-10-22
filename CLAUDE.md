@@ -60,5 +60,12 @@ repo's git config); keep it that way and keep employer or cluster names out.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`: cargo-dist (`dist-workspace.toml`,
    `.github/workflows/release.yml`) builds every platform and publishes the
    GitHub release with installers. `dist plan` previews it locally.
-3. After changing dist settings, run `dist generate` to refresh the workflow.
+3. `cargo publish` (crates.io) after the GitHub release is out.
+4. The Homebrew formula goes to `braveadmin/homebrew-tap` from the release
+   workflow; it needs the `HOMEBREW_TAP_TOKEN` secret. Without it the
+   release is not published at all.
+
+After changing dist settings: `allow-dirty = ["ci"]` (so Dependabot can bump
+actions) makes `dist generate` skip the workflow, so remove that line, run
+`dist generate`, then put the line back.
 

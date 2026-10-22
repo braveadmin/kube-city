@@ -1,13 +1,16 @@
 [package]
 name = "kube-city"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A living isometric city of your Kubernetes cluster, in the browser or the terminal"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/braveadmin/kube-city"
+homepage = "https://github.com/braveadmin/kube-city"
 readme = "README.md"
 keywords = ["kubernetes", "k8s", "visualization", "isometric", "tui"]
 categories = ["command-line-utilities", "visualization"]
+# What crates.io gets: the code, the page and the assets built into the binary
+include = ["/src", "/build.rs", "/art/city.template.html", "/assets", "/README.md", "/LICENSE-*", "/Cargo.lock"]
 
 [dependencies]
 anyhow = "1.0.104"
