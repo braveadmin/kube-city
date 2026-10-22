@@ -16,12 +16,8 @@ welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discu
 - **Collapsible details panel**, with the pods of the selected workload.
 - **Releases:** binaries for Linux, macOS and Windows with shell and
   PowerShell installers (v0.1.0).
-
-## In progress
-
-- **Easier installs:** Homebrew (`brew install braveadmin/tap/kube-city`),
-  crates.io (`cargo install kube-city`) and krew (`kubectl` plugin).
-  Linux and macOS archives switch to `.tar.gz` for krew.
+- **Package managers:** Homebrew (`brew install braveadmin/tap/kube-city`)
+  and crates.io (`cargo install kube-city`) (v0.1.1).
 
 ## Next
 
@@ -41,3 +37,5 @@ welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discu
   Ingresses as city gates, volumes as depots.
 - **Smaller improvements:** fonts built into the binary (fully offline
   `--web`), smaller release binaries, faster sprite loading.
+- **krew:** `kubectl krew install` from the central plugin index. Until then,
+  a symlink gives you `kubectl city` (see the README).
