@@ -1,7 +1,7 @@
 # kube-city
 
 A terminal companion that draws a Kubernetes cluster as a living isometric
-city (Rust: ratatui, kube-rs, tokio). **Read `docs/decisions.md` first**: it
+city (Rust: ratatui, kube-rs, tokio). **Read `docs/decisions.md` first** (and `ROADMAP.md` for what is planned): it
 holds the decisions so far, the open problems and the recommended next step.
 
 ## Commands

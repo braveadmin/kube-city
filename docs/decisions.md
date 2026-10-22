@@ -159,26 +159,14 @@ direction before building a `--web` server.
 
 ## Roadmap
 
-Done: browser and terminal views; Kenney and Metropolis looks; semantic
-zoom; `--web`; public repo with protected `master`; release v0.1.0 with
-binaries and installers; housekeeping (Dependabot fix in PR #5, branch
-cleanup, owner's account checks, backup deleted); theme dropdown,
-collapsible details panel, context dropdown.
+The public roadmap is [`ROADMAP.md`](../ROADMAP.md); keep it up to date when
+a step starts or ends. Notes that do not belong there:
 
-1. Easier installs (paused, PR #5): Homebrew tap, crates.io, krew. Waits
-   for the `HOMEBREW_TAP_TOKEN` secret, `cargo login` and a krew plugin
-   name.
-2. Show all contexts at the same time (future): one city per context side
-   by side, or one district group per context; needs a watcher per context
-   and context-aware layout and labels.
-3. Demo GIF in the README, then share it.
-4. Kenney polish: tell StatefulSets and DaemonSets apart, road tiles with
-   crossings, more variety.
-5. Richer pod details: restarts, age, node, image, waiting reason.
-6. `--anonymise` for screenshots and demos of real clusters.
-7. More objects: Nodes, Services, Ingresses, volumes.
-8. Smaller: fonts built into the binary, stripped release binaries, faster
-   sprite loading.
+- Easier installs (PR #7, replaces #5): waits for the `HOMEBREW_TAP_TOKEN`
+  secret, `cargo login` and a krew plugin name. Do not push a version tag
+  before the secret exists: the release would not be published.
+- All contexts at the same time needs a watcher per context and
+  context-aware layout and labels.
 
 Original plan for the browser prototype, kept for reference:
 

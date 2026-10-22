@@ -158,6 +158,7 @@ candidate styles (Metropolis, Neon night, Toy town) as reference images:
 - Bugs: [issues](https://github.com/braveadmin/kube-city/issues), with your
   kube-city version (`kube-city --version`), operating system and browser.
 - Security problems: report them privately, see [SECURITY.md](SECURITY.md).
+- What is planned: [ROADMAP.md](ROADMAP.md).
 
 ## Development
 
