@@ -8,7 +8,7 @@ cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell", "powershell"]
+installers = ["shell", "powershell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Build every platform on pull requests too, so a release never breaks first
@@ -16,3 +16,9 @@ pr-run-mode = "upload"
 # Let Dependabot keep the actions in the release workflow up to date; run
 # `dist generate` after changing dist settings to refresh the rest of it
 allow-dirty = ["ci"]
+# krew only accepts .tar.gz and .zip archives
+unix-archive = ".tar.gz"
+# Homebrew formula, pushed to the tap on every release (needs the
+# HOMEBREW_TAP_TOKEN secret: a token that can write to that repo)
+tap = "braveadmin/homebrew-tap"
+publish-jobs = ["homebrew"]

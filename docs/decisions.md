@@ -146,6 +146,9 @@ direction before building a `--web` server.
 | Signing | None; README explains the macOS quarantine command | Apple signing needs a paid account |
 | PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN; fonts still come from Google Fonts and fall back to system fonts |
 | Line endings | `.gitattributes`: LF everywhere, PNG binary | Windows checkouts embedded CRLF copies of the page |
+| Package managers (0.1.1) | Homebrew tap `braveadmin/homebrew-tap` (formula pushed by the release workflow), crates.io `kube-city`; krew planned | One-command installs for macOS, Linux and Rust users; krew reaches kubectl users |
+| Archives | `.tar.gz` on Linux and macOS (was `.tar.xz`) | krew accepts only `.tar.gz` and `.zip` |
+| Dependabot vs dist | `allow-dirty = ["ci"]` | dist rejected Dependabot's action bumps in the generated release workflow |
 
 ## Next steps
 
