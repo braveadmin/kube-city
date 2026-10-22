@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question
+    url: https://github.com/braveadmin/kube-city/discussions/categories/q-a
+    about: Ask how to use kube-city or why something looks the way it does.
+  - name: Idea
+    url: https://github.com/braveadmin/kube-city/discussions/categories/ideas
+    about: Suggest a new building, view or feature.
+  - name: Security vulnerability
+    url: https://github.com/braveadmin/kube-city/security/advisories/new
+    about: Report it privately, not in a public issue.

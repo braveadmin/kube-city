@@ -150,6 +150,13 @@ Metropolis is the only theme so far. `art/samples.py` renders the three
 candidate styles (Metropolis, Neon night, Toy town) as reference images:
 `python3 art/samples.py art/out`.
 
+## Questions, ideas and bugs
+
+- Questions and ideas: [Discussions](https://github.com/braveadmin/kube-city/discussions).
+- Bugs: [issues](https://github.com/braveadmin/kube-city/issues), with your
+  kube-city version (`kube-city --version`), operating system and browser.
+- Security problems: report them privately, see [SECURITY.md](SECURITY.md).
+
 ## Development
 
 ```bash
