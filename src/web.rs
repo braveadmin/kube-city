@@ -229,7 +229,7 @@ mod tests {
         assert!(!page.contains("/*CITY_DATA*/") && !page.contains("/*KENNEY_SPRITES*/"));
         assert!(page.contains(r#""live":true"#));
         // The built-in PixiJS must be the version the template asks for.
-        assert!(TEMPLATE.contains(PIXI_CDN) && PIXI.starts_with("/*!\n * pixi.js - v7.4.2"));
+        assert!(TEMPLATE.contains(PIXI_CDN) && PIXI.contains(" * pixi.js - v7.4.2"));
         assert!(page.contains(r#"<script src="pixi.min.js">"#) && !page.contains("cdnjs"));
         let named: Vec<&str> = TEMPLATE
             .split('"')

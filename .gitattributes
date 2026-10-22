@@ -1,0 +1,3 @@
+# Same bytes on every platform: the page, PixiJS and sprites are built into the binary.
+* text=auto eol=lf
+*.png binary
