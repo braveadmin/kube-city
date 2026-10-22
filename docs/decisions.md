@@ -135,6 +135,18 @@ direction before building a `--web` server.
   `--anonymise` flag (reusing `art/web_prototype.py`'s pseudonyms) is a
   possible addition for sharing screenshots.
 
+## Distribution (2026-10-22)
+
+| Topic | Decision | Why |
+|---|---|---|
+| Hosting | Public GitHub repo `braveadmin/kube-city` | The owner wants people to use it without compiling |
+| Identity | Commits by `braveadmin` with an empty email; history rewritten once to remove the work email, cluster names and employer-specific demo names | Keep the owner's employer and private details out of a public repo |
+| License | MIT OR Apache-2.0 | The usual Rust dual license |
+| Binaries | cargo-dist on version tags: Linux x86_64 (static musl) and arm64, macOS arm64 and x86_64, Windows x86_64, plus shell and PowerShell installers; pull requests build the same without publishing | One command to install; musl runs on any distro |
+| Signing | None; README explains the macOS quarantine command | Apple signing needs a paid account |
+| PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN; fonts still come from Google Fonts and fall back to system fonts |
+| Line endings | `.gitattributes`: LF everywhere, PNG binary | Windows checkouts embedded CRLF copies of the page |
+
 ## Next steps
 
 1. Polish the Kenney look: tell StatefulSets and DaemonSets apart, Kenney

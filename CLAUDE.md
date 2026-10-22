@@ -49,3 +49,16 @@ KUBE_CITY_REPLAY=recordings/big-cluster.jsonl KUBE_CITY_OUT=/tmp/snap cargo test
   anonymise anything shared from them.
 - Conventional Commits (`feat:`, `fix:`, `docs:` …), no Jira keys here.
 - New looks go through the `Theme` trait, not into the renderer.
+
+## Releasing
+
+Public repo: https://github.com/braveadmin/kube-city (MIT OR Apache-2.0).
+Commits carry only the name `braveadmin` with an empty email (set in this
+repo's git config); keep it that way and keep employer or cluster names out.
+
+1. Bump `version` in `Cargo.toml`, commit.
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`: cargo-dist (`dist-workspace.toml`,
+   `.github/workflows/release.yml`) builds every platform and publishes the
+   GitHub release with installers. `dist plan` previews it locally.
+3. After changing dist settings, run `dist generate` to refresh the workflow.
+
