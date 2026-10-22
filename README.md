@@ -57,9 +57,11 @@ again.
 In the browser: scroll or pinch to zoom through three levels (cluster,
 district, street), drag to pan, hover for details, click a building for its
 pods and the same component in other namespaces. Keys: arrows pan, `+` `-`
-zoom, `c` fits the city, `/` searches, `f` fades healthy buildings, `Esc`
-clears. The header switches between two looks: Kenney (sprites) and
-Metropolis (drawn in code).
+zoom, `c` fits the city, `/` searches, `f` fades healthy buildings, `i`
+folds the details panel away, `Esc` clears. The **Theme** dropdown switches
+between Kenney (sprites) and Metropolis (drawn in code). When the city shows
+a cluster, the **Context** dropdown switches to any other context in your
+kubeconfig without restarting (not while `--record` is saving).
 
 `--record city.jsonl` saves everything that happens and `--replay
 city.jsonl` plays it back later (`--replay-speed 10` for ten times faster):

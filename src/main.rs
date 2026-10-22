@@ -84,6 +84,9 @@ fn main() -> Result<()> {
 
     let runtime = tokio::runtime::Runtime::new()?;
     let (sender, from_source) = mpsc::unbounded_channel();
+    // With --web, a page may switch to another context; not while recording,
+    // which holds a single cluster.
+    let mut clusters = None;
     let source = if args.demo {
         let seed = args.seed.unwrap_or_else(seed_from_clock);
         runtime.spawn(demo::run(seed, args.demo_rate, sender));
@@ -97,8 +100,12 @@ fn main() -> Result<()> {
         // Connect before taking over the terminal, so login prompts and
         // errors show up as plain text.
         let (client, context) = runtime.block_on(cluster::connect(args.context.as_deref(), &args.namespaces))?;
+        if args.web && args.record.is_none() {
+            let contexts = cluster::contexts()?;
+            clusters = Some(web::Clusters { contexts, current: context.clone(), namespaces: args.namespaces.clone() });
+        }
         let (status, source) = watch::channel(format!("{context} · connecting"));
-        runtime.spawn(cluster::watch(client, context, args.namespaces, sender, status));
+        runtime.spawn(cluster::watch(client, context, args.namespaces.clone(), sender, status));
         source
     };
 
@@ -113,7 +120,7 @@ fn main() -> Result<()> {
     };
 
     if args.web {
-        return runtime.block_on(web::serve(receiver, source, args.port, !args.no_open));
+        return runtime.block_on(web::serve(receiver, source, args.port, !args.no_open, clusters));
     }
 
     let mut terminal = ratatui::init();

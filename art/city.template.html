@@ -69,10 +69,16 @@ button, input { font: inherit; color: inherit; }
 }
 .toggle[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
 .btn:hover, .toggle:hover { border-color: var(--muted); }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.seg button { border: 0; background: var(--panel); padding: 6px 10px; cursor: pointer; font-size: 0.86rem; }
-.seg button + button { border-left: 1px solid var(--line); }
-.seg button[aria-pressed="true"] { background: var(--sign); color: var(--sign-ink); }
+.pick {
+  display: inline-flex; align-items: center; gap: 8px; padding-left: 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); font-size: 0.86rem; color: var(--muted); white-space: nowrap; overflow: hidden;
+}
+.pick:hover { border-color: var(--muted); }
+.pick select {
+  border: 0; border-left: 1px solid var(--line); background: var(--panel-2); color: var(--ink); padding: 6px 8px;
+  font: inherit; cursor: pointer; max-width: 16rem; text-overflow: ellipsis;
+}
+.pick select:disabled { cursor: progress; opacity: 0.6; }
 kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; opacity: 0.6; }
 
 /* stage */
@@ -169,7 +175,16 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 .legend div { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .legend img { width: 30px; height: 30px; object-fit: contain; flex: none; }
 .legend small { color: var(--muted); display: block; font-size: 0.7rem; }
-.sheet-toggle { display: none; }
+.panel-toggle {
+  display: flex; justify-content: space-between; align-items: center; gap: 14px; width: 100%; border: 0;
+  border-bottom: 1px solid var(--line); background: var(--panel-2); color: var(--ink); padding: 8px 14px; cursor: pointer;
+  font-family: var(--display); font-weight: 600; font-size: 0.95rem; letter-spacing: 0.04em;
+}
+.panel-toggle .chev { display: inline-block; transition: transform 0.15s; }
+.inspector.collapsed { bottom: auto; width: auto; }
+.inspector.collapsed .scroll { display: none; }
+.inspector.collapsed .panel-toggle { border-bottom: 0; }
+.inspector.collapsed .chev { transform: rotate(180deg); }
 
 @media (max-width: 760px) {
   :root { --inspector-w: 0px; }
@@ -178,8 +193,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
   .source { flex-basis: 100%; }
   .tools { margin-left: 0; }
   .inspector { top: auto; left: max(16px, env(safe-area-inset-left, 0px)); width: auto; max-height: 46%; }
-  .inspector.collapsed .scroll { display: none; }
-  .sheet-toggle { display: flex; justify-content: space-between; align-items: center; border: 0; border-bottom: 1px solid var(--line); background: var(--panel-2); padding: 8px 14px; cursor: pointer; font-family: var(--display); font-weight: 600; letter-spacing: 0.04em; }
+  .inspector.collapsed { left: auto; }
   .levels { bottom: auto; top: 12px; }
   .clock { left: max(16px, env(safe-area-inset-left, 0px)); right: auto; bottom: auto; top: 58px; }
 }
@@ -199,10 +213,15 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
       <button class="toggle" id="finished" aria-pressed="false" title="Show pods of finished jobs">Finished jobs</button>
       <button class="toggle" id="sim" aria-pressed="true" title="Restarts and crashes made up by the page, to show how changes look">Simulated changes</button>
       <button class="btn" id="replay" title="Build the city again from the recording">Replay</button>
-      <div class="seg" id="looks" role="group" aria-label="Look" hidden>
-        <button data-look="kenney" aria-pressed="true" title="Sprites from Kenney's isometric packs">Kenney</button>
-        <button data-look="metropolis" aria-pressed="false" title="Code-drawn Metropolis buildings">Metropolis</button>
-      </div>
+      <label class="pick" id="context-pick" title="The kubeconfig context the city shows" hidden>Context
+        <select id="context"></select>
+      </label>
+      <label class="pick" id="look-pick" title="How the city looks">Theme
+        <select id="look">
+          <option value="kenney">Kenney</option>
+          <option value="metropolis">Metropolis</option>
+        </select>
+      </label>
     </div>
   </header>
 
@@ -222,8 +241,8 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
     <div class="clock" id="clock"><span id="clock-text">recording 0:00</span><span class="bar-track"><span class="bar-fill" id="clock-fill"></span></span></div>
 
     <aside class="inspector" id="inspector">
-      <button class="sheet-toggle" id="sheet-toggle" aria-expanded="true"><span>Details</span><span aria-hidden="true">▾</span></button>
-      <div class="scroll">
+      <button class="panel-toggle" id="panel-toggle" aria-expanded="true" aria-controls="inspector-body" title="Show or hide the details (i)"><span>Details</span><span class="chev" aria-hidden="true">▾</span></button>
+      <div class="scroll" id="inspector-body">
         <section id="selected" hidden></section>
         <section>
           <h2>Cluster</h2>
@@ -237,7 +256,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
           <h2>Legend</h2>
           <div class="legend" id="legend"></div>
         </section>
-        <p class="note" id="about">An anonymised recording of a real cluster: every namespace and workload name is a pseudonym. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>c</kbd> fit, <kbd>/</kbd> find, <kbd>Esc</kbd> clear.</p>
+        <p class="note" id="about">An anonymised recording of a real cluster: every namespace and workload name is a pseudonym. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>c</kbd> fit, <kbd>/</kbd> find, <kbd>i</kbd> details, <kbd>Esc</kbd> clear.</p>
         <p class="note" id="credit" hidden>Kenney look: sprites from Kenney's Isometric Buildings and Isometric City packs (kenney.nl, CC0).</p>
       </div>
     </aside>
@@ -911,7 +930,7 @@ async function setLook(name) {
   theme = THEMES[name];
   rebuildGround();
   for (const b of world.buildings.values()) if (b.view && b.look) setBody(b, b.look);
-  document.querySelectorAll("[data-look]").forEach(btn => btn.setAttribute("aria-pressed", String(btn.dataset.look === name)));
+  document.getElementById("look").value = name;
   try { localStorage.setItem("kube-city-look", name); } catch { /* per-viewer convenience only */ }
   renderLegend();
   panelDirty = true;
@@ -1063,7 +1082,10 @@ function computeBounds() {
 }
 let bounds = computeBounds();
 function viewSize() { return [app.screen.width, app.screen.height]; }
-function inspectorWidth() { const el = document.getElementById("inspector"); return innerWidth > 760 ? el.offsetWidth + 16 : 0; }
+function inspectorWidth() {
+  const el = document.getElementById("inspector");
+  return innerWidth > 760 && !el.classList.contains("collapsed") ? el.offsetWidth + 16 : 0;
+}
 function fitScale() {
   const [vw, vh] = viewSize();
   return Math.min((vw - inspectorWidth()) / (bounds.r - bounds.l), vh / (bounds.b - bounds.t)) * 0.94;
@@ -1210,6 +1232,7 @@ addEventListener("keydown", (e) => {
     ArrowUp: () => (cam.y -= step), k: () => (cam.y -= step), ArrowDown: () => (cam.y += step), j: () => (cam.y += step),
     "+": () => zoomAt(vw / 2, vh / 2, 1.25), "=": () => zoomAt(vw / 2, vh / 2, 1.25), "-": () => zoomAt(vw / 2, vh / 2, 0.8),
     c: () => fitCamera(true), f: () => toggle("focus"), "/": () => document.getElementById("q").focus(),
+    i: () => setPanel(inspectorEl.classList.contains("collapsed")),
     Escape: () => { select(null); setQuery(""); },
   };
   if (keys[e.key]) { e.preventDefault(); cam.fly = null; cam.moved = true; keys[e.key](); cam.dirty = true; }
@@ -1234,11 +1257,22 @@ document.querySelectorAll(".levels [data-level]").forEach(btn => btn.addEventLis
 }));
 document.getElementById("zoomin").addEventListener("click", () => { const [vw, vh] = viewSize(); zoomAt(vw / 2, vh / 2, 1.3); });
 document.getElementById("zoomout").addEventListener("click", () => { const [vw, vh] = viewSize(); zoomAt(vw / 2, vh / 2, 1 / 1.3); });
-document.getElementById("sheet-toggle").addEventListener("click", (e) => {
-  const el = document.getElementById("inspector");
-  el.classList.toggle("collapsed");
-  e.currentTarget.setAttribute("aria-expanded", String(!el.classList.contains("collapsed")));
-});
+// The details panel folds into its header; the choice is remembered per browser.
+const inspectorEl = document.getElementById("inspector");
+function setPanel(open, remember = true) {
+  const fitted = !cam.fly && Math.abs(cam.s - cam.fit) < 1e-6;
+  inspectorEl.classList.toggle("collapsed", !open);
+  document.getElementById("panel-toggle").setAttribute("aria-expanded", String(open));
+  if (open) document.documentElement.style.removeProperty("--inspector-w");
+  else document.documentElement.style.setProperty("--inspector-w", "0px");
+  if (remember) try { localStorage.setItem("kube-city-panel", open ? "open" : "closed"); } catch { /* per-viewer convenience only */ }
+  // A fitted view stays fitted to the space the panel leaves.
+  cam.fit = fitScale(); cam.min = cam.fit * 0.55;
+  if (fitted) fitCamera(false);
+  cam.dirty = true;
+}
+document.getElementById("panel-toggle").addEventListener("click", () => setPanel(inspectorEl.classList.contains("collapsed")));
+try { if (localStorage.getItem("kube-city-panel") === "closed") setPanel(false, false); } catch { /* no storage */ }
 
 let query = "", matches = null;
 const qInput = document.getElementById("q");
@@ -1678,8 +1712,11 @@ addEventListener("resize", () => {
   cam.dirty = true;
 });
 
-document.querySelectorAll("[data-look]").forEach(btn => btn.addEventListener("click", () => setLook(btn.dataset.look)));
-if (KENNEY_SPRITES) { document.getElementById("looks").hidden = false; document.getElementById("credit").hidden = false; }
+const lookSelect = document.getElementById("look");
+lookSelect.addEventListener("change", () => setLook(lookSelect.value));
+if (KENNEY_SPRITES) document.getElementById("credit").hidden = false;
+else lookSelect.querySelector('[value="kenney"]').remove();
+document.getElementById("look-pick").hidden = lookSelect.options.length < 2;
 
 // #district and #street open the biggest branch namespace at that zoom;
 // a namespace name opens that namespace at street zoom. A "kenney." prefix
@@ -1705,9 +1742,44 @@ function applyDeepLink() {
 
 // ---------------------------------------------------------------- live feed (kube-city --web)
 // The server sends JSON arrays of {"PodUpserted": pod}, {"PodDeleted": {uid}},
-// {"Status": text} and {"Reset": null} (a full list of the pods follows).
+// {"Status": text}, {"Contexts": {current, all}} and {"Reset": null} (a full
+// list of the pods follows). The page asks for another context with
+// {"Context": name}.
 
-const live = DATA.live ? { connected: false, retries: 0, status: "connecting", pods: new Map(), ns: new Map(), wl: new Map(), next: 0 } : null;
+const live = DATA.live ? {
+  connected: false, retries: 0, status: "connecting", ws: null, context: null,
+  pods: new Map(), ns: new Map(), wl: new Map(), next: 0,
+} : null;
+const contextSelect = document.getElementById("context");
+
+// Another cluster: forget the old one's namespaces, lots and labels too.
+function newCity() {
+  registry.length = 0; DATA.ns.length = 0; DATA.wl.length = 0;
+  live.ns.clear(); live.wl.clear(); live.pods.clear(); live.next = 0;
+  for (const el of signs) if (el) el.remove();
+  signs.length = 0;
+  for (const el of bLabels.values()) el.remove();
+  bLabels.clear();
+  hover = null; tip.hidden = true;
+  setQuery("");
+  cam.moved = false;
+  planDirty = true;
+}
+function showContexts({ current, all }) {
+  document.getElementById("context-pick").hidden = all.length === 0;
+  if (contextSelect.options.length !== all.length || all.some((name, k) => contextSelect.options[k].value !== name)) {
+    contextSelect.replaceChildren(...all.map(name => new Option(name, name)));
+  }
+  contextSelect.value = current;
+  contextSelect.disabled = false;
+  if (live.context !== null && live.context !== current) newCity();
+  live.context = current;
+}
+contextSelect.addEventListener("change", () => {
+  if (!live || !live.ws || live.ws.readyState !== WebSocket.OPEN) { contextSelect.value = live && live.context; return; }
+  contextSelect.disabled = true;
+  live.ws.send(JSON.stringify({ Context: contextSelect.value }));
+});
 function intern(map, list, key, name) {
   let i = map.get(key);
   if (i === undefined) { i = list.length; list.push(name); map.set(key, i); }
@@ -1719,6 +1791,7 @@ function liveBatch(items) {
   for (const it of items) {
     if ("Reset" in it) { flush(); resetWorld(); riseOrigin = { until: performance.now() + 900 }; }
     else if ("Status" in it) live.status = it.Status;
+    else if ("Contexts" in it) showContexts(it.Contexts);
     else if (it.PodUpserted) {
       const p = it.PodUpserted;
       let id = live.pods.get(p.uid);
@@ -1735,6 +1808,7 @@ function liveBatch(items) {
 }
 function connectLive() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`);
+  live.ws = ws;
   ws.onopen = () => { live.connected = true; live.retries = 0; panelDirty = true; };
   ws.onmessage = (m) => liveBatch(JSON.parse(m.data));
   ws.onclose = () => {
@@ -1750,7 +1824,7 @@ if (live) {
   document.getElementById("sim").setAttribute("aria-pressed", "false");
   document.querySelector(".bar-track").hidden = true;
   document.getElementById("about").textContent =
-    "A live, read-only view of your cluster. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, + and - zoom, c fit, / find, Esc clear.";
+    "A live, read-only view of your cluster. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, + and - zoom, c fit, / find, i details, Esc clear.";
 }
 registerBatch(DATA.events);
 replan();

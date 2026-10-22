@@ -147,13 +147,38 @@ direction before building a `--web` server.
 | PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN; fonts still come from Google Fonts and fall back to system fonts |
 | Line endings | `.gitattributes`: LF everywhere, PNG binary | Windows checkouts embedded CRLF copies of the page |
 
-## Next steps
+## Page controls (2026-10-22)
 
-1. Polish the Kenney look: tell StatefulSets and DaemonSets apart, Kenney
-   road tiles with crossings, more variety.
-2. Richer pod details in the inspector (restarts, age, node, image).
-3. More objects: Services, Ingresses, Nodes.
-4. Config file, remote repo, krew packaging.
+| Topic | Decision | Why |
+|---|---|---|
+| Theme | A "Theme" dropdown (native `<select>`) instead of the Kenney/Metropolis buttons | Room for more themes; keyboard and screen readers work |
+| Details panel | Collapses into its header on every screen size (`i`), remembered per browser; a fitted view refits to the space it leaves | More room for the city |
+| Context | A "Context" dropdown when `--web` shows a cluster (not with `--record`, `--replay` or `--demo`); the server switches its watcher | Look at another cluster without restarting |
+| Switching | One ordered input stream into the pump, every source tagged with a generation; a switch clears the city, sends Reset + Contexts to every page, and drops late events of the old context; connect and watch run in one task that a newer switch aborts | No mix of two clusters, even while the old watcher winds down |
+| Socket origin | `/ws` only accepts the city's own page: Host must be 127.0.0.1/localhost/[::1] on the server's port, and Origin (if sent) the same | Any website can open a WebSocket to localhost; switching made that worse than reading |
+
+## Roadmap
+
+Done: browser and terminal views; Kenney and Metropolis looks; semantic
+zoom; `--web`; public repo with protected `master`; release v0.1.0 with
+binaries and installers; housekeeping (Dependabot fix in PR #5, branch
+cleanup, owner's account checks, backup deleted); theme dropdown,
+collapsible details panel, context dropdown.
+
+1. Easier installs (paused, PR #5): Homebrew tap, crates.io, krew. Waits
+   for the `HOMEBREW_TAP_TOKEN` secret, `cargo login` and a krew plugin
+   name.
+2. Show all contexts at the same time (future): one city per context side
+   by side, or one district group per context; needs a watcher per context
+   and context-aware layout and labels.
+3. Demo GIF in the README, then share it.
+4. Kenney polish: tell StatefulSets and DaemonSets apart, road tiles with
+   crossings, more variety.
+5. Richer pod details: restarts, age, node, image, waiting reason.
+6. `--anonymise` for screenshots and demos of real clusters.
+7. More objects: Nodes, Services, Ingresses, volumes.
+8. Smaller: fonts built into the binary, stripped release binaries, faster
+   sprite loading.
 
 Original plan for the browser prototype, kept for reference:
 

@@ -2,9 +2,14 @@
 //!
 //! Serves the page and the Kenney sprites from the binary on 127.0.0.1 and
 //! streams world events to every open page over a WebSocket, as JSON arrays
-//! of the same events a recording holds. A page that connects late first
-//! gets `{"Reset": null}`, the status and every current pod; one that falls
-//! too far behind gets that again.
+//! of the same events a recording holds, plus `{"Status": text}`,
+//! `{"Contexts": {"current", "all"}}` and `{"Reset": null}`. A page that
+//! connects late first gets Reset, the contexts, the status and every
+//! current pod; one that falls too far behind gets that again.
+//!
+//! When the city shows a cluster, a page can ask for another kubeconfig
+//! context with `{"Context": name}`: every page then resets and the city
+//! fills up from that context.
 
 use std::{
     collections::HashMap,
@@ -20,14 +25,24 @@ use axum::{
         Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, broadcast, mpsc::UnboundedReceiver, watch};
+use tokio::{
+    sync::{
+        Mutex, broadcast,
+        mpsc::{self, UnboundedReceiver, UnboundedSender},
+        watch,
+    },
+    task::JoinHandle,
+};
 
-use crate::world::{PodInfo, WorldEvent};
+use crate::{
+    cluster,
+    world::{PodInfo, WorldEvent},
+};
 
 const TEMPLATE: &str = include_str!("../art/city.template.html");
 include!(concat!(env!("OUT_DIR"), "/sprites.rs"));
@@ -40,13 +55,43 @@ const PIXI_CDN: &str = "https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pix
 const BACKLOG: usize = 1024;
 /// Events sent to the pages in one message at most.
 const BATCH: usize = 2000;
+const STATUS_ERROR_MAX: usize = 120;
+
+/// The clusters a page may switch between, when the city shows a cluster.
+pub struct Clusters {
+    /// Every context in the kubeconfig.
+    pub contexts: Vec<String>,
+    /// The context shown at start.
+    pub current: String,
+    /// The `--namespace` filter, kept for every context.
+    pub namespaces: Vec<String>,
+}
+
+/// What the pump gets, in order. Every source of events has a generation;
+/// switching contexts starts a new one and drops whatever the old one still
+/// sends.
+enum Input {
+    Event(u64, WorldEvent),
+    Status(u64, String),
+    Switch(u64, String),
+}
+
+/// The city as the pages see it.
+#[derive(Default)]
+struct City {
+    pods: HashMap<String, PodInfo>,
+    context: Option<String>,
+}
 
 #[derive(Clone)]
 struct Shared {
-    pods: Arc<Mutex<HashMap<String, PodInfo>>>,
+    city: Arc<Mutex<City>>,
     batches: broadcast::Sender<Arc<str>>,
     status: watch::Receiver<String>,
     page: Arc<str>,
+    port: u16,
+    contexts: Arc<Vec<String>>,
+    switcher: Option<Arc<Switcher>>,
 }
 
 /// Serves the city until Ctrl+C, opening it in a browser when `open` is set.
@@ -55,19 +100,47 @@ pub async fn serve(
     status: watch::Receiver<String>,
     port: u16,
     open: bool,
+    clusters: Option<Clusters>,
 ) -> Result<()> {
-    let shared = Shared { pods: Arc::default(), batches: broadcast::channel(BACKLOG).0, status, page: page().into() };
-    tokio::spawn(pump(events, shared.clone()));
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        .await
+        .with_context(|| format!("cannot listen on 127.0.0.1:{port}; is another kube-city running? Try --port"))?;
+    let port = listener.local_addr()?.port();
+
+    let (input, inputs) = mpsc::unbounded_channel();
+    let first = tokio::spawn(forward(0, events, status, input.clone()));
+    let (status_tx, status) = watch::channel(String::new());
+    let city = City { pods: HashMap::new(), context: clusters.as_ref().map(|c| c.current.clone()) };
+    let (contexts, switcher) = match clusters {
+        Some(clusters) => {
+            let switcher = Switcher {
+                input,
+                namespaces: clusters.namespaces,
+                contexts: clusters.contexts.clone(),
+                running: Mutex::new((0, first)),
+            };
+            (clusters.contexts, Some(Arc::new(switcher)))
+        }
+        None => (Vec::new(), None),
+    };
+    let shared = Shared {
+        city: Arc::new(Mutex::new(city)),
+        batches: broadcast::channel(BACKLOG).0,
+        status,
+        page: page().into(),
+        port,
+        contexts: Arc::new(contexts),
+        switcher,
+    };
+    tokio::spawn(pump(inputs, status_tx, shared.clone()));
+
     let app = Router::new()
         .route("/", get(index))
         .route("/ws", get(socket))
         .route("/sprites/{file}", get(sprite))
         .route("/pixi.min.js", get(pixi))
         .with_state(shared);
-    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-        .await
-        .with_context(|| format!("cannot listen on 127.0.0.1:{port}; is another kube-city running? Try --port"))?;
-    let url = format!("http://127.0.0.1:{}/", listener.local_addr()?.port());
+    let url = format!("http://127.0.0.1:{port}/");
     eprintln!("kube-city: the city is at {url} (Ctrl+C to stop)");
     if open {
         open_browser(&url);
@@ -94,30 +167,161 @@ fn page() -> String {
     )
 }
 
-/// Keeps the current pods and passes every event on to the open pages.
-async fn pump(mut events: UnboundedReceiver<WorldEvent>, shared: Shared) {
-    while let Some(first) = events.recv().await {
-        let mut batch = vec![first];
-        while batch.len() < BATCH {
-            let Ok(event) = events.try_recv() else { break };
-            batch.push(event);
-        }
-        let mut pods = shared.pods.lock().await;
-        for event in &batch {
-            match event {
-                WorldEvent::PodUpserted(pod) => {
-                    pods.insert(pod.uid.clone(), pod.clone());
+/// Passes one source's events and status on to the pump, tagged with its
+/// generation, until either side goes away.
+async fn forward(
+    generation: u64,
+    mut events: UnboundedReceiver<WorldEvent>,
+    mut status: watch::Receiver<String>,
+    input: UnboundedSender<Input>,
+) {
+    let first = status.borrow_and_update().clone();
+    if input.send(Input::Status(generation, first)).is_err() {
+        return;
+    }
+    let mut status_open = true;
+    loop {
+        tokio::select! {
+            event = events.recv() => match event {
+                Some(event) => {
+                    if input.send(Input::Event(generation, event)).is_err() {
+                        return;
+                    }
                 }
-                WorldEvent::PodDeleted { uid } => {
-                    pods.remove(uid);
+                None => return,
+            },
+            changed = status.changed(), if status_open => {
+                if changed.is_err() {
+                    // A replay or the demo never changes its status.
+                    status_open = false;
+                    continue;
+                }
+                let text = status.borrow_and_update().clone();
+                if input.send(Input::Status(generation, text)).is_err() {
+                    return;
                 }
             }
         }
-        // Sent while holding the lock: a page subscribing under the same
-        // lock sees each change either in its snapshot or as a batch.
-        let text = serde_json::to_string(&batch).expect("world events always serialize");
-        let _ = shared.batches.send(text.into());
     }
+}
+
+/// Starts and stops the connection to whichever context the pages ask for.
+struct Switcher {
+    input: UnboundedSender<Input>,
+    namespaces: Vec<String>,
+    contexts: Vec<String>,
+    /// The current generation and the task feeding it.
+    running: Mutex<(u64, JoinHandle<()>)>,
+}
+
+impl Switcher {
+    async fn switch(&self, context: &str) {
+        if !self.contexts.iter().any(|known| known == context) {
+            return;
+        }
+        let mut running = self.running.lock().await;
+        running.1.abort();
+        running.0 += 1;
+        let generation = running.0;
+        let _ = self.input.send(Input::Switch(generation, context.to_owned()));
+        running.1 =
+            tokio::spawn(show_context(generation, context.to_owned(), self.namespaces.clone(), self.input.clone()));
+    }
+}
+
+/// Connects to `context` and feeds its pods to the pump; a failure ends up
+/// in the status line.
+async fn show_context(generation: u64, context: String, namespaces: Vec<String>, input: UnboundedSender<Input>) {
+    match cluster::connect(Some(&context), &namespaces).await {
+        Err(error) => {
+            let message: String = format!("{error:#}").chars().take(STATUS_ERROR_MAX).collect();
+            let _ = input.send(Input::Status(generation, format!("{context} · {message}")));
+        }
+        Ok((client, context)) => {
+            let (events_tx, events) = mpsc::unbounded_channel();
+            let (status_tx, status) = watch::channel(format!("{context} · connecting"));
+            let watching = cluster::watch(client, context, namespaces, events_tx, status_tx);
+            tokio::join!(watching, forward(generation, events, status, input));
+        }
+    }
+}
+
+/// Keeps the city the pages see and passes every change on to them.
+async fn pump(mut inputs: UnboundedReceiver<Input>, status: watch::Sender<String>, shared: Shared) {
+    let mut current = 0;
+    let mut next = None;
+    loop {
+        let input = match next.take() {
+            Some(input) => input,
+            None => match inputs.recv().await {
+                Some(input) => input,
+                None => return,
+            },
+        };
+        match input {
+            Input::Event(generation, first) => {
+                let mut batch = Vec::new();
+                if generation == current {
+                    batch.push(first);
+                }
+                // Gather what is already waiting, up to the next non-event.
+                while batch.len() < BATCH {
+                    match inputs.try_recv() {
+                        Ok(Input::Event(generation, event)) => {
+                            if generation == current {
+                                batch.push(event);
+                            }
+                        }
+                        Ok(other) => {
+                            next = Some(other);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if !batch.is_empty() {
+                    apply(&shared, &batch).await;
+                }
+            }
+            Input::Status(generation, text) => {
+                if generation == current {
+                    status.send_replace(text);
+                }
+            }
+            Input::Switch(generation, context) => {
+                current = generation;
+                let mut city = shared.city.lock().await;
+                city.pods.clear();
+                city.context = Some(context.clone());
+                let text = format!("{context} · connecting");
+                status.send_replace(text.clone());
+                let reset = json!([{ "Reset": null }, contexts(&city, &shared), { "Status": text }]).to_string();
+                let _ = shared.batches.send(reset.into());
+            }
+        }
+    }
+}
+
+async fn apply(shared: &Shared, batch: &[WorldEvent]) {
+    let mut city = shared.city.lock().await;
+    for event in batch {
+        match event {
+            WorldEvent::PodUpserted(pod) => {
+                city.pods.insert(pod.uid.clone(), pod.clone());
+            }
+            WorldEvent::PodDeleted { uid } => {
+                city.pods.remove(uid);
+            }
+        }
+    }
+    // Sent while holding the lock: a page subscribing under the same lock
+    // sees each change either in its snapshot or as a batch.
+    let text = serde_json::to_string(batch).expect("world events always serialize");
+    let _ = shared.batches.send(text.into());
+}
+
+fn contexts(city: &City, shared: &Shared) -> Value {
+    json!({ "Contexts": { "current": city.context, "all": *shared.contexts } })
 }
 
 async fn index(State(shared): State<Shared>) -> Html<String> {
@@ -138,18 +342,33 @@ async fn pixi() -> Response {
     ([(header::CONTENT_TYPE, "text/javascript"), (header::CACHE_CONTROL, "max-age=86400")], PIXI).into_response()
 }
 
-async fn socket(upgrade: WebSocketUpgrade, State(shared): State<Shared>) -> Response {
+async fn socket(upgrade: WebSocketUpgrade, headers: HeaderMap, State(shared): State<Shared>) -> Response {
+    if !from_own_page(&headers, shared.port) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     upgrade.on_upgrade(|socket| feed(socket, shared))
+}
+
+/// Browsers let any website open a WebSocket to 127.0.0.1, so only the
+/// city's own page may connect: the host must be this server (which also
+/// stops DNS rebinding) and the origin, when a browser sends one, the same.
+fn from_own_page(headers: &HeaderMap, port: u16) -> bool {
+    let value = |name| headers.get(name).and_then(|value: &header::HeaderValue| value.to_str().ok());
+    let Some(host) = value(header::HOST) else { return false };
+    let local = [format!("127.0.0.1:{port}"), format!("localhost:{port}"), format!("[::1]:{port}")];
+    if !local.iter().any(|allowed| allowed == host) {
+        return false;
+    }
+    value(header::ORIGIN).is_none_or(|origin| origin == format!("http://{host}"))
 }
 
 /// Sends one page the whole city, then every change, until it goes away.
 async fn feed(mut socket: WebSocket, shared: Shared) {
     let mut status = shared.status.clone();
-    let mut status_open = true;
     loop {
         let (snapshot, mut batches) = {
-            let pods = shared.pods.lock().await;
-            (snapshot(&pods, &status.borrow_and_update()), shared.batches.subscribe())
+            let city = shared.city.lock().await;
+            (snapshot(&city, &shared, &status.borrow_and_update()), shared.batches.subscribe())
         };
         if socket.send(Message::Text(snapshot.into())).await.is_err() {
             return;
@@ -165,11 +384,9 @@ async fn feed(mut socket: WebSocket, shared: Shared) {
                     Err(broadcast::error::RecvError::Lagged(_)) => break,
                     Err(broadcast::error::RecvError::Closed) => return,
                 },
-                changed = status.changed(), if status_open => {
+                changed = status.changed() => {
                     if changed.is_err() {
-                        // A replay or the demo never changes its status.
-                        status_open = false;
-                        continue;
+                        return;
                     }
                     let text = json!([{ "Status": *status.borrow_and_update() }]).to_string();
                     if socket.send(Message::Text(text.into())).await.is_err() {
@@ -177,6 +394,14 @@ async fn feed(mut socket: WebSocket, shared: Shared) {
                     }
                 }
                 incoming = socket.recv() => match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Some(switcher) = &shared.switcher
+                            && let Ok(request) = serde_json::from_str::<Value>(&text)
+                            && let Some(context) = request.get("Context").and_then(Value::as_str)
+                        {
+                            switcher.switch(context).await;
+                        }
+                    }
                     Some(Ok(Message::Close(_)) | Err(_)) | None => return,
                     Some(Ok(_)) => {}
                 },
@@ -185,9 +410,13 @@ async fn feed(mut socket: WebSocket, shared: Shared) {
     }
 }
 
-fn snapshot(pods: &HashMap<String, PodInfo>, status: &str) -> String {
-    let mut items = vec![json!({ "Reset": null }), json!({ "Status": status })];
-    items.extend(pods.values().map(|pod| json!({ "PodUpserted": pod })));
+fn snapshot(city: &City, shared: &Shared, status: &str) -> String {
+    let mut items = vec![json!({ "Reset": null })];
+    if city.context.is_some() {
+        items.push(contexts(city, shared));
+    }
+    items.push(json!({ "Status": status }));
+    items.extend(city.pods.values().map(|pod| json!({ "PodUpserted": pod })));
     Value::Array(items).to_string()
 }
 
@@ -223,6 +452,24 @@ mod tests {
         }
     }
 
+    fn shared(contexts: &[&str]) -> (Shared, watch::Sender<String>) {
+        let (status_tx, status) = watch::channel(String::new());
+        let shared = Shared {
+            city: Arc::default(),
+            batches: broadcast::channel(BACKLOG).0,
+            status,
+            page: "".into(),
+            port: 7700,
+            contexts: Arc::new(contexts.iter().map(|c| c.to_string()).collect()),
+            switcher: None,
+        };
+        (shared, status_tx)
+    }
+
+    async fn next_items(pages: &mut broadcast::Receiver<Arc<str>>) -> Vec<Value> {
+        serde_json::from_str(&pages.recv().await.unwrap()).unwrap()
+    }
+
     #[test]
     fn page_has_live_data_and_every_sprite_it_names() {
         let page = page();
@@ -243,28 +490,73 @@ mod tests {
 
     #[tokio::test]
     async fn pump_keeps_current_pods_and_forwards_batches() {
-        let (status_tx, status) = watch::channel(String::from("test"));
-        let shared = Shared { pods: Arc::default(), batches: broadcast::channel(BACKLOG).0, status, page: "".into() };
+        let (shared, status_tx) = shared(&[]);
         let mut pages = shared.batches.subscribe();
-        let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(pump(receiver, shared.clone()));
+        let (input, inputs) = mpsc::unbounded_channel();
+        tokio::spawn(pump(inputs, status_tx, shared.clone()));
 
-        events.send(WorldEvent::PodUpserted(pod("a", PodState::Pending))).unwrap();
-        events.send(WorldEvent::PodUpserted(pod("b", PodState::Running))).unwrap();
-        events.send(WorldEvent::PodDeleted { uid: "a".into() }).unwrap();
+        input.send(Input::Status(0, "ctx · live".into())).unwrap();
+        input.send(Input::Event(0, WorldEvent::PodUpserted(pod("a", PodState::Pending)))).unwrap();
+        input.send(Input::Event(0, WorldEvent::PodUpserted(pod("b", PodState::Running)))).unwrap();
+        input.send(Input::Event(0, WorldEvent::PodDeleted { uid: "a".into() })).unwrap();
         let mut seen = Vec::new();
         while seen.len() < 3 {
-            let batch: Vec<WorldEvent> = serde_json::from_str(&pages.recv().await.unwrap()).unwrap();
-            seen.extend(batch);
+            seen.extend(next_items(&mut pages).await);
         }
-        assert_eq!(seen[2], WorldEvent::PodDeleted { uid: "a".into() });
+        assert_eq!(seen[2], json!({ "PodDeleted": { "uid": "a" } }));
 
-        let pods = shared.pods.lock().await;
-        assert_eq!(pods.keys().collect::<Vec<_>>(), ["b"]);
-        let snapshot: Value = serde_json::from_str(&snapshot(&pods, "ctx · live")).unwrap();
+        let city = shared.city.lock().await;
+        assert_eq!(city.pods.keys().collect::<Vec<_>>(), ["b"]);
+        let snapshot: Value = serde_json::from_str(&snapshot(&city, &shared, "ctx · live")).unwrap();
         assert_eq!(snapshot[0], json!({ "Reset": null }));
         assert_eq!(snapshot[1], json!({ "Status": "ctx · live" }));
         assert_eq!(snapshot[2]["PodUpserted"]["uid"], "b");
-        drop(status_tx);
+    }
+
+    #[tokio::test]
+    async fn switching_resets_the_city_and_drops_the_old_contexts_events() {
+        let (shared, status_tx) = shared(&["one", "two"]);
+        let mut status = shared.status.clone();
+        let mut pages = shared.batches.subscribe();
+        let (input, inputs) = mpsc::unbounded_channel();
+        tokio::spawn(pump(inputs, status_tx, shared.clone()));
+
+        input.send(Input::Event(0, WorldEvent::PodUpserted(pod("old", PodState::Running)))).unwrap();
+        input.send(Input::Switch(1, "two".into())).unwrap();
+        // Late events from the first context are ignored.
+        input.send(Input::Event(0, WorldEvent::PodUpserted(pod("late", PodState::Running)))).unwrap();
+        input.send(Input::Status(0, "one · live".into())).unwrap();
+        input.send(Input::Event(1, WorldEvent::PodUpserted(pod("new", PodState::Running)))).unwrap();
+
+        assert_eq!(next_items(&mut pages).await[0]["PodUpserted"]["uid"], "old");
+        let reset = next_items(&mut pages).await;
+        assert_eq!(reset[0], json!({ "Reset": null }));
+        assert_eq!(reset[1], json!({ "Contexts": { "current": "two", "all": ["one", "two"] } }));
+        assert_eq!(reset[2], json!({ "Status": "two · connecting" }));
+        let after = next_items(&mut pages).await;
+        assert_eq!(after, [json!({ "PodUpserted": pod("new", PodState::Running) })]);
+
+        let city = shared.city.lock().await;
+        assert_eq!(city.pods.keys().collect::<Vec<_>>(), ["new"]);
+        assert_eq!(*status.borrow_and_update(), "two · connecting");
+    }
+
+    #[test]
+    fn only_the_citys_own_page_may_open_the_socket() {
+        let headers = |pairs: &[(header::HeaderName, &str)]| {
+            let mut map = HeaderMap::new();
+            for (name, value) in pairs {
+                map.insert(name.clone(), value.parse().unwrap());
+            }
+            map
+        };
+        let own = headers(&[(header::HOST, "127.0.0.1:7700"), (header::ORIGIN, "http://127.0.0.1:7700")]);
+        assert!(from_own_page(&own, 7700));
+        assert!(from_own_page(&headers(&[(header::HOST, "localhost:7700")]), 7700));
+        let other_site = headers(&[(header::HOST, "127.0.0.1:7700"), (header::ORIGIN, "https://evil.example")]);
+        assert!(!from_own_page(&other_site, 7700));
+        let rebound = headers(&[(header::HOST, "evil.example:7700"), (header::ORIGIN, "http://evil.example:7700")]);
+        assert!(!from_own_page(&rebound, 7700));
+        assert!(!from_own_page(&HeaderMap::new(), 7700));
     }
 }
