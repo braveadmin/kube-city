@@ -5,8 +5,8 @@ welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discu
 
 ## Done
 
-- **Two views:** the city in the browser (`kube-city --web`, WebGL) and in the
-  terminal, live and read-only, from a cluster, a recording or a demo.
+- **The city in your browser** (WebGL), live and read-only, from a cluster,
+  a recording or a demo. The terminal view (`--tui`) is deprecated.
 - **Two themes:** Kenney (sprites from Kenney's CC0 packs) and Metropolis
   (drawn in code), picked from the **Theme** dropdown.
 - **Readable big clusters:** cluster, district and street zoom levels; search;
@@ -37,5 +37,7 @@ welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discu
   Ingresses as city gates, volumes as depots.
 - **Smaller improvements:** fonts built into the binary (fully offline
   `--web`), smaller release binaries, faster sprite loading.
+- **Remove the deprecated terminal view** (around 0.3), or keep it behind an
+  optional build feature, depending on feedback.
 - **krew:** `kubectl krew install` from the central plugin index. Until then,
   a symlink gives you `kubectl city` (see the README).

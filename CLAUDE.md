@@ -1,17 +1,17 @@
 # kube-city
 
-A terminal companion that draws a Kubernetes cluster as a living isometric
-city (Rust: ratatui, kube-rs, tokio). **Read `docs/decisions.md` first** (and `ROADMAP.md` for what is planned): it
+Draws a Kubernetes cluster as a living isometric city in the browser (Rust:
+kube-rs, tokio, axum; the page is PixiJS). The terminal view (`--tui`,
+ratatui) is deprecated and frozen: bug fixes only, no new features. **Read `docs/decisions.md` first** (and `ROADMAP.md` for what is planned): it
 holds the decisions so far, the open problems and the recommended next step.
 
 ## Commands
 
 ```bash
-cargo run --release -- --web --demo                            # browser view, simulated cluster
-cargo run --release -- --web --context my-cluster           # browser view, live, read-only
-cargo run --release -- --demo                                  # simulated cluster
+cargo run --release -- --demo                                  # simulated cluster, in the browser
+cargo run --release -- --context my-cluster                    # live, read-only
 cargo run --release -- --replay recordings/big-cluster.jsonl  # recorded real cluster (git-ignored)
-cargo run --release -- --context my-cluster                 # live, read-only
+cargo run --release -- --tui --demo                            # deprecated terminal view
 cargo test
 cargo clippy --all-targets   # keep it warning-free
 ```
@@ -35,7 +35,7 @@ KUBE_CITY_REPLAY=recordings/big-cluster.jsonl KUBE_CITY_OUT=/tmp/snap cargo test
 - `src/world.rs`: city model (pods, buildings, grouping rules) fed by `WorldEvent`s
 - `src/layout.rs`: stable lots; blocks handed out along a spiral
 - `src/cluster.rs`, `src/demo.rs`, `src/recording.rs`: event sources
-- `src/web.rs`: `--web` server (page, sprites from `build.rs`, WebSocket feed);
+- `src/web.rs`: the browser view's server (page, sprites from `build.rs`, WebSocket feed);
   the page itself is `art/city.template.html`
 - `src/render/`: `scene.rs` (isometric primitives), `theme/` (all art; Metropolis)
 - `assets/kenney/`: the Kenney sprites the browser view uses (CC0)
