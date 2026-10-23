@@ -1,7 +1,9 @@
 # Roadmap
 
-Where kube-city is going, roughly in order. Ideas, votes and questions are
-welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discussions/categories/ideas).
+Where kube-city is going, roughly in order. Every item is a GitHub issue;
+the next release is the [0.3.0 milestone](https://github.com/braveadmin/kube-city/milestone/1).
+Ideas, votes and questions are welcome in
+[Discussions → Ideas](https://github.com/braveadmin/kube-city/discussions/categories/ideas).
 
 ## Done
 
@@ -23,23 +25,19 @@ welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discu
   context and theme dropdowns, banners toggle, version in the page. See
   [CHANGELOG.md](CHANGELOG.md).
 
-## Next
+## Next (0.3.0)
 
-- **Demo GIF** in the README: the city growing, burning and rebuilding.
-- **Kenney polish:** StatefulSets and DaemonSets easier to tell apart, road
-  tiles with crossings, more building variety.
-- **`--anonymise`:** pseudonyms for namespaces and workloads, for sharing
-  screenshots and demos of real clusters.
+- [`--anonymise`](https://github.com/braveadmin/kube-city/issues/13): pseudonyms for sharing screenshots and demos of real clusters.
+- [StatefulSets and DaemonSets easier to tell apart](https://github.com/braveadmin/kube-city/issues/14) in the Kenney look.
+- [Kenney road tiles](https://github.com/braveadmin/kube-city/issues/15) with lane markings and crossings.
+- [More building variety](https://github.com/braveadmin/kube-city/issues/16) in the Kenney look.
+- [Demo GIF](https://github.com/braveadmin/kube-city/issues/17) at the top of the README.
 
 ## Later
 
-- **All contexts at the same time:** every cluster of your kubeconfig in one
-  view, side by side or as groups of districts.
-- **More Kubernetes objects:** Nodes as land, Services as roads or bridges,
-  Ingresses as city gates, volumes as depots.
-- **Smaller improvements:** fonts built into the binary (fully offline
-  `--web`), smaller release binaries, faster sprite loading.
-- **Remove the deprecated terminal view** (around 0.3), or keep it behind an
-  optional build feature, depending on feedback.
-- **krew:** `kubectl krew install` from the central plugin index. Until then,
-  a symlink gives you `kubectl city` (see the README).
+- [All contexts at the same time](https://github.com/braveadmin/kube-city/issues/18).
+- [More Kubernetes objects](https://github.com/braveadmin/kube-city/issues/19): Nodes, Services, Ingresses, volumes.
+- [Remove the deprecated terminal view](https://github.com/braveadmin/kube-city/issues/20), or keep it behind a build feature, depending on feedback.
+- [Fonts built into the binary](https://github.com/braveadmin/kube-city/issues/21) (fully offline page).
+- [Smaller release binaries and faster sprite loading](https://github.com/braveadmin/kube-city/issues/22).
+- [krew](https://github.com/braveadmin/kube-city/issues/23): `kubectl krew install`; until then a symlink gives you `kubectl city` (see the README).
