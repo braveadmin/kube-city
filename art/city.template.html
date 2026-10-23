@@ -285,7 +285,7 @@ const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // ---------------------------------------------------------------- helpers
 
-const TW = 64, TH = 32, GAP = 2;
+const TW = 64, TH = 32;
 const iso = (i, j) => [(i - j) * TW / 2, (i + j) * TH / 2];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -587,7 +587,9 @@ function planDistricts() {
     const branch = /^(feature|bugfix)-/.test(name);
     return { idx, name, branch, cols, rows, w: cols + 2, h: rows + 2, lots, x: 0, y: 0, stats: null, health: "ok" };
   });
-  // Shelf packing, tallest first: rows of districts with roads between them.
+  // Shelf packing, tallest first: rows of districts with roads between them,
+  // as wide as the look's roads.
+  const GAP = theme.gap;
   const order = [...districts].sort((a, b) => (b.h - a.h) || (b.w - a.w) || a.name.localeCompare(b.name));
   const area = districts.reduce((s, d) => s + (d.w + GAP) * (d.h + GAP), 0);
   const maxW = Math.max(Math.ceil(Math.sqrt(area) * 1.15), ...districts.map(d => d.w));
@@ -732,6 +734,7 @@ function drawGround() {
 
 const METROPOLIS = {
   name: "metropolis",
+  gap: 2, lane: 0.32,
   draw: {
     tower: tower, tank: tankShape, house: houses, kiosk, scorched,
     factory: (g, p) => factory(g, p, false), done: (g, p) => factory(g, p, true), build: construction,
@@ -773,6 +776,9 @@ const KIT = {
     house: ["b057", "b058", "b059", "b060", "b061", "b062", "b063", "b064", "b066", "b067", "b068", "b069", "b073", "b074", "b075", "b082"],
     works: ["b081", "b088", "b089", "b096"],
   },
+  // Road tiles by the neighbours they join: north (j - 1) 1, east (i + 1) 2, south 4, west 8.
+  roads: { 5: "c081", 10: "c073", 15: "c089", 13: "c088", 7: "c095", 14: "c096", 11: "c103", 3: "c124", 6: "c122", 12: "c125", 9: "c126" },
+  crossings: { 5: "c056", 10: "c064" },
   road: "c080", sidewalk: "c074", lot: "c066", parks: ["c059", "c069", "c067", "c076"], plaza: ["c072", "c072", "c072", "c072", "c072", "c067"],
   pit: "c040", tree: "d010", lamp: "d005",
 };
@@ -861,6 +867,7 @@ function roofTank(g, v) {
 
 const KENNEY = {
   name: "kenney",
+  gap: 1, lane: 0.12,
   body(look) {
     const c = new PIXI.Container(), p = look.p;
     switch (look.cat) {
@@ -897,7 +904,22 @@ const KENNEY = {
   },
   ground() {
     const { W, H } = plan, m = 2;
-    const across = new Set(plan.roads.across.flatMap(j => [j - 1, j]));
+    // One-tile roads with their own kerbs: around the city, between the
+    // shelves and along both sides of every block. A block that ends one tile
+    // short of the city's edge gets no road of its own there: two roads side
+    // by side would make a strip of junctions.
+    const road = new Set(), key = (i, j) => `${i}/${j}`;
+    for (const j of [-1, ...plan.roads.across.map(j => j - 0.5), H]) for (let i = -1; i <= W; i++) road.add(key(i, j));
+    for (let j = -1; j <= H; j++) { road.add(key(-1, j)); road.add(key(W, j)); }
+    const shelfH = new Map();
+    for (const d of plan.districts) shelfH.set(d.y, Math.max(shelfH.get(d.y) || 0, d.h));
+    for (const d of plan.districts) for (let j = d.y; j < d.y + shelfH.get(d.y); j++) {
+      road.add(key(d.x - 1, j));
+      if (d.x + d.w !== W - 1) road.add(key(d.x + d.w, j));
+    }
+    const isRoad = (i, j) => road.has(key(i, j));
+    const joins = (i, j) => (isRoad(i, j - 1) ? 1 : 0) | (isRoad(i + 1, j) ? 2 : 0) | (isRoad(i, j + 1) ? 4 : 0) | (isRoad(i - 1, j) ? 8 : 0);
+    const junction = (i, j) => isRoad(i, j) && [1, 2, 4, 8].filter(b => joins(i, j) & b).length > 2;
     const tiles = [];
     for (let j = -m; j < H + m; j++) for (let i = -m; i < W + m; i++) {
       const d = plan.districts.find(d => i >= d.x && i < d.x + d.w && j >= d.y && j < d.y + d.h);
@@ -906,9 +928,13 @@ const KENNEY = {
         const ring = i === d.x || j === d.y || i === d.x + d.w - 1 || j === d.y + d.h - 1;
         const k = (j - d.y - 1) * d.cols + (i - d.x - 1);
         name = ring ? KIT.sidewalk : k < d.lots.size ? KIT.lot : pick(KIT.parks, hash(`${i}/${j}`), 0);
+      } else if (isRoad(i, j)) {
+        // A zebra crossing on the straight next to every junction.
+        const n = joins(i, j);
+        const crossing = (n === 5 && (junction(i, j - 1) || junction(i, j + 1))) || (n === 10 && (junction(i - 1, j) || junction(i + 1, j)));
+        name = (crossing ? KIT.crossings[n] : KIT.roads[n]) || KIT.road;
       } else {
-        const near = across.has(j) || plan.districts.some(d => i >= d.x - GAP && i < d.x + d.w + GAP && j >= d.y - GAP && j < d.y + d.h + GAP);
-        name = near ? KIT.road : pick(KIT.plaza, hash(`${i}/${j}`), 0);
+        name = pick(KIT.plaza, hash(`${i}/${j}`), 0);
       }
       tiles.push([i, j, name]);
     }
@@ -916,7 +942,6 @@ const KENNEY = {
     for (const [i, j, name] of tiles) {
       const t = tileSprite(name); t.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(t);
     }
-    const g = new PIXI.Graphics(); laneMarkings(g); groundLayer.addChild(g);
     // Lamps on the corners of every block, trees along its front kerbs.
     for (const d of plan.districts) {
       for (const [i, j] of [[d.x, d.y], [d.x + d.w - 1, d.y], [d.x, d.y + d.h - 1], [d.x + d.w - 1, d.y + d.h - 1]])
@@ -966,8 +991,22 @@ function replan() {
 async function setLook(name) {
   if (!KENNEY_SPRITES || !THEMES[name]) name = "metropolis";
   if (name === "kenney") await kenneyReady();
+  const gap = theme.gap;
   theme = THEMES[name];
-  rebuildGround();
+  if (theme.gap === gap) rebuildGround();
+  else {
+    // The looks' roads differ in width, so the districts move: a camera the
+    // viewer has moved stays over the same district.
+    const i = cam.x / TW + cam.y / TH, j = cam.y / TH - cam.x / TW;
+    const dist = d => Math.hypot(d.x + d.w / 2 - i, d.y + d.h / 2 - j);
+    const was = plan.districts.reduce((a, d) => (!a || dist(d) < dist(a) ? d : a), null);
+    replan();
+    const now = was && plan.districts[was.idx];
+    if (now && cam.moved) {
+      const [dx, dy] = iso(now.x - was.x, now.y - was.y);
+      cam.fly = null; cam.x += dx; cam.y += dy; cam.dirty = true;
+    }
+  }
   for (const b of world.buildings.values()) if (b.view && b.look) setBody(b, b.look);
   document.getElementById("look").value = name;
   try { localStorage.setItem("kube-city-look", name); } catch { /* per-viewer convenience only */ }
@@ -1770,7 +1809,7 @@ function makeCars() {
     for (let k = 0; k < Math.max(2, Math.round(W / 9)); k++) {
       const dir = k % 2 ? 1 : -1;
       const g = new PIXI.Graphics(geometry(`car:${k % colors.length}`, gg => (car(gg, colors[k % colors.length]), 10)).geometry);
-      cars.push({ g, j: j + (dir > 0 ? 0.32 : -0.32), i: Math.random() * (W + 4) - 2, dir, speed: 0.9 + Math.random() * 0.8 });
+      cars.push({ g, j: j + (dir > 0 ? theme.lane : -theme.lane), i: Math.random() * (W + 2 * theme.gap) - theme.gap, dir, speed: 0.9 + Math.random() * 0.8 });
       cityLayer.addChild(g);
     }
   }
@@ -1778,10 +1817,10 @@ function makeCars() {
 let lastCars = 0;
 function moveCars(now) {
   const dt = lastCars ? Math.min(0.1, (now - lastCars) / 1000) : 0; lastCars = now;
-  const { W } = plan;
+  const { W } = plan, end = theme.gap;  // where the road ends
   for (const c of cars) {
     c.i += c.dir * c.speed * dt;
-    if (c.i > W + 2) c.i = -2; if (c.i < -2) c.i = W + 2;
+    if (c.i > W + end) c.i = -end; if (c.i < -end) c.i = W + end;
     const [x, y] = iso(c.i, c.j);
     c.g.position.set(x, y);
     c.g.zIndex = (c.i + c.j) * 10;
@@ -1917,7 +1956,9 @@ if (live) {
     "A live, read-only view of your cluster. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, + and - zoom, c fit, / find, i details, b banners, Esc clear.";
 }
 registerBatch(DATA.events);
-replan();
-setLook(initialLook).catch(() => setLook("metropolis")).then(() => (live ? connectLive() : startReplay()));
+// The first plan waits for the look, whose roads set the space between districts.
+const firstLook = initialLook === "kenney" ? kenneyReady().then(() => "kenney", () => "metropolis") : Promise.resolve("metropolis");
+firstLook.then(name => { theme = THEMES[name]; replan(); return setLook(name); })
+  .then(() => (live ? connectLive() : startReplay()));
 districtStats();
 </script>
