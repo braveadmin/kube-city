@@ -3,7 +3,7 @@
 What was decided while building kube-city, and why. Read this before
 changing direction; update it when a decision changes.
 
-Last updated: 2026-10-16.
+Last updated: 2026-10-23.
 
 ## The idea
 
@@ -91,7 +91,7 @@ direction before building a `--web` server.
     with a storey per replica, StatefulSets brick halls with a code-drawn
     tank, twin tanks or water tower on the roof, DaemonSets houses, Jobs
     works with a code-drawn chimney. Fire, smoke and
-    the crane stay code-drawn on top. The ground is Kenney tiles: asphalt,
+    the crane stay code-drawn on top. The ground is Kenney tiles: roads,
     pavement, planters, lamps and trees. Sprites go into one atlas at load
     time (with mipmaps); ground floors lose their earth sides there so the
     lot tile underneath shows them.
@@ -101,6 +101,15 @@ direction before building a `--web` server.
     to confuse from far away and the packs have no tanks. The owner chose
     (2026-10-23, #14) code-drawn tanks on StatefulSet roofs, keeping the
     "storage" idea from Metropolis; pale tanks read at district zoom.
+  - Roads (#15, 2026-10-23): the Kenney look uses the pack's one-tile roads
+    with their own kerbs instead of two tiles of asphalt with drawn dashes.
+    Each road tile is picked from its neighbours (straights, T-junctions,
+    crossroads, rounded corners), with a zebra crossing on the straight next
+    to every junction. Roads run around the city, between the shelves and
+    along both sides of every block. The pack has no lane dashes, so there
+    are none. Each look sets its road width (`gap`: Metropolis 2, Kenney 1),
+    so switching looks re-plans the districts; a camera the viewer moved
+    stays over the same district.
 - The sprites the page uses are in `assets/kenney/` (CC0, with Kenney's
   licence files); `assets/kenney/README.md` says where the full packs are.
 - `apply(event)` takes events in the recording's compact form, so a future
