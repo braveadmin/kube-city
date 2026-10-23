@@ -154,7 +154,7 @@ pub async fn serve(
 
 /// The page with an empty live city and the sprites served next to it.
 fn page() -> String {
-    let data = json!({ "ns": [], "wl": [], "events": [], "live": true });
+    let data = json!({ "ns": [], "wl": [], "events": [], "live": true, "version": env!("CARGO_PKG_VERSION") });
     let sprites: serde_json::Map<String, Value> =
         SPRITES.iter().map(|(name, _)| (name.to_string(), Value::from(format!("sprites/{name}.png")))).collect();
     let body = TEMPLATE
@@ -476,6 +476,7 @@ mod tests {
         let page = page();
         assert!(!page.contains("/*CITY_DATA*/") && !page.contains("/*KENNEY_SPRITES*/"));
         assert!(page.contains(r#""live":true"#));
+        assert!(page.contains(&format!(r#""version":"{}""#, env!("CARGO_PKG_VERSION"))));
         // The built-in PixiJS must be the version the template asks for.
         assert!(TEMPLATE.contains(PIXI_CDN) && PIXI.contains(" * pixi.js - v7.4.2"));
         assert!(page.contains(r#"<script src="pixi.min.js">"#) && !page.contains("cdnjs"));
