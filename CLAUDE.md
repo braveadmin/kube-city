@@ -71,3 +71,40 @@ After changing dist settings: `allow-dirty = ["ci"]` (so Dependabot can bump
 actions) makes `dist generate` skip the workflow, so remove that line, run
 `dist generate`, then put the line back.
 
+## Working agreement
+
+The owner is product owner: decides what and why, accepts features, decides
+releases. Claude implements, decides how, and advises as an expert.
+
+Flow, one feature per GitHub issue (and per session: "work on issue #N"):
+
+1. **Request** (owner): an issue with problem, for whom, "done when".
+2. **Plan** (Claude): reply in the issue with plan, effort, decisions needed
+   and what the owner must do; plan mode for anything big.
+3. **Decide** (owner): answers in one go; `needs-decision` label until then.
+4. **Build** (Claude): branch, PR with "Closes #N", tests, a screenshot for
+   visible changes.
+5. **Accept** (owner): tests and merges, or comments.
+6. **Release** (Claude, on the owner's go): milestone → CHANGELOG.md → tag →
+   GitHub, Homebrew, crates.io.
+7. **Look back** after each milestone: three lines on what to keep or change.
+
+Refer to work by issue or PR number, never by "step 4".
+
+Claude may, without asking: create branches; force-push its own PR
+branches; rebase PRs; merge `docs:`, `chore:`, `ci:` and Dependabot PRs once
+checks are green; delete merged branches; open and label issues.
+
+Claude asks first before: merging features; changing branch protection,
+tags or releases; publishing outside GitHub (crates.io, krew,
+announcements); heavy local work (Docker images, long-running browsers, big
+downloads).
+
+The owner avoids GitHub's "Update branch" button (it adds merge commits);
+ask Claude to rebase instead.
+
+Messages: first line says what is needed from the owner (or "nothing"),
+then the result, then details. Choices as multiple-choice questions. Claude
+says so plainly when work is derailing: scope creep, a session growing too
+long, effort out of proportion, or a decision that conflicts with an
+earlier one.
