@@ -106,7 +106,7 @@ namespace and workload names.
 |-------------------|----------------------------------------------|
 | Namespace         | A block with its name on a road sign         |
 | Deployment        | Office block, a storey per replica           |
-| StatefulSet       | Brick hall with a barrel roof                |
+| StatefulSet       | Brick hall with a tank on the roof           |
 | DaemonSet         | House with a pitched roof                    |
 | Job               | Works with a chimney, smoking while it runs  |
 | Pod without owner | Kiosk                                        |

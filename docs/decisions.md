@@ -88,17 +88,19 @@ direction before building a `--web` server.
   - Kenney: sprites from Kenney's *Isometric Buildings* and *Isometric City*
     packs (CC0). Buildings are stacked from a ground floor, upper floors
     (35 px each in sprite pixels) and a roof: Deployments are office blocks
-    with a storey per replica, StatefulSets brick halls with barrel roofs,
-    DaemonSets houses, Jobs works with a code-drawn chimney. Fire, smoke and
+    with a storey per replica, StatefulSets brick halls with a code-drawn
+    tank, twin tanks or water tower on the roof, DaemonSets houses, Jobs
+    works with a code-drawn chimney. Fire, smoke and
     the crane stay code-drawn on top. The ground is Kenney tiles: asphalt,
     pavement, planters, lamps and trees. Sprites go into one atlas at load
     time (with mipmaps); ground floors lose their earth sides there so the
     lot tile underneath shows them.
   - Each look is an object with `body(look)` and `ground()` in the page; the
     rest of the page does not know which look is active.
-  - Known weak spot of the Kenney look: StatefulSet halls and DaemonSet
-    houses are both brick with pitched or barrel roofs, so they are easy to
-    confuse from far away; the packs have no tanks.
+  - StatefulSet halls and DaemonSet houses are both brick, so they were easy
+    to confuse from far away and the packs have no tanks. The owner chose
+    (2026-10-23, #14) code-drawn tanks on StatefulSet roofs, keeping the
+    "storage" idea from Metropolis; pale tanks read at district zoom.
 - The sprites the page uses are in `assets/kenney/` (CC0, with Kenney's
   licence files); `assets/kenney/README.md` says where the full packs are.
 - `apply(event)` takes events in the recording's compact form, so a future
