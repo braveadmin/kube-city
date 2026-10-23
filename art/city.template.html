@@ -169,8 +169,14 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 .card-head .title { font-family: var(--display); font-weight: 700; font-size: 1.3rem; line-height: 1.05; overflow-wrap: anywhere; }
 .card-head .sub { color: var(--muted); font-size: 0.8rem; }
 .card-head .close { margin-left: auto; border: 0; background: none; cursor: pointer; font-size: 1.2rem; line-height: 1; color: var(--muted); padding: 2px 4px; }
-.pods { display: flex; flex-direction: column; gap: 3px; font-family: var(--mono); font-size: 0.74rem; }
-.pods div { display: flex; gap: 8px; align-items: center; }
+.pods { display: flex; flex-direction: column; gap: 7px; font-size: 0.76rem; }
+.pod { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pod-name { display: flex; gap: 8px; align-items: center; font-family: var(--mono); min-width: 0; }
+.pod-name span:last-child { overflow-wrap: anywhere; }
+.pod-facts { color: var(--muted); padding-left: 14px; font-size: 0.72rem; }
+.pod-reason { color: var(--bad); padding-left: 14px; font-family: var(--mono); font-size: 0.72rem; font-weight: 500; }
+.restarts { color: var(--warn); font-weight: 600; }
+.images { display: flex; flex-direction: column; gap: 2px; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); overflow-wrap: anywhere; }
 .legend { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 10px; font-size: 0.78rem; }
 .legend div { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .legend img { width: 30px; height: 30px; object-fit: contain; flex: none; }
@@ -1040,8 +1046,12 @@ function upsertPod(id, ns, wl, kind, state) {
   b.pods.set(id, state);
   dirty.add(b);
 }
+// Pod id -> what the server knows about it (name, node, restarts, …); empty for
+// recordings made before kube-city collected it and in the published prototype.
+const podDetails = new Map();
 function deletePod(id) {
   const pod = world.pods.get(id);
+  podDetails.delete(id);
   if (!pod) return;
   world.pods.delete(id);
   pod.b.pods.delete(id);
@@ -1054,7 +1064,7 @@ function resetWorld() {
   for (const b of world.buildings.values()) if (b.view) b.view.destroy({ children: true });
   for (const f of falling) f.view.destroy({ children: true });
   falling.clear(); burning.clear(); smoking.clear(); dirty.clear();
-  world.pods.clear(); world.buildings.clear();
+  world.pods.clear(); world.buildings.clear(); podDetails.clear();
   sim.pending.length = 0;
   select(null);
 }
@@ -1366,16 +1376,44 @@ async function renderPanel() {
   const b = selected;
   const twins = [...world.buildings.values()].filter(o => o !== b && o.name === b.name && o.view);
   const img = b.look ? await icon(b.look) : "";
-  const pods = [...b.pods].map(([id, s]) => `<div><span class="dot s${s}"></span>pod-${id.toString(36).padStart(4, "0")}<span style="color:var(--muted)">${STATE_WORDS[s]}</span></div>`).join("");
+  const urgency = [2, 4, 0, 3, 5, 1]; // by state: crashing and failed pods first
+  const pods = [...b.pods].sort(([, a], [, z]) => urgency[a] - urgency[z]).map(([id, s]) => podRow(id, s)).join("");
+  const images = [...new Set([...b.pods.keys()].flatMap(id => (podDetails.get(id) || {}).images || []))];
   sel.hidden = false;
   sel.innerHTML = `<div class="card">
     <div class="card-head">${img ? `<img src="${img}" alt="">` : ""}<div><div class="title">${esc(b.name)}</div><div class="sub">${b.kind} in <b>${esc(DATA.ns[b.ns])}</b></div></div>
       <button class="close" id="unselect" aria-label="Clear selection">×</button></div>
     <h2>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}</h2><div class="pods">${pods}</div>
+    ${images.length ? `<h2>Image${images.length === 1 ? "" : "s"}</h2><div class="images">${images.map(i => `<span>${esc(i)}</span>`).join("")}</div>` : ""}
     ${twins.length ? `<h2>Same component in ${twins.length} other namespace${twins.length === 1 ? "" : "s"}</h2>
       <ul class="list">${twins.map(o => `<li><button data-key="${esc(o.key)}"><span class="sev ${severity(o) || "ok"}"></span><span class="name">${esc(DATA.ns[o.ns])}</span><span class="ns">${o.pods.size} pod${o.pods.size === 1 ? "" : "s"}</span></button></li>`).join("")}</ul>` : ""}
   </div>`;
   document.getElementById("unselect").addEventListener("click", () => select(null));
+}
+// How long ago an RFC 3339 time was, the way kubectl shows ages.
+function ageOf(time) {
+  const s = (Date.now() - Date.parse(time)) / 1000;
+  if (!(s >= 0)) return "";
+  if (s < 120) return `${Math.round(s)}s`;
+  if (s < 7200) return `${Math.round(s / 60)}m`;
+  if (s < 172800) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86400)}d`;
+}
+// One pod in the inspector: its name, then state, readiness, restarts, age
+// and node, then the reason it is not simply running.
+function podRow(id, state) {
+  const d = podDetails.get(id);
+  const facts = [STATE_WORDS[state]];
+  if (d) {
+    if (d.containers) facts.push(`${d.ready}/${d.containers} ready`);
+    if (d.restarts) facts.push(`<span class="restarts">${d.restarts} restart${d.restarts === 1 ? "" : "s"}</span>`);
+    if (d.created) facts.push(ageOf(d.created));
+    if (d.node) facts.push(esc(d.node));
+  }
+  const name = d ? d.name : `pod-${id.toString(36).padStart(4, "0")}`;
+  return `<div class="pod"><div class="pod-name"><span class="dot s${state}"></span><span>${esc(name)}</span></div>` +
+    `<div class="pod-facts">${facts.filter(Boolean).join(" · ")}</div>` +
+    (d && d.reason ? `<div class="pod-reason">${esc(d.reason)}</div>` : "") + "</div>";
 }
 document.getElementById("inspector").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-key]");
@@ -1796,6 +1834,7 @@ function liveBatch(items) {
       const p = it.PodUpserted;
       let id = live.pods.get(p.uid);
       if (id === undefined) { id = live.next++; live.pods.set(p.uid, id); }
+      if (p.details && p.details.name) podDetails.set(id, p.details);
       events.push([0, id, intern(live.ns, DATA.ns, p.namespace, p.namespace),
         intern(live.wl, DATA.wl, `${p.kind}/${p.workload}`, p.workload), KINDS.indexOf(p.kind), STATES.indexOf(p.state)]);
     } else if (it.PodDeleted) {

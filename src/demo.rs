@@ -10,7 +10,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     util::Rng,
-    world::{PodInfo, PodState, WorkloadKind, WorldEvent},
+    world::{PodDetails, PodInfo, PodState, WorkloadKind, WorldEvent},
 };
 
 type Workload = (&'static str, WorkloadKind);
@@ -120,8 +120,9 @@ impl DemoCluster {
                 Transition::Stay => {}
                 Transition::To(state) => {
                     pod.age = 0;
-                    if pod.info.state != state {
-                        pod.info.state = state;
+                    // A pod that stays in its crash loop has restarted again.
+                    if pod.info.state != state || state == PodState::CrashLoop {
+                        move_to(&mut pod.info, state);
                         events.push(WorldEvent::PodUpserted(pod.info.clone()));
                     }
                 }
@@ -226,23 +227,66 @@ impl DemoCluster {
 
     fn spawn(&mut self, namespace: &str, (workload, kind): Workload, state: PodState, events: &mut Vec<WorldEvent>) {
         self.next_uid += 1;
-        let info = PodInfo {
-            uid: format!("demo-{}", self.next_uid),
+        let n = self.next_uid;
+        let mut info = PodInfo {
+            uid: format!("demo-{n}"),
             namespace: namespace.to_owned(),
             workload: workload.to_owned(),
             kind,
             state,
+            // Derived from the counter, not the RNG, so seeds replay the same city.
+            details: PodDetails {
+                name: format!("{workload}-{}", suffix(n)),
+                node: format!("node-{}", 1 + n % 4),
+                images: vec![format!("{workload}:1.{}", n % 7)],
+                containers: 1,
+                ..PodDetails::default()
+            },
         };
+        move_to(&mut info, state);
         events.push(WorldEvent::PodUpserted(info.clone()));
         self.pods.push(SimPod { info, age: 0 });
     }
 
     fn set_state(&mut self, i: usize, state: PodState, events: &mut Vec<WorldEvent>) {
         let pod = &mut self.pods[i];
-        pod.info.state = state;
+        move_to(&mut pod.info, state);
         pod.age = 0;
         events.push(WorldEvent::PodUpserted(pod.info.clone()));
     }
+}
+
+/// Changes a simulated pod's state and keeps its details in line: crashes
+/// count as restarts, and the reason says what a real cluster would.
+fn move_to(info: &mut PodInfo, state: PodState) {
+    let from = info.state;
+    let details = &mut info.details;
+    if state == PodState::CrashLoop && from != PodState::Pending {
+        details.restarts += 1;
+    }
+    details.ready = u32::from(state == PodState::Running);
+    let reason = match state {
+        PodState::Pending => Some("ContainerCreating"),
+        PodState::CrashLoop if from == PodState::Pending => Some("ImagePullBackOff"),
+        PodState::CrashLoop => Some("CrashLoopBackOff"),
+        PodState::Failed => Some("Error"),
+        PodState::Running if details.restarts > 0 => Some("OOMKilled"),
+        _ => None,
+    };
+    details.reason = reason.map(str::to_owned);
+    info.state = state;
+}
+
+/// Five letters that look like a pod name's random suffix.
+fn suffix(n: u64) -> String {
+    let mut x = n.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 20;
+    (0..5)
+        .map(|_| {
+            let letter = b"bcdfghjklmnpqrstvwxz2456789"[(x % 27) as usize];
+            x /= 27;
+            letter as char
+        })
+        .collect()
 }
 
 /// Feeds the simulation into `events` at `steps_per_second` until the
@@ -283,6 +327,24 @@ mod tests {
         let first = DemoCluster::new(1).step();
         assert!(!first.is_empty());
         assert!(first.iter().all(|e| matches!(e, WorldEvent::PodUpserted(p) if p.state == PodState::Running)));
+    }
+
+    #[test]
+    fn simulated_pods_have_details_and_crashes_count_as_restarts() {
+        let mut demo = DemoCluster::new(7);
+        let mut upserts = Vec::new();
+        for _ in 0..400 {
+            upserts.extend(demo.step().into_iter().filter_map(|e| match e {
+                WorldEvent::PodUpserted(info) => Some(info),
+                WorldEvent::PodDeleted { .. } => None,
+            }));
+        }
+        assert!(upserts.iter().all(|p| p.details.name.starts_with(&p.workload) && !p.details.node.is_empty()));
+        assert!(upserts.iter().all(|p| p.details.images.len() == 1 && p.details.containers == 1));
+        let crashing: Vec<_> = upserts.iter().filter(|p| p.state == PodState::CrashLoop).collect();
+        assert!(!crashing.is_empty() && crashing.iter().all(|p| p.details.reason.is_some()));
+        assert!(upserts.iter().any(|p| p.details.restarts > 0));
+        assert!(upserts.iter().filter(|p| p.state == PodState::Running).all(|p| p.details.ready == 1));
     }
 
     #[test]

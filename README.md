@@ -115,7 +115,9 @@ namespace and workload names.
 | Terminating       | Fading                                       |
 
 One building stands for one workload; zoom to street level for one dot per
-pod. A workload looks the same, and stands in the same spot, in every
+pod. Click a building to see its pods: name, readiness, restarts, age, node
+and, in red, why a pod is not simply running (ImagePullBackOff, OOMKilled,
+Evicted, …), plus the workload's images. A workload looks the same, and stands in the same spot, in every
 namespace that has it, so environments that deploy the same stack are easy
 to compare.
 

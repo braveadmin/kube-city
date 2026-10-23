@@ -15,7 +15,7 @@ use kube::{
 };
 use tokio::sync::{mpsc::UnboundedSender, watch};
 
-use crate::world::{PodInfo, PodState, WorkloadKind, WorldEvent};
+use crate::world::{PodDetails, PodInfo, PodState, WorkloadKind, WorldEvent};
 
 /// Long enough to finish an interactive (device code) login.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -164,7 +164,58 @@ impl Tracker {
 fn pod_info(pod: &Pod) -> Option<PodInfo> {
     let meta = &pod.metadata;
     let (workload, kind) = workload_of(pod);
-    Some(PodInfo { uid: meta.uid.clone()?, namespace: meta.namespace.clone()?, workload, kind, state: state_of(pod) })
+    Some(PodInfo {
+        uid: meta.uid.clone()?,
+        namespace: meta.namespace.clone()?,
+        workload,
+        kind,
+        state: state_of(pod),
+        details: details_of(pod),
+    })
+}
+
+fn details_of(pod: &Pod) -> PodDetails {
+    let spec = pod.spec.as_ref();
+    let status = pod.status.as_ref();
+    let statuses = status.and_then(|status| status.container_statuses.as_deref()).unwrap_or_default();
+    PodDetails {
+        name: pod.metadata.name.clone().unwrap_or_default(),
+        node: spec.and_then(|spec| spec.node_name.clone()).unwrap_or_default(),
+        images: spec.map(|spec| spec.containers.iter().filter_map(|c| c.image.clone()).collect()).unwrap_or_default(),
+        restarts: statuses.iter().map(|c| u32::try_from(c.restart_count).unwrap_or(0)).sum(),
+        ready: statuses.iter().filter(|c| c.ready).count() as u32,
+        containers: spec.map_or(statuses.len(), |spec| spec.containers.len()) as u32,
+        // Through serde, so this does not depend on k8s-openapi's time type.
+        created: pod
+            .metadata
+            .creation_timestamp
+            .as_ref()
+            .and_then(|time| serde_json::to_value(time).ok()?.as_str().map(str::to_owned)),
+        reason: reason_of(status),
+    }
+}
+
+/// The most telling reason a pod is not simply running: what a container is
+/// waiting for (reasons that keep it from starting first), why a container
+/// failed, why a restarted container last stopped (e.g. OOMKilled), or why
+/// the pod itself stopped (e.g. Evicted).
+fn reason_of(status: Option<&PodStatus>) -> Option<String> {
+    let status = status?;
+    let containers = || status.init_container_statuses.iter().chain(&status.container_statuses).flatten();
+    let waiting = || containers().filter_map(|c| c.state.as_ref()?.waiting.as_ref()?.reason.as_deref());
+    let failed = containers()
+        .filter_map(|c| c.state.as_ref()?.terminated.as_ref()?.reason.as_deref())
+        .find(|reason| *reason != "Completed");
+    let last_stop = containers()
+        .filter(|c| c.restart_count > 0)
+        .find_map(|c| c.last_state.as_ref()?.terminated.as_ref()?.reason.as_deref());
+    waiting()
+        .find(|reason| BROKEN_REASONS.contains(reason))
+        .or_else(|| waiting().next())
+        .or(failed)
+        .or(last_stop)
+        .or(status.reason.as_deref())
+        .map(str::to_owned)
 }
 
 fn state_of(pod: &Pod) -> PodState {
@@ -322,6 +373,49 @@ mod tests {
         assert_eq!(kind("Job"), WorkloadKind::Job);
         assert_eq!(kind("StrimziPodSet"), WorkloadKind::Deployment);
         assert_eq!(workload_of(&running("lonely")).1, WorkloadKind::Standalone);
+    }
+
+    #[test]
+    fn details_come_from_the_spec_and_the_container_statuses() {
+        let pod = pod(json!({
+            "metadata": {
+                "uid": "u", "name": "web-7d9f8b6c5-x2kq9", "namespace": "shop",
+                "creationTimestamp": "2026-10-20T08:00:00Z"
+            },
+            "spec": { "nodeName": "node-3", "containers": [
+                { "name": "app", "image": "registry.example/web:1.4" },
+                { "name": "proxy", "image": "envoy:1.30" }
+            ] },
+            "status": { "phase": "Running", "startTime": "2026-10-22T08:00:00Z", "containerStatuses": [
+                { "name": "app", "image": "registry.example/web:1.4", "imageID": "", "ready": false, "restartCount": 4,
+                  "state": { "running": {} }, "lastState": { "terminated": { "exitCode": 137, "reason": "OOMKilled" } } },
+                { "name": "proxy", "image": "envoy:1.30", "imageID": "", "ready": true, "restartCount": 1,
+                  "state": { "running": {} } }
+            ] }
+        }));
+        let details = pod_info(&pod).expect("a pod").details;
+        assert_eq!(details.name, "web-7d9f8b6c5-x2kq9");
+        assert_eq!(details.node, "node-3");
+        assert_eq!(details.images, ["registry.example/web:1.4", "envoy:1.30"]);
+        assert_eq!((details.restarts, details.ready, details.containers), (5, 1, 2));
+        // The age kubectl shows counts from creation, not from the last start.
+        assert_eq!(details.created.as_deref(), Some("2026-10-20T08:00:00Z"));
+        assert_eq!(details.reason.as_deref(), Some("OOMKilled"));
+    }
+
+    #[test]
+    fn the_most_telling_reason_wins() {
+        let reason = |pod: &Pod| reason_of(pod.status.as_ref());
+        // Waiting to start beats the reason a restarted container stopped.
+        let mut stuck = waiting("Running", "ImagePullBackOff", false);
+        let status = stuck.status.as_mut().unwrap().container_statuses.as_mut().unwrap();
+        status[0].last_state =
+            serde_json::from_value(json!({ "terminated": { "exitCode": 137, "reason": "OOMKilled" } })).ok();
+        assert_eq!(reason(&stuck).as_deref(), Some("ImagePullBackOff"));
+        assert_eq!(reason(&waiting("Pending", "ContainerCreating", false)).as_deref(), Some("ContainerCreating"));
+        let evicted = pod(json!({ "metadata": {}, "status": { "phase": "Failed", "reason": "Evicted" } }));
+        assert_eq!(reason(&evicted).as_deref(), Some("Evicted"));
+        assert_eq!(reason(&running("fine")), None);
     }
 
     #[test]
