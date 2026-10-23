@@ -19,6 +19,9 @@ welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discu
   PowerShell installers (v0.1.0).
 - **Package managers:** Homebrew (`brew install braveadmin/tap/kube-city`)
   and crates.io (`cargo install kube-city`) (v0.1.1).
+- **v0.2.0:** browser by default (terminal view deprecated), pod details,
+  context and theme dropdowns, banners toggle, version in the page. See
+  [CHANGELOG.md](CHANGELOG.md).
 
 ## Next
 
