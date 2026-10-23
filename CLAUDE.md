@@ -48,6 +48,8 @@ KUBE_CITY_REPLAY=recordings/big-cluster.jsonl KUBE_CITY_OUT=/tmp/snap cargo test
 - Recordings hold real namespace and workload names: keep them out of git and
   anonymise anything shared from them.
 - Conventional Commits (`feat:`, `fix:`, `docs:` …), no Jira keys here.
+- No `Co-Authored-By: Claude` trailer in commits and no "Generated with Claude
+  Code" footer in PR descriptions (owner's choice, 2026-10-23).
 - New looks go through the `Theme` trait, not into the renderer.
 
 ## Releasing
