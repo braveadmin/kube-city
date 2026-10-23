@@ -7,8 +7,8 @@ Last updated: 2026-10-16.
 
 ## The idea
 
-A terminal companion that shows a Kubernetes cluster as a living isometric
-city. Kubernetes objects are buildings; they appear, change and disappear as
+Shows a Kubernetes cluster as a living isometric city, in the browser (the
+terminal view it started as is deprecated, see below). Kubernetes objects are buildings; they appear, change and disappear as
 the cluster changes. Nothing similar existed (closest: KubeInvaders,
 KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 
@@ -159,6 +159,27 @@ direction before building a `--web` server.
 | Context | A "Context" dropdown when `--web` shows a cluster (not with `--record`, `--replay` or `--demo`); the server switches its watcher | Look at another cluster without restarting |
 | Switching | One ordered input stream into the pump, every source tagged with a generation; a switch clears the city, sends Reset + Contexts to every page, and drops late events of the old context; connect and watch run in one task that a newer switch aborts | No mix of two clusters, even while the old watcher winds down |
 | Socket origin | `/ws` only accepts the city's own page: Host must be 127.0.0.1/localhost/[::1] on the server's port, and Origin (if sent) the same | Any website can open a WebSocket to localhost; switching made that worse than reading |
+
+## Terminal view frozen (2026-10-23)
+
+Owner's decision: **freeze now, remove later.** The browser is the default
+(`kube-city` = the old `--web`, which still works); the terminal view moved
+behind `--tui`, prints a deprecation line, gets bug fixes only, and removal
+is decided around 0.3 after feedback (or it moves behind an optional cargo
+feature).
+
+Why: the terminal view was ~2,240 of 3,851 lines in `src/` (58 %: `app.rs`,
+`layout.rs`, `render/**` with a second Metropolis theme, most of
+`world.rs`), 38 of 56 tests, and `ratatui` with ~35 extra crates on Linux.
+The web path only uses the shared event types. Every feature (pod details,
+`--anonymise`, contexts) would otherwise be designed twice, and the terminal
+already lacked the inspector, contexts, Kenney and search. Costs accepted:
+over SSH the browser needs `ssh -L 7700:127.0.0.1:7700`; no fallback without
+WebGL; plain `kube-city` now opens a browser.
+
+Flags: `--fps` and `--all-pods` only work with `--tui` (checked in `main.rs`,
+because clap's `requires` counts `--tui`'s default as given); `--port`,
+`--no-open` and `--web` conflict with `--tui`.
 
 ## Roadmap
 

@@ -6,9 +6,9 @@ grow, burn and rebuild, live.
 
 ![kube-city in the browser: districts of office blocks, houses and brick halls, one of them on fire](https://raw.githubusercontent.com/braveadmin/kube-city/master/docs/screenshot.png)
 
-- **One binary, two views.** `kube-city --web` opens the city in your browser
-  (WebGL, mouse-wheel zoom, search, details on click); plain `kube-city`
-  draws it in the terminal.
+- **In your browser.** `kube-city` opens the city in your browser (WebGL,
+  mouse-wheel zoom, search, details on click). The old terminal view is still
+  there with `--tui`, but deprecated.
 - **Read-only.** It only lists and watches pods, the way `kubectl get pods -w`
   does, and never changes anything in the cluster.
 - **Big clusters stay readable.** Zoom out to one district per namespace,
@@ -39,7 +39,7 @@ brew install braveadmin/tap/kube-city
 
 With Rust: `cargo install kube-city`.
 
-As a kubectl plugin (`kubectl city --web`), link it under a name kubectl
+As a kubectl plugin (`kubectl city`), link it under a name kubectl
 looks for, in a directory on your `PATH`:
 
 ```bash
@@ -56,18 +56,22 @@ downloaded binary, run `xattr -d com.apple.quarantine kube-city` once
 ## Use
 
 ```bash
-kube-city --web                         # current kubectl context, in the browser
-kube-city --web --context my-cluster    # another context
-kube-city --web -n shop -n payments     # only these namespaces
-kube-city --web --demo                  # a simulated cluster, no cluster needed
-kube-city                               # the terminal view
+kube-city                               # current kubectl context, in the browser
+kube-city --context my-cluster          # another context
+kube-city -n shop -n payments           # only these namespaces
+kube-city --demo                        # a simulated cluster, no cluster needed
+kube-city --tui                         # the terminal view (deprecated)
 ```
 
-`--web` serves the city on `http://127.0.0.1:7700/` (`--port` to change it)
-and opens it in your browser; under WSL that is the Windows browser.
+kube-city serves the city on `http://127.0.0.1:7700/` (`--port` to change
+it) and opens it in your browser; under WSL that is the Windows browser.
 `--no-open` only prints the address. The page stays live while it is open; a
 page opened later, or one that lost the connection, gets the whole city
-again.
+again. (`--web` still works; it is the default now.)
+
+On a remote machine, forward the port and open the city locally:
+`ssh -L 7700:127.0.0.1:7700 server`, then run `kube-city --no-open` on the
+server and open `http://127.0.0.1:7700/` on your computer.
 
 In the browser: scroll or pinch to zoom through three levels (cluster,
 district, street), drag to pan, hover for details, click a building for its
@@ -91,7 +95,7 @@ namespace and workload names.
   plain text.
 - Permission to `list` and `watch` pods, in all namespaces or in the ones
   you pass with `-n`.
-- For `--web`, a browser with WebGL. The page is served only on 127.0.0.1;
+- A browser with WebGL. The page is served only on 127.0.0.1;
   it loads its fonts from Google Fonts and falls back to system fonts
   without internet. Everything else (PixiJS, sprites) is in the binary.
 
@@ -115,12 +119,18 @@ pod. A workload looks the same, and stands in the same spot, in every
 namespace that has it, so environments that deploy the same stack are easy
 to compare.
 
-## The terminal city
+## The terminal city (deprecated)
+
+The terminal view is frozen: it gets bug fixes but no new features, and it
+will be removed in a later release, depending on feedback (see
+[ROADMAP.md](ROADMAP.md)). Tell us in
+[Discussions](https://github.com/braveadmin/kube-city/discussions) if you
+rely on it.
 
 Drawn in the Metropolis theme: daylight pixel art in the spirit of SimCity
 2000. Each image pixel is half a terminal cell (`▀` with true colour).
 
-Run `kube-city` without `--web`; it needs a true-colour terminal. Keys:
+Run `kube-city --tui`; it needs a true-colour terminal. Keys:
 arrows / `hjkl` pan, `z` cycles detail, overview and map, `f` fades healthy
 buildings, `c` re-centres, `q` / `Esc` / `Ctrl+C` quit. If the watch drops,
 the status bar says so and it reconnects.
@@ -147,7 +157,7 @@ CrashLoopBackOff covers every container stuck waiting for help:
 ImagePullBackOff, ErrImagePull, CreateContainerConfigError and similar.
 
 A workload looks the same in every namespace, so a component deployed in many
-namespaces is recognisable everywhere. `--all-pods` shows every pod as its own
+namespaces is recognisable everywhere. `--tui --all-pods` shows every pod as its own
 building, finished jobs (pavilions with a green tick) included.
 
 The map zoom draws each building as a small tile coloured by state, so a big
@@ -157,9 +167,10 @@ Every pod keeps its lot for its whole life. Blocks are handed out along a
 spiral around the centre, so the city grows outwards; a block that empties
 goes back to the city.
 
-## Themes
+## Terminal themes
 
-`src/render/theme/` holds the looks. The renderer decides what stands where
+`src/render/theme/` holds the terminal view's looks (the browser's are in
+`art/city.template.html`). The renderer decides what stands where
 and in which order things are drawn; a `Theme` paints ground, buildings and
 free lots with the primitives in `src/render/scene.rs` (boxes, walls with
 window patterns, pitched roofs, round solids), and works at both zooms.
@@ -178,7 +189,7 @@ candidate styles (Metropolis, Neon night, Toy town) as reference images:
 ## Development
 
 ```bash
-cargo run --release -- --web --demo   # browser view of the simulated cluster
+cargo run --release -- --demo   # browser view of the simulated cluster
 cargo test
 cargo clippy --all-targets
 ```

@@ -16,7 +16,7 @@ Only the latest release gets fixes.
 
 - It only lists and watches pods through your kubeconfig; it never changes
   anything in a cluster.
-- `--web` serves its page on 127.0.0.1 only, without authentication: any
+- The browser view serves its page on 127.0.0.1 only, without authentication: any
   program on the same machine can read the city, including namespace and
   workload names, and switch it to another context of your kubeconfig.
   Web pages from other sites cannot: the WebSocket only accepts the city's
