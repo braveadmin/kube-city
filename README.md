@@ -88,6 +88,14 @@ city.jsonl` plays it back later (`--replay-speed 10` for ten times faster):
 handy for showing a cluster without access to it. Recordings contain your
 namespace and workload names.
 
+`--anonymise` replaces every name (namespaces, workloads, pods, nodes,
+images, contexts) with a made-up one before it leaves kube-city: in the
+page, in the status line, in the **Context** dropdown and in `--record`
+files. Use it for screenshots, talks and recordings you want to share; it
+also anonymises an old recording played with `--replay`. The made-up names
+are new every run; `--anonymise-salt SECRET` keeps them the same between
+runs (keep the salt secret, or names could be matched by guessing).
+
 ### What it needs
 
 - A kubeconfig: `KUBECONFIG` (all listed files, merged like kubectl does) or

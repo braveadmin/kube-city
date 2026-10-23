@@ -1,5 +1,6 @@
 //! kube-city: a living isometric city of your Kubernetes cluster.
 
+mod anonymise;
 mod app;
 mod cluster;
 mod demo;
@@ -72,6 +73,17 @@ struct Args {
     #[arg(long)]
     tui: bool,
 
+    /// Replace every name (namespaces, workloads, pods, nodes, images,
+    /// contexts) with a made-up one in the page and in --record, so the city
+    /// can be shared. The names are new every run.
+    #[arg(long, conflicts_with = "tui")]
+    anonymise: bool,
+
+    /// With --anonymise: the same salt gives the same made-up names every
+    /// run. Keep it secret, or names could be matched by guessing.
+    #[arg(long, value_name = "SALT", requires = "anonymise")]
+    anonymise_salt: Option<String>,
+
     /// With --tui: show every pod as its own building, finished jobs included
     /// (by default each DaemonSet gets one building and finished jobs are
     /// only counted).
@@ -94,6 +106,8 @@ fn main() -> Result<()> {
     ensure!((0.01..=1000.0).contains(&args.replay_speed), "--replay-speed must be between 0.01 and 1000");
 
     let runtime = tokio::runtime::Runtime::new()?;
+    let _runtime = runtime.enter();
+    let anonymiser = args.anonymise.then(|| anonymise::Anonymiser::shared(args.anonymise_salt.clone()));
     let (sender, from_source) = mpsc::unbounded_channel();
     // In the browser a page may switch to another context; not while
     // recording, which holds a single cluster.
@@ -105,7 +119,12 @@ fn main() -> Result<()> {
     } else if let Some(path) = &args.replay {
         let recording = recording::load(path)?;
         runtime.spawn(recording::replay(recording, args.replay_speed, sender));
-        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+        let name = if args.anonymise {
+            // The file name may say whose cluster it is.
+            "recording".to_owned()
+        } else {
+            path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
+        };
         watch::channel(format!("replay {name}")).1
     } else {
         // Connect before anything else, so login prompts and errors show
@@ -120,6 +139,12 @@ fn main() -> Result<()> {
         source
     };
 
+    // Before recording, so that recordings hold no real names either.
+    let (from_source, source) = match &anonymiser {
+        Some(anonymiser) => anonymise::stage(anonymiser.clone(), from_source, source),
+        None => (from_source, source),
+    };
+
     let mut receiver = match &args.record {
         None => from_source,
         Some(path) => {
@@ -131,7 +156,7 @@ fn main() -> Result<()> {
     };
 
     if !args.tui {
-        return runtime.block_on(web::serve(receiver, source, args.port, !args.no_open, clusters));
+        return runtime.block_on(web::serve(receiver, source, args.port, !args.no_open, clusters, anonymiser));
     }
 
     // The terminal view is frozen: bug fixes only, no new features.

@@ -142,9 +142,19 @@ direction before building a `--web` server.
   forwarding; live on `my-cluster` (158 pods) about 30 MB and 1 % of a
   core for the server; replay and demo work; a WebSocket probe saw the
   snapshot then 29 batches in 3 s of demo.
-- Real names are shown: the server only listens on 127.0.0.1. An
-  `--anonymise` flag (reusing `art/web_prototype.py`'s pseudonyms) is a
-  possible addition for sharing screenshots.
+- Real names are shown: the server only listens on 127.0.0.1; see
+  `--anonymise` below for sharing.
+
+## `--anonymise` (2026-10-23, issue #13)
+
+| Topic | Decision | Why |
+|---|---|---|
+| Where | `src/anonymise.rs`, a stage on the event channel before `--record` and the page; switched contexts get the same stage | Page, recording and status line all see pseudonyms; one anonymiser per run keeps names consistent |
+| Stability | New pseudonyms every run (random salt); `--anonymise-salt` makes them stable | The owner's choice: the code is public, so stable unsalted names could be matched by guessing |
+| What | Namespaces (`feature-`/`bugfix-` prefix kept; `default` and `kube-*` kept), workloads (per kind and name, same in every namespace), pod names (StatefulSet ordinals kept), uids, nodes, images (repository a word, tag a short hash), contexts | Every name the page or a recording holds; landmarks still work |
+| Status line | Context replaced, error text dropped (`reconnecting`, `cannot connect (details hidden by --anonymise)`); a replay shows `replay recording` | Errors can hold host names; recording file names can say whose cluster it is |
+| Hash | Salted SHA-256 (`sha2`, already a dependency of kube) | Stable salted pseudonyms must not be reversible from the public code |
+| Terminal view | `--anonymise` conflicts with `--tui` | The terminal view is frozen |
 
 ## Distribution (2026-10-22)
 

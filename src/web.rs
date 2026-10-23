@@ -10,6 +10,9 @@
 //! When the city shows a cluster, a page can ask for another kubeconfig
 //! context with `{"Context": name}`: every page then resets and the city
 //! fills up from that context.
+//!
+//! With `--anonymise` the pages only ever see pseudonyms, context names
+//! included; a page asks for a context by its pseudonym.
 
 use std::{
     collections::HashMap,
@@ -40,7 +43,7 @@ use tokio::{
 };
 
 use crate::{
-    cluster,
+    anonymise, cluster,
     world::{PodInfo, WorldEvent},
 };
 
@@ -92,6 +95,7 @@ struct Shared {
     port: u16,
     contexts: Arc<Vec<String>>,
     switcher: Option<Arc<Switcher>>,
+    anonymiser: Option<anonymise::Shared>,
 }
 
 /// Serves the city until Ctrl+C, opening it in a browser when `open` is set.
@@ -101,6 +105,7 @@ pub async fn serve(
     port: u16,
     open: bool,
     clusters: Option<Clusters>,
+    anonymiser: Option<anonymise::Shared>,
 ) -> Result<()> {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
         .await
@@ -117,6 +122,7 @@ pub async fn serve(
                 input,
                 namespaces: clusters.namespaces,
                 contexts: clusters.contexts.clone(),
+                anonymiser: anonymiser.clone(),
                 running: Mutex::new((0, first)),
             };
             (clusters.contexts, Some(Arc::new(switcher)))
@@ -131,6 +137,7 @@ pub async fn serve(
         port,
         contexts: Arc::new(contexts),
         switcher,
+        anonymiser,
     };
     tokio::spawn(pump(inputs, status_tx, shared.clone()));
 
@@ -210,6 +217,7 @@ struct Switcher {
     input: UnboundedSender<Input>,
     namespaces: Vec<String>,
     contexts: Vec<String>,
+    anonymiser: Option<anonymise::Shared>,
     /// The current generation and the task feeding it.
     running: Mutex<(u64, JoinHandle<()>)>,
 }
@@ -224,22 +232,43 @@ impl Switcher {
         running.0 += 1;
         let generation = running.0;
         let _ = self.input.send(Input::Switch(generation, context.to_owned()));
-        running.1 =
-            tokio::spawn(show_context(generation, context.to_owned(), self.namespaces.clone(), self.input.clone()));
+        let show = show_context(
+            generation,
+            context.to_owned(),
+            self.namespaces.clone(),
+            self.input.clone(),
+            self.anonymiser.clone(),
+        );
+        running.1 = tokio::spawn(show);
     }
 }
 
 /// Connects to `context` and feeds its pods to the pump; a failure ends up
 /// in the status line.
-async fn show_context(generation: u64, context: String, namespaces: Vec<String>, input: UnboundedSender<Input>) {
+async fn show_context(
+    generation: u64,
+    context: String,
+    namespaces: Vec<String>,
+    input: UnboundedSender<Input>,
+    anonymiser: Option<anonymise::Shared>,
+) {
     match cluster::connect(Some(&context), &namespaces).await {
         Err(error) => {
             let message: String = format!("{error:#}").chars().take(STATUS_ERROR_MAX).collect();
-            let _ = input.send(Input::Status(generation, format!("{context} · {message}")));
+            let text = format!("{context} · {message}");
+            let text = match &anonymiser {
+                Some(anonymiser) => anonymiser.lock().expect("anonymiser lock").status(&text),
+                None => text,
+            };
+            let _ = input.send(Input::Status(generation, text));
         }
         Ok((client, context)) => {
             let (events_tx, events) = mpsc::unbounded_channel();
             let (status_tx, status) = watch::channel(format!("{context} · connecting"));
+            let (events, status) = match anonymiser {
+                Some(anonymiser) => anonymise::stage(anonymiser, events, status),
+                None => (events, status),
+            };
             let watching = cluster::watch(client, context, namespaces, events_tx, status_tx);
             tokio::join!(watching, forward(generation, events, status, input));
         }
@@ -293,7 +322,7 @@ async fn pump(mut inputs: UnboundedReceiver<Input>, status: watch::Sender<String
                 let mut city = shared.city.lock().await;
                 city.pods.clear();
                 city.context = Some(context.clone());
-                let text = format!("{context} · connecting");
+                let text = shared.anonymised_status(&format!("{context} · connecting"));
                 status.send_replace(text.clone());
                 let reset = json!([{ "Reset": null }, contexts(&city, &shared), { "Status": text }]).to_string();
                 let _ = shared.batches.send(reset.into());
@@ -321,7 +350,32 @@ async fn apply(shared: &Shared, batch: &[WorldEvent]) {
 }
 
 fn contexts(city: &City, shared: &Shared) -> Value {
-    json!({ "Contexts": { "current": city.context, "all": *shared.contexts } })
+    match &shared.anonymiser {
+        None => json!({ "Contexts": { "current": city.context, "all": *shared.contexts } }),
+        Some(anonymiser) => {
+            let mut anonymiser = anonymiser.lock().expect("anonymiser lock");
+            let current = city.context.as_deref().map(|context| anonymiser.context(context));
+            let all: Vec<String> = shared.contexts.iter().map(|context| anonymiser.context(context)).collect();
+            json!({ "Contexts": { "current": current, "all": all } })
+        }
+    }
+}
+
+impl Shared {
+    fn anonymised_status(&self, text: &str) -> String {
+        match &self.anonymiser {
+            Some(anonymiser) => anonymiser.lock().expect("anonymiser lock").status(text),
+            None => text.to_owned(),
+        }
+    }
+
+    /// The real name of a context a page asks for.
+    fn requested_context(&self, asked: &str) -> Option<String> {
+        match &self.anonymiser {
+            Some(anonymiser) => anonymiser.lock().expect("anonymiser lock").real_context(asked),
+            None => Some(asked.to_owned()),
+        }
+    }
 }
 
 async fn index(State(shared): State<Shared>) -> Html<String> {
@@ -397,9 +451,10 @@ async fn feed(mut socket: WebSocket, shared: Shared) {
                     Some(Ok(Message::Text(text))) => {
                         if let Some(switcher) = &shared.switcher
                             && let Ok(request) = serde_json::from_str::<Value>(&text)
-                            && let Some(context) = request.get("Context").and_then(Value::as_str)
+                            && let Some(asked) = request.get("Context").and_then(Value::as_str)
+                            && let Some(context) = shared.requested_context(asked)
                         {
-                            switcher.switch(context).await;
+                            switcher.switch(&context).await;
                         }
                     }
                     Some(Ok(Message::Close(_)) | Err(_)) | None => return,
@@ -463,6 +518,7 @@ mod tests {
             port: 7700,
             contexts: Arc::new(contexts.iter().map(|c| c.to_string()).collect()),
             switcher: None,
+            anonymiser: None,
         };
         (shared, status_tx)
     }
