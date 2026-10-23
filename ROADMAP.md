@@ -13,7 +13,8 @@ welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discu
   focus on problems; landmarks that look the same in every namespace.
 - **Context dropdown:** switch to any context of your kubeconfig without
   restarting.
-- **Collapsible details panel**, with the pods of the selected workload.
+- **Collapsible details panel**, with the pods of the selected workload:
+  name, readiness, restarts, age, node, images and why a pod is stuck.
 - **Releases:** binaries for Linux, macOS and Windows with shell and
   PowerShell installers (v0.1.0).
 - **Package managers:** Homebrew (`brew install braveadmin/tap/kube-city`)
@@ -24,8 +25,6 @@ welcome in [Discussions → Ideas](https://github.com/braveadmin/kube-city/discu
 - **Demo GIF** in the README: the city growing, burning and rebuilding.
 - **Kenney polish:** StatefulSets and DaemonSets easier to tell apart, road
   tiles with crossings, more building variety.
-- **Richer pod details:** restarts, age, node, image and the reason a pod is
-  waiting (for example ImagePullBackOff).
 - **`--anonymise`:** pseudonyms for namespaces and workloads, for sharing
   screenshots and demos of real clusters.
 
