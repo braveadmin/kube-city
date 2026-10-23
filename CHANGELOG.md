@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `--anonymise`: made-up names for namespaces, workloads, pods, nodes,
+  images and contexts in the page, the status line and `--record` files, so
+  a real cluster can be shared; `--anonymise-salt` keeps the names stable
+  between runs (#13).
+
 ## 0.2.0
 
 ### Breaking
