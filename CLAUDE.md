@@ -82,14 +82,30 @@ Flow, one feature per GitHub issue (and per session: "work on issue #N"):
 2. **Plan** (Claude): reply in the issue with plan, effort, decisions needed
    and what the owner must do; plan mode for anything big.
 3. **Decide** (owner): answers in one go; `needs-decision` label until then.
-4. **Build** (Claude): branch, PR with "Closes #N", tests, a screenshot for
-   visible changes.
+4. **Build** (Claude): branch in its own worktree (below), PR with
+   "Closes #N", tests, a screenshot for visible changes.
 5. **Accept** (owner): tests and merges, or comments.
 6. **Release** (Claude, on the owner's go): milestone → CHANGELOG.md → tag →
    GitHub, Homebrew, crates.io.
 7. **Look back** after each milestone: three lines on what to keep or change.
 
 Refer to work by issue or PR number, never by "step 4".
+
+**One worktree per feature.** Several sessions may run at once, and they
+share the main checkout; switching branches there moves every other
+session's files and commits too (it put #13's commit on #14's branch).
+So every branch, docs and fixes included, gets its own worktree, and the
+main checkout stays on `master` and is only used for reading and `git
+fetch`:
+
+```bash
+git fetch origin
+git worktree add ../kube-city-wt/<branch> -b <branch> origin/master
+# work, build, test and commit only inside ../kube-city-wt/<branch>
+git worktree remove ../kube-city-wt/<branch>   # once the PR is merged
+```
+
+Each worktree has its own `target/`, so the first build there is a full one.
 
 Claude may, without asking: create branches; force-push its own PR
 branches; rebase PRs; merge `docs:`, `chore:`, `ci:` and Dependabot PRs once
