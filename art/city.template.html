@@ -834,13 +834,44 @@ function stack(c, set, h, uppers, roofSet, tint) {
   for (const p of parts) { if (tint) p.tint = tint; c.addChild(p); }
 }
 
+// The packs have no tanks, so StatefulSets get code-drawn ones on the roof of
+// their brick hall: a tank, twin tanks or a water tower, on legs. Drawn with
+// its feet at z 0 and lifted onto the roof by the caller.
+function roofTank(g, v) {
+  const color = ART.tank[v.h % ART.tank.length], steel = 0x5d6468;
+  const legs = (cx, cy, r, h) => {
+    g.lineStyle(2, steel);
+    for (const [di, dj] of [[-r, 0], [0, r], [r, 0]]) { g.moveTo(...P(cx + di, cy + dj, 0)); g.lineTo(...P(cx + di, cy + dj, h)); }
+    g.lineStyle(0);
+  };
+  if (v.shape === 1) {
+    for (const [cx, cy] of [[0.13, -0.13], [-0.13, 0.13]]) { legs(cx, cy, 0.1, 5); cylinder(g, cx, cy, 0.14, 15, color, 5, 1); }
+    return 22;
+  }
+  if (v.shape === 2) {
+    legs(0, 0, 0.13, 12);
+    const c = cylinder(g, 0, 0, 0.19, 15, color, 12, 1);
+    cone(g, c, shade(color, 0.92), 8);
+    return 37;
+  }
+  legs(0, 0, 0.16, 6);
+  cylinder(g, 0, 0, 0.24, 15, color, 6, 2);
+  return 23;
+}
+
 const KENNEY = {
   name: "kenney",
   body(look) {
     const c = new PIXI.Container(), p = look.p;
     switch (look.cat) {
       case "tower": stack(c, "office", p.h, Math.max(0, p.floors - 2), "office"); break;
-      case "tank": stack(c, "brick", p.h, p.shape, "brick"); break;
+      case "tank": {
+        stack(c, "brick", p.h, p.shape, "brick");
+        const roof = -c.getLocalBounds().y;
+        const geo = geometry(`k:roofTank:${p.shape}:${p.h % ART.tank.length}`, g => roofTank(g, p));
+        const g = new PIXI.Graphics(geo.geometry); g.y = -roof + 10; c.addChild(g);
+        break;
+      }
       case "house": stack(c, "house", p.h, p.count >= 3 ? 1 : 0, "house"); break;
       case "factory": case "done": {
         const g = new PIXI.Graphics();
@@ -896,7 +927,7 @@ const KENNEY = {
   },
   chimney: [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - 62],
   legend: {
-    tower: "office block, a storey per replica", tank: "brick hall with a barrel roof", house: "house with a pitched roof",
+    tower: "office block, a storey per replica", tank: "brick hall with a tank on the roof", house: "house with a pitched roof",
     factory: "works with a chimney, smoking while it runs", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
   },
 };
