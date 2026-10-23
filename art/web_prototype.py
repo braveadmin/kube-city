@@ -176,6 +176,8 @@ def main():
         data, real = anonymise(f)
     with open(os.path.join(HERE, "city.template.html")) as f:
         template = f.read()
+    with open(os.path.join(HERE, "..", "Cargo.toml")) as f:
+        data["version"] = re.search(r'^version = "([^"]+)"', f.read(), re.M).group(1)
     blob = json.dumps(data, separators=(",", ":"))
     page = template.replace("/*CITY_DATA*/null", blob)
     found = leaks(page, real, data)

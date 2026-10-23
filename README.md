@@ -77,7 +77,8 @@ In the browser: scroll or pinch to zoom through three levels (cluster,
 district, street), drag to pan, hover for details, click a building for its
 pods and the same component in other namespaces. Keys: arrows pan, `+` `-`
 zoom, `c` fits the city, `/` searches, `f` fades healthy buildings, `i`
-folds the details panel away, `Esc` clears. The **Theme** dropdown switches
+folds the details panel away, `b` hides the name banners (handy in crowded
+districts), `Esc` clears. The header shows which version is running. The **Theme** dropdown switches
 between Kenney (sprites) and Metropolis (drawn in code). When the city shows
 a cluster, the **Context** dropdown switches to any other context in your
 kubeconfig without restarting (not while `--record` is saving).

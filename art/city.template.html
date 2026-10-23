@@ -54,6 +54,7 @@ button, input { font: inherit; color: inherit; }
 }
 .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .brand h1 { margin: 0; font-family: var(--display); font-weight: 700; font-size: 1.6rem; letter-spacing: 0.01em; line-height: 1; }
+.brand .version { font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
 .brand .tag { font-family: var(--display); font-weight: 600; font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase;
   background: var(--sign); color: var(--sign-ink); padding: 2px 7px; border-radius: 3px; }
 .source { color: var(--muted); font-size: 0.86rem; min-width: 0; }
@@ -208,7 +209,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 
 <div class="app">
   <header class="bar">
-    <div class="brand"><h1>kube-city</h1><span class="tag" id="tag">Web prototype</span></div>
+    <div class="brand"><h1>kube-city</h1><span class="tag" id="tag">Web prototype</span><span class="version" id="version" hidden></span></div>
     <div class="source" id="source">Loading the recording…</div>
     <div class="tools">
       <label class="search" for="q">
@@ -217,6 +218,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
       </label>
       <button class="toggle" id="focus" aria-pressed="false" title="Fade healthy buildings">Focus on problems <kbd>f</kbd></button>
       <button class="toggle" id="finished" aria-pressed="false" title="Show pods of finished jobs">Finished jobs</button>
+      <button class="toggle" id="banners" aria-pressed="true" title="Show or hide the name signs of namespaces and workloads (b)">Banners <kbd>b</kbd></button>
       <button class="toggle" id="sim" aria-pressed="true" title="Restarts and crashes made up by the page, to show how changes look">Simulated changes</button>
       <button class="btn" id="replay" title="Build the city again from the recording">Replay</button>
       <label class="pick" id="context-pick" title="The kubeconfig context the city shows" hidden>Context
@@ -262,7 +264,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
           <h2>Legend</h2>
           <div class="legend" id="legend"></div>
         </section>
-        <p class="note" id="about">An anonymised recording of a real cluster: every namespace and workload name is a pseudonym. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>c</kbd> fit, <kbd>/</kbd> find, <kbd>i</kbd> details, <kbd>Esc</kbd> clear.</p>
+        <p class="note" id="about">An anonymised recording of a real cluster: every namespace and workload name is a pseudonym. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>c</kbd> fit, <kbd>/</kbd> find, <kbd>i</kbd> details, <kbd>b</kbd> banners, <kbd>Esc</kbd> clear.</p>
         <p class="note" id="credit" hidden>Kenney look: sprites from Kenney's Isometric Buildings and Isometric City packs (kenney.nl, CC0).</p>
       </div>
     </aside>
@@ -1242,6 +1244,7 @@ addEventListener("keydown", (e) => {
     ArrowUp: () => (cam.y -= step), k: () => (cam.y -= step), ArrowDown: () => (cam.y += step), j: () => (cam.y += step),
     "+": () => zoomAt(vw / 2, vh / 2, 1.25), "=": () => zoomAt(vw / 2, vh / 2, 1.25), "-": () => zoomAt(vw / 2, vh / 2, 0.8),
     c: () => fitCamera(true), f: () => toggle("focus"), "/": () => document.getElementById("q").focus(),
+    b: () => toggle("banners"),
     i: () => setPanel(inspectorEl.classList.contains("collapsed")),
     Escape: () => { select(null); setQuery(""); },
   };
@@ -1250,12 +1253,24 @@ addEventListener("keydown", (e) => {
 
 // ---------------------------------------------------------------- toolbar
 
-const flags = { focus: false, finished: false, sim: true };
+const flags = { focus: false, finished: false, sim: true, banners: true };
 function toggle(name) {
   flags[name] = !flags[name];
   document.getElementById(name).setAttribute("aria-pressed", String(flags[name]));
   if (name === "finished") { world.showFinished = flags.finished; for (const b of world.buildings.values()) dirty.add(b); }
+  if (name === "banners") {
+    try { localStorage.setItem("kube-city-banners", flags.banners ? "on" : "off"); } catch { /* per-viewer convenience only */ }
+    cam.dirty = true;
+  }
   panelDirty = true;
+}
+// Banners (name signs) can be switched off for crowded districts; remembered per browser.
+try { if (localStorage.getItem("kube-city-banners") === "off") toggle("banners"); } catch { /* no storage */ }
+if (DATA.version) {
+  const version = document.getElementById("version");
+  version.textContent = `v${DATA.version}`;
+  version.title = `kube-city ${DATA.version}`;
+  version.hidden = false;
 }
 for (const name of Object.keys(flags)) document.getElementById(name).addEventListener("click", () => toggle(name));
 document.getElementById("replay").addEventListener("click", () => startReplay());
@@ -1469,6 +1484,11 @@ function measure(el, key, fill) {
 const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 function renderLabels(level) {
+  if (!flags.banners) {
+    for (const el of signs) if (el) el.hidden = true;
+    for (const el of bLabels.values()) el.hidden = true;
+    return;
+  }
   const [vw, vh] = viewSize();
   const placed = [];
   const order = [...world.districts].sort((a, b) => (b.stats.pods - a.stats.pods));
@@ -1863,7 +1883,7 @@ if (live) {
   document.getElementById("sim").setAttribute("aria-pressed", "false");
   document.querySelector(".bar-track").hidden = true;
   document.getElementById("about").textContent =
-    "A live, read-only view of your cluster. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, + and - zoom, c fit, / find, i details, Esc clear.";
+    "A live, read-only view of your cluster. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, + and - zoom, c fit, / find, i details, b banners, Esc clear.";
 }
 registerBatch(DATA.events);
 replan();
