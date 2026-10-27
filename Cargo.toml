@@ -1,6 +1,6 @@
 [package]
 name = "kube-city"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "A living isometric city of your Kubernetes cluster, in the browser or the terminal"
 license = "MIT OR Apache-2.0"
