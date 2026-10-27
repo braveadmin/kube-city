@@ -31,6 +31,29 @@ Ideas, votes and questions are welcome in
 
 - [Remove the deprecated terminal view](https://github.com/braveadmin/kube-city/issues/20) (v0.4.0).
 
+## Planned: a more natural city
+
+The city's layout, then a world around it, then neighbourhoods with zones.
+
+- **Layout:** [cut the city by roads](https://github.com/braveadmin/kube-city/issues/33)
+  instead of shelf packing, [blocks with buildings along the streets](https://github.com/braveadmin/kube-city/issues/34),
+  a [ragged edge instead of a ring road](https://github.com/braveadmin/kube-city/issues/35),
+  a [river through town](https://github.com/braveadmin/kube-city/issues/37) and
+  [zones](https://github.com/braveadmin/kube-city/issues/36) (centre, industry, suburbs).
+- **A world from a seed:** [a seed per context](https://github.com/braveadmin/kube-city/issues/38),
+  [hills and mountains](https://github.com/braveadmin/kube-city/issues/39),
+  [terrain with height](https://github.com/braveadmin/kube-city/issues/40),
+  [sea, coast and lakes](https://github.com/braveadmin/kube-city/issues/41),
+  [rivers](https://github.com/braveadmin/kube-city/issues/42),
+  [forests, fields, rock and snow](https://github.com/braveadmin/kube-city/issues/43),
+  [roads out of town](https://github.com/braveadmin/kube-city/issues/44),
+  [world styles](https://github.com/braveadmin/kube-city/issues/45), and
+  [terrain that stays readable](https://github.com/braveadmin/kube-city/issues/46) at every zoom.
+- **Neighbourhoods:** [related namespaces as quarters](https://github.com/braveadmin/kube-city/issues/47),
+  [zones from what workloads run](https://github.com/braveadmin/kube-city/issues/48),
+  [towers from CPU and memory requests](https://github.com/braveadmin/kube-city/issues/49) and
+  [a shopping street](https://github.com/braveadmin/kube-city/issues/50) of exposed workloads.
+
 ## Later
 
 - [Demo GIF](https://github.com/braveadmin/kube-city/issues/17) at the top of the README.
