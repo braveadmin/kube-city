@@ -8,6 +8,10 @@
   images and contexts in the page, the status line and `--record` files, so
   a real cluster can be shared; `--anonymise-salt` keeps the names stable
   between runs (#13).
+- StatefulSets carry a tank, twin tanks or a water tower on their roof in
+  the Kenney look, so they no longer look like DaemonSet houses (#14).
+- Kenney roads use the pack's own road tiles: junctions, rounded corners
+  and a zebra crossing next to every junction (#15).
 - More building variety in the Kenney look: tints, mirrored buildings,
   mixed facades, roof details and more shop fronts and roofs, all chosen by
   the workload's name (#16).
