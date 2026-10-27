@@ -1,7 +1,6 @@
 # Roadmap
 
-Where kube-city is going, roughly in order. Every item is a GitHub issue;
-the next release is the [0.3.0 milestone](https://github.com/braveadmin/kube-city/milestone/1).
+Where kube-city is going, roughly in order. Every item is a GitHub issue.
 Ideas, votes and questions are welcome in
 [Discussions → Ideas](https://github.com/braveadmin/kube-city/discussions/categories/ideas).
 
@@ -24,17 +23,13 @@ Ideas, votes and questions are welcome in
 - **v0.2.0:** browser by default (terminal view deprecated), pod details,
   context and theme dropdowns, banners toggle, version in the page. See
   [CHANGELOG.md](CHANGELOG.md).
-
-## Next (0.3.0)
-
-- [`--anonymise`](https://github.com/braveadmin/kube-city/issues/13): pseudonyms for sharing screenshots and demos of real clusters.
-- [StatefulSets and DaemonSets easier to tell apart](https://github.com/braveadmin/kube-city/issues/14) in the Kenney look.
-- [Kenney road tiles](https://github.com/braveadmin/kube-city/issues/15) with lane markings and crossings.
-- [More building variety](https://github.com/braveadmin/kube-city/issues/16) in the Kenney look.
-- [Demo GIF](https://github.com/braveadmin/kube-city/issues/17) at the top of the README.
+- **v0.3.0:** `--anonymise` for sharing real clusters; in the Kenney look,
+  tanks on StatefulSet roofs, the pack's road tiles with junctions and
+  crossings, and much more building variety.
 
 ## Later
 
+- [Demo GIF](https://github.com/braveadmin/kube-city/issues/17) at the top of the README.
 - [All contexts at the same time](https://github.com/braveadmin/kube-city/issues/18).
 - [More Kubernetes objects](https://github.com/braveadmin/kube-city/issues/19): Nodes, Services, Ingresses, volumes.
 - [Remove the deprecated terminal view](https://github.com/braveadmin/kube-city/issues/20), or keep it behind a build feature, depending on feedback.
