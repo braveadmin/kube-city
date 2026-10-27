@@ -621,6 +621,7 @@ function variantOf(name, kind) {
     roof: ART.roofs[(h >>> 3) % ART.roofs.length],
     floors: 2 + ((h >>> 5) % 5),
     shape: (h >>> 7) % 3,
+    seed: hash(`${name}#parts`),
   };
 }
 
@@ -744,7 +745,7 @@ const METROPOLIS = {
     return { obj: new PIXI.Graphics(geo.geometry), top: geo.top };
   },
   ground: drawGround,
-  chimney: [iso(-0.28, -0.22)[0], iso(-0.28, -0.22)[1] - 36],
+  chimney: () => [iso(-0.28, -0.22)[0], iso(-0.28, -0.22)[1] - 36],
   legend: {
     tower: "tower, floors grow with replicas", tank: "tank, twin tanks or silo", house: "a house per node, up to four",
     factory: "factory, smoking while it runs", build: "construction site", scorched: "scorched shell", kiosk: "kiosk",
@@ -760,7 +761,7 @@ const STOREY = 35;       // height of one storey in sprite pixels
 const BOX = 24.75;       // a 99 px box's front corner below its centre, in sprite pixels
 const KIT = {
   ground: {
-    office: ["b001", "b002", "b003", "b009", "b010", "b017", "b107", "b108", "b109", "b113", "b114", "b115", "b116", "b117", "b122", "b123", "b124", "b125"],
+    office: ["b001", "b002", "b003", "b009", "b010", "b017", "b093", "b100", "b101", "b107", "b108", "b109", "b113", "b114", "b115", "b116", "b117", "b122", "b123", "b124", "b125"],
     brick: ["b014", "b021", "b025", "b026", "b030", "b033", "b036", "b040", "b041", "b046", "b092", "b099", "b106"],
     house: ["b022", "b029", "b037", "b042"],
     works: ["b004", "b011", "b012", "b018", "b019", "b020", "b027", "b028", "b034", "b035"],
@@ -771,11 +772,15 @@ const KIT = {
     house: ["b039", "b044", "b048", "b050", "b051", "b053", "b055", "b056"],
   },
   roofs: {
-    office: ["b005", "b006", "b013", "b111", "b118", "b119", "b126", "b127"],
+    office: ["b005", "b006", "b013", "b111", "b118", "b119", "b120", "b121", "b126", "b127", "b128"],
     brick: ["b065", "b070", "b071", "b076", "b077", "b083", "b084", "b090", "b091", "b097", "b098", "b104", "b105", "b112"],
-    house: ["b057", "b058", "b059", "b060", "b061", "b062", "b063", "b064", "b066", "b067", "b068", "b069", "b073", "b074", "b075", "b082"],
+    house: ["b057", "b058", "b059", "b060", "b061", "b062", "b063", "b064", "b066", "b067", "b068", "b069", "b072", "b073", "b074", "b075", "b080", "b082"],
     works: ["b081", "b088", "b089", "b096"],
   },
+  kiosks: ["b000", "b007", "b008", "b015", "b016", "b023", "b024", "b031"],
+  // Subtle colour variants, multiplied into the sprites: original, warm, cool, weathered.
+  tints: [0xffffff, 0xfff0dc, 0xe4ecfa, 0xe2ded6],
+  antenna: "b078",
   // Road tiles by the neighbours they join: north (j - 1) 1, east (i + 1) 2, south 4, west 8.
   roads: { 5: "c081", 10: "c073", 15: "c089", 13: "c088", 7: "c095", 14: "c096", 11: "c103", 3: "c124", 6: "c122", 12: "c125", 9: "c126" },
   crossings: { 5: "c056", 10: "c064" },
@@ -824,20 +829,62 @@ function ksprite(name, ax, ay, scale = KS) {
 }
 function tileSprite(name) { const h = TEX[name].height; return ksprite(name, 0.5, (h > 101 ? h - 68 : 33) / h); }
 
-// A ground floor, `uppers` storeys of one kind and a roof, centred on the lot.
-function stack(c, set, h, uppers, roofSet, tint) {
-  const g = pick(KIT.ground[set], h, 0), gh = TEX[g].height;
+// Mirrors buildings by name. It doubles the looks but swaps Kenney's lit and
+// shaded walls; set to false to keep every building as drawn in the pack.
+const MIRROR = true;
+
+// Everything a workload's name decides in the Kenney look. Each choice is
+// drawn from its own number of one seed, so the choices do not repeat together.
+function kenneyParts(seed) {
+  const r = rng(seed), n = () => Math.floor(r() * 4294967296);
+  const parts = { ground: n(), floor: n(), floor2: n(), pattern: n() % 4, roof: n(), dress: n() % 5, chimney: n() };
+  parts.tint = KIT.tints[n() % KIT.tints.length];
+  parts.mirror = n() % 2 === 1 && MIRROR;
+  return parts;
+}
+
+// A ground floor, `uppers` storeys and a roof, centred on the lot. The
+// storeys follow a facade pattern: all alike, banded, or a different top or
+// bottom storey. Returns the y of the roof's front corner.
+function stack(c, set, k, uppers, roofSet, tint = k.tint) {
+  const g = pick(KIT.ground[set], k.ground, 0), gh = TEX[g].height;
   const parts = [ksprite(g, 0.5, (gh - 68) / gh)];
-  const floor = KIT.floors[set] && pick(KIT.floors[set], h, 4);
-  for (let k = 1; k <= uppers && floor; k++) {
-    const s = ksprite(floor, 0.5, 1); s.y = (BOX - STOREY * k) * KS; parts.push(s);
+  const floors = KIT.floors[set];
+  if (floors) {
+    const a = k.floor % floors.length, b = (a + 1 + k.floor2 % (floors.length - 1)) % floors.length;
+    const other = s => (k.pattern === 1 && s % 2 === 0) || (k.pattern === 2 && s === uppers) || (k.pattern === 3 && s === 1);
+    for (let s = 1; s <= uppers; s++) {
+      const p = ksprite(floors[other(s) ? b : a], 0.5, 1); p.y = (BOX - STOREY * s) * KS; parts.push(p);
+    }
   }
-  const roof = roofSet && pick(KIT.roofs[roofSet], h, 9);
+  const top = (BOX - STOREY * (uppers + 1)) * KS;
+  const roof = roofSet && pick(KIT.roofs[roofSet], k.roof, 0);
   if (roof) {
     const rh = TEX[roof].height, s = ksprite(roof, 0.5, (rh - 1) / rh);
-    s.y = (BOX - STOREY * (uppers + 1)) * KS; parts.push(s);
+    s.y = top; parts.push(s);
   }
-  for (const p of parts) { if (tint) p.tint = tint; c.addChild(p); }
+  for (const p of parts) { if (tint !== 0xffffff) p.tint = tint; c.addChild(p); }
+  return top;
+}
+
+// Small things on a flat office roof, by name: nothing, an antenna, air
+// conditioners, skylights or a water tank. Drawn with their feet at z 0.
+function roofDressing(g, kind) {
+  const steel = 0x8d9296;
+  if (kind === 2) for (const [cx, cy] of [[0.1, -0.14], [0.1, 0.02]]) {
+    shadedBox(g, cx, cy, 0.05, 0.06, 5, 0xc4c6c4);
+    poly(g, 0x6f7477, [P(cx - 0.03, cy - 0.03, 5), P(cx + 0.03, cy - 0.03, 5), P(cx + 0.03, cy + 0.03, 5), P(cx - 0.03, cy + 0.03, 5)]);
+  }
+  if (kind === 3) for (const cx of [-0.12, 0.04]) {
+    box(g, cx, -0.06, 0.05, 0.12, 2, ART.glass, shade(ART.glassDark, 1.1), ART.glassDark);
+  }
+  if (kind === 4) {
+    g.lineStyle(1.5, steel);
+    for (const [di, dj] of [[0.05, -0.1], [-0.07, -0.1], [0.05, 0.02]]) { g.moveTo(...P(di, dj, 0)); g.lineTo(...P(di, dj, 5)); }
+    g.lineStyle(0);
+    cylinder(g, -0.01, -0.04, 0.1, 9, ART.tank[2], 5, 1);
+  }
+  return 0;
 }
 
 // The packs have no tanks, so StatefulSets get code-drawn ones on the roof of
@@ -869,38 +916,58 @@ const KENNEY = {
   name: "kenney",
   gap: 1, lane: 0.12,
   body(look) {
-    const c = new PIXI.Container(), p = look.p;
+    // The building goes into its own container so mirroring it leaves the
+    // body's scale free for the rise and bump animations.
+    const c = new PIXI.Container(), b = new PIXI.Container(), p = look.p, k = kenneyParts(p.seed);
+    c.addChild(b);
     switch (look.cat) {
-      case "tower": stack(c, "office", p.h, Math.max(0, p.floors - 2), "office"); break;
-      case "tank": {
-        stack(c, "brick", p.h, p.shape, "brick");
-        const roof = -c.getLocalBounds().y;
-        const geo = geometry(`k:roofTank:${p.shape}:${p.h % ART.tank.length}`, g => roofTank(g, p));
-        const g = new PIXI.Graphics(geo.geometry); g.y = -roof + 10; c.addChild(g);
+      case "tower": {
+        const top = stack(b, "office", k, Math.max(0, p.floors - 2), "office");
+        const roof = top - (BOX + 3) * KS;
+        if (k.dress === 1) {
+          const s = ksprite(KIT.antenna, 0.5, 0.95); s.position.set(iso(0.12, -0.12)[0], roof + iso(0.12, -0.12)[1]); b.addChild(s);
+        } else if (k.dress > 1) {
+          const g = new PIXI.Graphics(geometry(`k:dress:${k.dress}`, g => roofDressing(g, k.dress)).geometry); g.y = roof; b.addChild(g);
+        }
         break;
       }
-      case "house": stack(c, "house", p.h, p.count >= 3 ? 1 : 0, "house"); break;
+      case "tank": {
+        stack(b, "brick", k, p.shape, "brick");
+        const roof = -b.getLocalBounds().y;
+        const geo = geometry(`k:roofTank:${p.shape}:${p.h % ART.tank.length}`, g => roofTank(g, p));
+        const g = new PIXI.Graphics(geo.geometry); g.y = -roof + 10; b.addChild(g);
+        break;
+      }
+      case "house": stack(b, "house", k, p.count >= 3 ? 1 : 0, "house"); break;
       case "factory": case "done": {
+        const done = look.cat === "done", ch = KENNEY.stackOf(k);
         const g = new PIXI.Graphics();
-        shadedBox(g, -0.24, -0.24, 0.06, 0.06, 58, look.cat === "done" ? 0x9a9a9a : 0xa8553f);
-        shadedBox(g, -0.24, -0.24, 0.075, 0.075, 3, 0x6d6d6d, 58);
-        c.addChild(g);
-        stack(c, "works", p.h, 0, "works", look.cat === "done" ? 0xa0a0a0 : 0);
+        shadedBox(g, -0.24, -0.24, 0.06, 0.06, ch.h, done ? 0x9a9a9a : ch.color);
+        shadedBox(g, -0.24, -0.24, 0.075, 0.075, 3, 0x6d6d6d, ch.h);
+        b.addChild(g);
+        stack(b, "works", k, 0, "works", done ? 0xa0a0a0 : k.tint);
         break;
       }
       case "kiosk": {
-        const s = ksprite("b016", 0.5, 1, KS * 0.6); s.y = BOX * 0.6 * KS; c.addChild(s);
-        const lamp = ksprite(KIT.lamp, 0.5, 0.95); lamp.position.set(...iso(0.32, 0.3)); c.addChild(lamp);
+        const s = ksprite(pick(KIT.kiosks, k.ground, 0), 0.5, 1, KS * 0.6); s.y = BOX * 0.6 * KS; b.addChild(s);
+        if (k.tint !== 0xffffff) s.tint = k.tint;
+        const lamp = ksprite(KIT.lamp, 0.5, 0.95); lamp.position.set(...iso(0.32, 0.3)); b.addChild(lamp);
         break;
       }
       case "build": {
-        c.addChild(tileSprite(KIT.pit));
-        const g = new PIXI.Graphics(); crane(g); c.addChild(g);
+        b.addChild(tileSprite(KIT.pit));
+        const g = new PIXI.Graphics(); crane(g); b.addChild(g);
         break;
       }
-      case "scorched": stack(c, "brick", p.h, 0, null, 0x5a4f49); break;
+      case "scorched": stack(b, "brick", k, 0, null, 0x5a4f49); break;
     }
+    if (k.mirror && look.cat !== "build") b.scale.x = -1;
     return { obj: c, top: -c.getLocalBounds().y };
+  },
+  // A works' chimney by name: its height and its brick or concrete. It
+  // stands on the back corner, which mirroring leaves in place.
+  stackOf(k) {
+    return { h: [58, 50, 68][k.chimney % 3], color: [0xa8553f, 0x8f8a84, 0x7a4636][(k.chimney >>> 2) % 3] };
   },
   ground() {
     const { W, H } = plan, m = 2;
@@ -950,7 +1017,7 @@ const KENNEY = {
       for (let j = d.y + 2; j < d.y + d.h - 1; j += 2) addScenery(ksprite(KIT.tree, 0.5, 43 / 45), d.x + d.w - 0.5, j + 0.5);
     }
   },
-  chimney: [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - 62],
+  chimney: look => [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - KENNEY.stackOf(kenneyParts(look.p.seed)).h - 4],
   legend: {
     tower: "office block, a storey per replica", tank: "brick hall with a tank on the roof", house: "house with a pitched roof",
     factory: "works with a chimney, smoking while it runs", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
@@ -1068,7 +1135,7 @@ function setBody(b, look) {
       const p = new PIXI.Graphics(geometry(look.fire ? "smoke-dark" : "smoke", g => { g.beginFill(look.fire ? 0x4a4a4a : 0xf2f2f2); g.drawCircle(0, 0, 5); g.endFill(); return 0; }).geometry);
       b.view.addChild(p); b.puffs.push(p);
     }
-    b.puffBase = look.fire ? [0, -Math.min(b.top, 46) - 12] : theme.chimney;
+    b.puffBase = look.fire ? [0, -Math.min(b.top, 46) - 12] : theme.chimney(look);
     smoking.add(b);
   } else b.puffs = null;
 }

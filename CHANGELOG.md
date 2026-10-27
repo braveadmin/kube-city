@@ -8,6 +8,9 @@
   images and contexts in the page, the status line and `--record` files, so
   a real cluster can be shared; `--anonymise-salt` keeps the names stable
   between runs (#13).
+- More building variety in the Kenney look: tints, mirrored buildings,
+  mixed facades, roof details and more shop fronts and roofs, all chosen by
+  the workload's name (#16).
 
 ## 0.2.0
 

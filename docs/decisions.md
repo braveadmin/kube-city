@@ -3,7 +3,7 @@
 What was decided while building kube-city, and why. Read this before
 changing direction; update it when a decision changes.
 
-Last updated: 2026-10-23.
+Last updated: 2026-10-27.
 
 ## The idea
 
@@ -110,6 +110,17 @@ direction before building a `--web` server.
     are none. Each look sets its road width (`gap`: Metropolis 2, Kenney 1),
     so switching looks re-plans the districts; a camera the viewer moved
     stays over the same district.
+  - Variety (#16, 2026-10-27): every workload name picks, from its own
+    seed, a ground floor, upper floor, facade pattern (all alike, banded,
+    other top or other bottom storey), roof, one of four subtle tints
+    (original, warm, cool, weathered), whether it is mirrored, and on
+    offices a roof detail (antenna, air conditioners, skylights, small
+    tank); works also get a chimney height and colour. Three unused shop
+    fronts became office ground floors, the pale roof pieces office and
+    house roofs. On the big recording every workload got its own look and no
+    facade is shared by more than 3 % of a kind (was about 20 %). Mirroring
+    swaps Kenney's lit and shaded walls; the owner chose it anyway and it is
+    one switch (`MIRROR`) in the page. Only pack 1 is used (owner's choice).
 - The sprites the page uses are in `assets/kenney/` (CC0, with Kenney's
   licence files); `assets/kenney/README.md` says where the full packs are.
 - `apply(event)` takes events in the recording's compact form, so a future
