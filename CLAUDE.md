@@ -1,8 +1,8 @@
 # kube-city
 
 Draws a Kubernetes cluster as a living isometric city in the browser (Rust:
-kube-rs, tokio, axum; the page is PixiJS). The terminal view (`--tui`,
-ratatui) is deprecated and frozen: bug fixes only, no new features. **Read `docs/decisions.md` first** (and `ROADMAP.md` for what is planned): it
+kube-rs, tokio, axum; the page is PixiJS). The old terminal view was
+removed in 0.4.0. **Read `docs/decisions.md` first** (and `ROADMAP.md` for what is planned): it
 holds the decisions so far, the open problems and the recommended next step.
 
 ## Commands
@@ -11,7 +11,6 @@ holds the decisions so far, the open problems and the recommended next step.
 cargo run --release -- --demo                                  # simulated cluster, in the browser
 cargo run --release -- --context my-cluster                    # live, read-only
 cargo run --release -- --replay recordings/big-cluster.jsonl  # recorded real cluster (git-ignored)
-cargo run --release -- --tui --demo                            # deprecated terminal view
 cargo test
 cargo clippy --all-targets   # keep it warning-free
 ```
@@ -24,20 +23,12 @@ python3 art/web_prototype.py recordings/big-cluster.jsonl art/out
 
 Kenney sprites (CC0) live in `assets/kenney/`; see its README to add more.
 
-Snapshot images of a recording, for design work (writes PPM files):
-
-```bash
-KUBE_CITY_REPLAY=recordings/big-cluster.jsonl KUBE_CITY_OUT=/tmp/snap cargo test render_snapshots -- --ignored
-```
-
 ## Layout
 
-- `src/world.rs`: city model (pods, buildings, grouping rules) fed by `WorldEvent`s
-- `src/layout.rs`: stable lots; blocks handed out along a spiral
+- `src/world.rs`: the `WorldEvent`s every source sends (pods and their details)
 - `src/cluster.rs`, `src/demo.rs`, `src/recording.rs`: event sources
 - `src/web.rs`: the browser view's server (page, sprites from `build.rs`, WebSocket feed);
   the page itself is `art/city.template.html`
-- `src/render/`: `scene.rs` (isometric primitives), `theme/` (all art; Metropolis)
 - `assets/kenney/`: the Kenney sprites the browser view uses (CC0)
 - `art/`: style samples script, evaluation page sources, browser prototype
   (`web_prototype.py` + `city.template.html`)
@@ -50,7 +41,6 @@ KUBE_CITY_REPLAY=recordings/big-cluster.jsonl KUBE_CITY_OUT=/tmp/snap cargo test
 - Conventional Commits (`feat:`, `fix:`, `docs:` …), no Jira keys here.
 - No `Co-Authored-By: Claude` trailer in commits and no "Generated with Claude
   Code" footer in PR descriptions (owner's choice, 2026-10-23).
-- New looks go through the `Theme` trait, not into the renderer.
 
 ## Releasing
 

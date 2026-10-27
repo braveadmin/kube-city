@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- The terminal view (`--tui`), deprecated since 0.2.0, with `--fps` and
+  `--all-pods`. `--tui` now only says so; `cargo install kube-city
+  --version 0.3.0` still has it. About half of the code and the `ratatui`
+  dependency go with it (#20).
+
 ## 0.3.0
 
 ### Added

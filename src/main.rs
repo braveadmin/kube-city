@@ -1,12 +1,9 @@
 //! kube-city: a living isometric city of your Kubernetes cluster.
 
 mod anonymise;
-mod app;
 mod cluster;
 mod demo;
-mod layout;
 mod recording;
-mod render;
 mod util;
 mod web;
 mod world;
@@ -17,7 +14,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use clap::{CommandFactory, Parser, error::ErrorKind};
+use clap::Parser;
 use tokio::sync::{mpsc, watch};
 
 #[derive(Debug, Parser)]
@@ -56,52 +53,41 @@ struct Args {
     seed: Option<u64>,
 
     /// Port for the city's page; it is only served on 127.0.0.1.
-    #[arg(long, default_value_t = 7700, conflicts_with = "tui")]
+    #[arg(long, default_value_t = 7700)]
     port: u16,
 
     /// Do not open a browser; just print the address of the city.
-    #[arg(long, conflicts_with = "tui")]
+    #[arg(long)]
     no_open: bool,
 
     /// Show the city in a browser. This is the default; the flag is kept so
     /// existing commands keep working.
-    #[arg(long, conflicts_with = "tui")]
+    #[arg(long)]
     web: bool,
 
-    /// Show the city in the terminal instead (deprecated: no new features,
-    /// to be removed; see ROADMAP.md).
-    #[arg(long)]
+    /// Removed in 0.4.0; kept so that it says so instead of "unexpected
+    /// argument".
+    #[arg(long, hide = true)]
     tui: bool,
 
     /// Replace every name (namespaces, workloads, pods, nodes, images,
     /// contexts) with a made-up one in the page and in --record, so the city
     /// can be shared. The names are new every run.
-    #[arg(long, conflicts_with = "tui")]
+    #[arg(long)]
     anonymise: bool,
 
     /// With --anonymise: the same salt gives the same made-up names every
     /// run. Keep it secret, or names could be matched by guessing.
     #[arg(long, value_name = "SALT", requires = "anonymise")]
     anonymise_salt: Option<String>,
-
-    /// With --tui: show every pod as its own building, finished jobs included
-    /// (by default each DaemonSet gets one building and finished jobs are
-    /// only counted).
-    #[arg(long)]
-    all_pods: bool,
-
-    /// With --tui: frames per second [default: 20].
-    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=60))]
-    fps: Option<u32>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    // clap's `requires` counts --tui's default (false) as given, so check here.
-    if !args.tui && (args.all_pods || args.fps.is_some()) {
-        let flag = if args.all_pods { "--all-pods" } else { "--fps" };
-        Args::command().error(ErrorKind::MissingRequiredArgument, format!("{flag} only works with --tui")).exit();
-    }
+    ensure!(
+        !args.tui,
+        "the terminal view (--tui) was removed in 0.4.0; `cargo install kube-city --version 0.3.0` still has it"
+    );
     ensure!((0.1..=100.0).contains(&args.demo_rate), "--demo-rate must be between 0.1 and 100");
     ensure!((0.01..=1000.0).contains(&args.replay_speed), "--replay-speed must be between 0.01 and 1000");
 
@@ -130,7 +116,7 @@ fn main() -> Result<()> {
         // Connect before anything else, so login prompts and errors show
         // up as plain text.
         let (client, context) = runtime.block_on(cluster::connect(args.context.as_deref(), &args.namespaces))?;
-        if !args.tui && args.record.is_none() {
+        if args.record.is_none() {
             let contexts = cluster::contexts()?;
             clusters = Some(web::Clusters { contexts, current: context.clone(), namespaces: args.namespaces.clone() });
         }
@@ -145,7 +131,7 @@ fn main() -> Result<()> {
         None => (from_source, source),
     };
 
-    let mut receiver = match &args.record {
+    let receiver = match &args.record {
         None => from_source,
         Some(path) => {
             let file = std::fs::File::create(path).with_context(|| format!("cannot create {}", path.display()))?;
@@ -155,18 +141,7 @@ fn main() -> Result<()> {
         }
     };
 
-    if !args.tui {
-        return runtime.block_on(web::serve(receiver, source, args.port, !args.no_open, clusters, anonymiser));
-    }
-
-    // The terminal view is frozen: bug fixes only, no new features.
-    eprintln!("kube-city: the terminal view is deprecated and will be removed; see ROADMAP.md");
-    let mut terminal = ratatui::init();
-    let rules = world::Rules { hide_completed: !args.all_pods, group_daemonsets: !args.all_pods };
-    let result =
-        app::run(&mut terminal, &mut receiver, args.fps.unwrap_or(20), &source, &render::theme::Metropolis, rules);
-    ratatui::restore();
-    result
+    runtime.block_on(web::serve(receiver, source, args.port, !args.no_open, clusters, anonymiser))
 }
 
 fn seed_from_clock() -> u64 {

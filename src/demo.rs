@@ -309,7 +309,6 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::world::World;
 
     fn run_steps(seed: u64, steps: usize) -> Vec<WorldEvent> {
         let mut cluster = DemoCluster::new(seed);
@@ -350,7 +349,6 @@ mod tests {
     #[test]
     fn events_stay_consistent_and_bounded_over_a_long_run() {
         let mut cluster = DemoCluster::new(1234);
-        let mut world = World::default();
         let mut alive = HashSet::new();
         let mut seen_states = HashSet::new();
         for _ in 0..3000 {
@@ -364,9 +362,8 @@ mod tests {
                         assert!(alive.remove(uid), "deleted a pod that was never created: {uid}");
                     }
                 }
-                world.apply(event);
             }
-            assert_eq!(world.pod_count(), cluster.pods.len());
+            assert_eq!(alive.len(), cluster.pods.len());
             assert!(cluster.pods.len() < MAX_PODS * 2);
         }
         assert_eq!(seen_states.len(), 6, "every state shows up: {seen_states:?}");

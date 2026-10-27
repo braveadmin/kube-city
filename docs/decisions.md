@@ -8,7 +8,7 @@ Last updated: 2026-10-27.
 ## The idea
 
 Shows a Kubernetes cluster as a living isometric city, in the browser (the
-terminal view it started as is deprecated, see below). Kubernetes objects are buildings; they appear, change and disappear as
+terminal view it started as was removed in 0.4.0, see below). Kubernetes objects are buildings; they appear, change and disappear as
 the cluster changes. Nothing similar existed (closest: KubeInvaders,
 KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 
@@ -29,20 +29,20 @@ KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 
 | Topic | Decision | Why |
 |---|---|---|
-| Language | Rust: ratatui, kube-rs, tokio, clap | Smooth cell-diffing renderer, low idle CPU, single binary |
+| Language | Rust: kube-rs, tokio, axum, clap (ratatui until 0.4.0) | Low idle CPU, single binary |
 | Local test cluster | None (no kind) | kind clashes with the owner's one-file-per-context kubeconfig; `--demo` and `--replay` replace it |
 | Cluster access | Read-only list/watch through the merged `KUBECONFIG`, `--context`, `-n` | Never write to clusters or kubeconfig files |
 | Art style | Metropolis (daylight pixel art, SimCity 2000-like) | Chosen from three samples (Metropolis, Neon night, Toy town) |
-| Themes | Everything visual behind the `Theme` trait (`src/render/theme/`) | The owner wants selectable themes later; Neon and Toy town samples are in `art/samples.py` |
+| Themes | Terminal view: everything visual behind the `Theme` trait (`src/render/theme/`, removed in 0.4.0); browser: themes in `art/city.template.html` | The owner wants selectable themes later; Neon and Toy town samples are in `art/samples.py` |
 | Buildings | Deployment: tower; StatefulSet: tank, twin tanks or silo; DaemonSet: house; Job: factory; no owner: kiosk | Kind of workload is recognisable at a glance |
 | States | Pending: construction site with crane; CrashLoop (incl. ImagePullBackOff and similar): fire; Terminating: faded and crumbling; Failed: scorched pavilion | Problems must stand out |
 | Landmarks | A workload's look depends on its name only, not its namespace | The same component deployed in many namespaces looks the same everywhere |
-| Noise | Default: one building per DaemonSet, finished jobs only counted; `--all-pods` turns this off | 153 DaemonSet pods were 9 DaemonSets; 111 finished jobs were clutter |
-| Zoom | `z` cycles detail, overview, map (state-coloured tiles); `f` fades healthy buildings | Overview and focus for finding problems |
+| Noise | Terminal view: one building per DaemonSet, finished jobs only counted; `--all-pods` turned this off (removed in 0.4.0) | 153 DaemonSet pods were 9 DaemonSets; 111 finished jobs were clutter |
+| Zoom | Terminal view: `z` cycled detail, overview, map (state-coloured tiles); `f` fades healthy buildings | Overview and focus for finding problems |
 | Recording | `--record FILE` / `--replay FILE` (JSON lines of world events) | Reproducible tests on real clusters without access |
 | Sixel | Ruled out and removed | Sixel images do not get from WSL to Windows Terminal 1.24: even a test bar printed from the shell does not appear (ConPTY) |
 | Pre-rendered sprites | Not in the terminal | Only pay off with more pixels than half blocks give |
-| Renderer | Browser (PixiJS/WebGL) is the main view; half blocks stay as terminal fallback | The owner liked the browser prototype ("I love the feeling it has now") |
+| Renderer | Browser (PixiJS/WebGL) is the main view; half blocks were the terminal fallback until 0.4.0 | The owner liked the browser prototype ("I love the feeling it has now") |
 | Look | Kenney sprites (CC0) as the default theme; Metropolis stays as a second theme | The owner, 2026-10-16: "I love kenney's assets!" |
 
 ## Open problems (owner's feedback, 2026-10-16)
@@ -165,7 +165,7 @@ direction before building a `--web` server.
 | What | Namespaces (`feature-`/`bugfix-` prefix kept; `default` and `kube-*` kept), workloads (per kind and name, same in every namespace), pod names (StatefulSet ordinals kept), uids, nodes, images (repository a word, tag a short hash), contexts | Every name the page or a recording holds; landmarks still work |
 | Status line | Context replaced, error text dropped (`reconnecting`, `cannot connect (details hidden by --anonymise)`); a replay shows `replay recording` | Errors can hold host names; recording file names can say whose cluster it is |
 | Hash | Salted SHA-256 (`sha2`, already a dependency of kube) | Stable salted pseudonyms must not be reversible from the public code |
-| Terminal view | `--anonymise` conflicts with `--tui` | The terminal view is frozen |
+| Terminal view | `--anonymise` conflicted with `--tui` | The terminal view was frozen (removed in 0.4.0) |
 
 ## Distribution (2026-10-22)
 
@@ -213,6 +213,21 @@ Flags: `--fps` and `--all-pods` only work with `--tui` (checked in `main.rs`,
 because clap's `requires` counts `--tui`'s default as given); `--port`,
 `--no-open` and `--web` conflict with `--tui`.
 
+## Terminal view removed (2026-10-27, #20)
+
+Owner's decision: **remove it** in 0.4.0, not keep it behind a cargo
+feature. Nobody asked for it in Discussions or issues, and a feature would
+have kept the code, a second CI build and ratatui updates for a view nobody
+uses.
+
+Gone: `app.rs`, `layout.rs`, `render/` (the terminal's Metropolis theme and
+the `render_snapshots` design tool), `World`/`Rules` in `world.rs` (which
+now only holds the events sources send), the unused hash helpers in
+`util.rs`, `--fps`, `--all-pods` and the `ratatui` dependency: about 2,300
+lines and 34 tests. `--tui` stays as a hidden flag that exits with a
+message pointing to 0.3.0 (`cargo install kube-city --version 0.3.0`). The
+browser's own layout and both looks live in `art/city.template.html`.
+
 ## Roadmap
 
 The public roadmap is [`ROADMAP.md`](../ROADMAP.md); keep it up to date when
@@ -244,7 +259,7 @@ Original plan for the browser prototype, kept for reference:
   - street: individual pods
 - First step: a self-contained prototype page from the anonymised big-cluster
   recording, to judge the direction before building the `--web` server.
-- Half blocks stay as a quick terminal view and an SSH fallback.
+- Half blocks stay as a quick terminal view and an SSH fallback (until 0.4.0).
 
 Alternatives considered: a native window (Bevy or macroquad; more work for
 text and panels), another terminal such as WezTerm (unverified under WSL;
