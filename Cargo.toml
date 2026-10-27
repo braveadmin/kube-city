@@ -2,12 +2,12 @@
 name = "kube-city"
 version = "0.3.0"
 edition = "2024"
-description = "A living isometric city of your Kubernetes cluster, in the browser or the terminal"
+description = "A living isometric city of your Kubernetes cluster, in the browser"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/braveadmin/kube-city"
 homepage = "https://github.com/braveadmin/kube-city"
 readme = "README.md"
-keywords = ["kubernetes", "k8s", "visualization", "isometric", "tui"]
+keywords = ["kubernetes", "k8s", "visualization", "isometric", "browser"]
 categories = ["command-line-utilities", "visualization"]
 # What crates.io gets: the code, the page and the assets built into the binary
 include = ["/src", "/build.rs", "/art/city.template.html", "/assets", "/README.md", "/LICENSE-*", "/Cargo.lock"]
@@ -19,7 +19,6 @@ clap = { version = "4.6.7", features = ["derive"] }
 futures = "0.3.34"
 k8s-openapi = { version = "0.28.0", features = ["latest"] }
 kube = { version = "4.2.0", features = ["runtime", "client"] }
-ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"

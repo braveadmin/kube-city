@@ -7,7 +7,7 @@ Ideas, votes and questions are welcome in
 ## Done
 
 - **The city in your browser** (WebGL), live and read-only, from a cluster,
-  a recording or a demo. The terminal view (`--tui`) is deprecated.
+  a recording or a demo.
 - **Two themes:** Kenney (sprites from Kenney's CC0 packs) and Metropolis
   (drawn in code), picked from the **Theme** dropdown.
 - **Readable big clusters:** cluster, district and street zoom levels; search;
@@ -27,12 +27,15 @@ Ideas, votes and questions are welcome in
   tanks on StatefulSet roofs, the pack's road tiles with junctions and
   crossings, and much more building variety.
 
+## Next
+
+- [Remove the deprecated terminal view](https://github.com/braveadmin/kube-city/issues/20) (v0.4.0).
+
 ## Later
 
 - [Demo GIF](https://github.com/braveadmin/kube-city/issues/17) at the top of the README.
 - [All contexts at the same time](https://github.com/braveadmin/kube-city/issues/18).
 - [More Kubernetes objects](https://github.com/braveadmin/kube-city/issues/19): Nodes, Services, Ingresses, volumes.
-- [Remove the deprecated terminal view](https://github.com/braveadmin/kube-city/issues/20), or keep it behind a build feature, depending on feedback.
 - [Fonts built into the binary](https://github.com/braveadmin/kube-city/issues/21) (fully offline page).
 - [Smaller release binaries and faster sprite loading](https://github.com/braveadmin/kube-city/issues/22).
 - [krew](https://github.com/braveadmin/kube-city/issues/23): `kubectl krew install`; until then a symlink gives you `kubectl city` (see the README).

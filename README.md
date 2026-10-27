@@ -7,8 +7,8 @@ grow, burn and rebuild, live.
 ![kube-city in the browser: districts of office blocks, houses and brick halls, one of them on fire](https://raw.githubusercontent.com/braveadmin/kube-city/master/docs/screenshot.png)
 
 - **In your browser.** `kube-city` opens the city in your browser (WebGL,
-  mouse-wheel zoom, search, details on click). The old terminal view is still
-  there with `--tui`, but deprecated.
+  mouse-wheel zoom, search, details on click). The old terminal view
+  (`--tui`) was removed in 0.4.0.
 - **Read-only.** It only lists and watches pods, the way `kubectl get pods -w`
   does, and never changes anything in the cluster.
 - **Big clusters stay readable.** Zoom out to one district per namespace,
@@ -60,7 +60,6 @@ kube-city                               # current kubectl context, in the browse
 kube-city --context my-cluster          # another context
 kube-city -n shop -n payments           # only these namespaces
 kube-city --demo                        # a simulated cluster, no cluster needed
-kube-city --tui                         # the terminal view (deprecated)
 ```
 
 kube-city serves the city on `http://127.0.0.1:7700/` (`--port` to change
@@ -129,65 +128,6 @@ and, in red, why a pod is not simply running (ImagePullBackOff, OOMKilled,
 Evicted, …), plus the workload's images. A workload looks the same, and stands in the same spot, in every
 namespace that has it, so environments that deploy the same stack are easy
 to compare.
-
-## The terminal city (deprecated)
-
-The terminal view is frozen: it gets bug fixes but no new features, and it
-will be removed in a later release, depending on feedback (see
-[ROADMAP.md](ROADMAP.md)). Tell us in
-[Discussions](https://github.com/braveadmin/kube-city/discussions) if you
-rely on it.
-
-Drawn in the Metropolis theme: daylight pixel art in the spirit of SimCity
-2000. Each image pixel is half a terminal cell (`▀` with true colour).
-
-Run `kube-city --tui`; it needs a true-colour terminal. Keys:
-arrows / `hjkl` pan, `z` cycles detail, overview and map, `f` fades healthy
-buildings, `c` re-centres, `q` / `Esc` / `Ctrl+C` quit. If the watch drops,
-the status bar says so and it reconnects.
-
-| Kubernetes          | City                                                       |
-|---------------------|------------------------------------------------------------|
-| Namespace           | District: one or more blocks of 4×4 lots, with its own ground colour |
-| Deployment pod      | Office tower; workload sets colour, height and setbacks    |
-| StatefulSet pod     | Storage tank, twin tanks or silo, coloured per workload    |
-| DaemonSet           | One house for all its pods, showing the worst state        |
-| Job pod             | Factory with a smoking chimney                             |
-| Pod without owner   | Kiosk                                                      |
-| Free lot            | Lawn or trees                                              |
-
-| Pod state           | Building                                                   |
-|---------------------|------------------------------------------------------------|
-| Pending             | Construction site with a working crane                     |
-| Running             | Lit windows that switch on and off over time               |
-| CrashLoopBackOff    | Fire and smoke on the roof, glowing windows                |
-| Terminating         | Faded, partly demolished, with dust                        |
-| Succeeded / Failed  | Counted in the status bar / scorched pavilion with a red cross |
-
-CrashLoopBackOff covers every container stuck waiting for help:
-ImagePullBackOff, ErrImagePull, CreateContainerConfigError and similar.
-
-A workload looks the same in every namespace, so a component deployed in many
-namespaces is recognisable everywhere. `--tui --all-pods` shows every pod as its own
-building, finished jobs (pavilions with a green tick) included.
-
-The map zoom draws each building as a small tile coloured by state, so a big
-cluster fits on screen and problems show as red spots.
-
-Every pod keeps its lot for its whole life. Blocks are handed out along a
-spiral around the centre, so the city grows outwards; a block that empties
-goes back to the city.
-
-## Terminal themes
-
-`src/render/theme/` holds the terminal view's looks (the browser's are in
-`art/city.template.html`). The renderer decides what stands where
-and in which order things are drawn; a `Theme` paints ground, buildings and
-free lots with the primitives in `src/render/scene.rs` (boxes, walls with
-window patterns, pitched roofs, round solids), and works at both zooms.
-Metropolis is the only theme so far. `art/samples.py` renders the three
-candidate styles (Metropolis, Neon night, Toy town) as reference images:
-`python3 art/samples.py art/out`.
 
 ## Questions, ideas and bugs
 
