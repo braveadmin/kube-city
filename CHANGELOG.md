@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- The fonts (Barlow, Barlow Condensed, IBM Plex Mono) are built into the
+  binary, so the page makes no request to Google Fonts and looks the same
+  without internet (#21).
+
 ### Removed
 
 - The terminal view (`--tui`), deprecated since 0.2.0, with `--fps` and
