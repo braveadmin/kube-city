@@ -1,6 +1,6 @@
 //! `--web`: the city in a browser.
 //!
-//! Serves the page, the Kenney sprites and the fonts from the binary on 127.0.0.1 and
+//! Serves the page (with the Kenney sprites in it) and the fonts from the binary on 127.0.0.1 and
 //! streams world events to every open page over a WebSocket, as JSON arrays
 //! of the same events a recording holds, plus `{"Status": text}`,
 //! `{"Contexts": {"current", "all"}}` and `{"Reset": null}`. A page that
@@ -151,7 +151,6 @@ pub async fn serve(
     let app = Router::new()
         .route("/", get(index))
         .route("/ws", get(socket))
-        .route("/sprites/{file}", get(sprite))
         .route("/pixi.min.js", get(pixi))
         .route("/fonts/{file}", get(font))
         .with_state(shared);
@@ -167,11 +166,11 @@ pub async fn serve(
     Ok(())
 }
 
-/// The page with an empty live city and the sprites and fonts served next to it.
+/// The page with an empty live city and the sprites in it, and the fonts served next to it.
 fn page() -> String {
     let data = json!({ "ns": [], "wl": [], "events": [], "live": true, "version": env!("CARGO_PKG_VERSION") });
     let sprites: serde_json::Map<String, Value> =
-        SPRITES.iter().map(|(name, _)| (name.to_string(), Value::from(format!("sprites/{name}.png")))).collect();
+        SPRITES.iter().map(|(name, uri)| (name.to_string(), Value::from(*uri))).collect();
     let body = TEMPLATE
         .replacen("/*CITY_DATA*/null", &data.to_string(), 1)
         .replacen("/*KENNEY_SPRITES*/null", &Value::Object(sprites).to_string(), 1)
@@ -391,16 +390,6 @@ async fn index(State(shared): State<Shared>) -> Html<String> {
     Html(shared.page.to_string())
 }
 
-async fn sprite(Path(file): Path<String>) -> Response {
-    let name = file.strip_suffix(".png").unwrap_or(&file);
-    match SPRITES.iter().find(|(sprite, _)| *sprite == name) {
-        Some((_, bytes)) => {
-            ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], *bytes).into_response()
-        }
-        None => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
 async fn pixi() -> Response {
     ([(header::CONTENT_TYPE, "text/javascript"), (header::CACHE_CONTROL, "max-age=86400")], PIXI).into_response()
 }
@@ -569,6 +558,13 @@ mod tests {
         for name in named {
             assert!(SPRITES.iter().any(|(sprite, _)| *sprite == name), "sprite {name} is not embedded");
         }
+        // The sprites are in the page itself, as PNG data URIs; nothing asks the server for them.
+        for (name, uri) in SPRITES {
+            let png = uri.strip_prefix("data:image/png;base64,").unwrap_or_default();
+            assert!(png.starts_with("iVBORw0KGgo") && png.len() % 4 == 0, "sprite {name} is no PNG data URI");
+            assert!(page.contains(&format!(r#""{name}":"{uri}""#)), "sprite {name} is not in the page");
+        }
+        assert!(!page.contains("sprites/"));
     }
 
     #[tokio::test]

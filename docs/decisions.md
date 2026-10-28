@@ -136,8 +136,9 @@ direction before building a `--web` server.
 ## `kube-city --web` (built 2026-10-16)
 
 - `src/web.rs` (axum 0.8): serves the page (`art/city.template.html`, built
-  in with `include_str!`) and the Kenney sprites (embedded by `build.rs`
-  from `assets/kenney`) on 127.0.0.1:7700, and streams events over `/ws`.
+  in with `include_str!`) with the Kenney sprites in it as data URIs
+  (encoded by `build.rs` from `assets/kenney`) on 127.0.0.1:7700, and
+  streams events over `/ws`.
 - Messages are JSON arrays of the recording's events
   (`{"PodUpserted": pod}`, `{"PodDeleted": {"uid"}}`) plus
   `{"Status": text}` and `{"Reset": null}`. A new or lagging page gets
@@ -182,6 +183,8 @@ direction before building a `--web` server.
 | Signing | None; README explains the macOS quarantine command | Apple signing needs a paid account |
 | PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN |
 | Fonts (#21) | Latin subsets of Barlow, Barlow Condensed and IBM Plex Mono built into the binary (`assets/fonts`, about 180 KB); the page gets `@font-face` rules for `/fonts/…` in place of the Google Fonts link, which the template keeps for the published prototype | `--web` fully offline, no request to Google; Latin-only keeps the binary small (#22), other characters fall back to system fonts |
+| Binary size (#22) | `strip = true` in `release`; `dist` adds full LTO, one codegen unit and `opt-level = "s"`; panics still unwind | 17.3 MB to 8.1 MB (5.5 MB to 4.1 MB gzipped, Linux x86_64); the binary is almost all Rust code, the assets are about 1.3 MB. Same CPU on a fast demo (4.5 % vs 4.6 % of a core). Abort would save 0.3 MB more but let one panicking task stop the server |
+| Sprite loading (#22) | The sprites go into the page as data URIs (page about 1 MB) instead of 144 requests to `/sprites/…`; a live page opens its WebSocket while they load and holds the batches until the first plan | The page waited for every sprite (140–350 ms of requests on localhost alone) before it planned the city or connected |
 | Line endings | `.gitattributes`: LF everywhere, PNG binary | Windows checkouts embedded CRLF copies of the page |
 | Package managers (0.1.1) | Homebrew tap `braveadmin/homebrew-tap` (formula pushed by the release workflow), crates.io `kube-city`; krew planned | One-command installs for macOS, Linux and Rust users; krew reaches kubectl users |
 | Archives | `.tar.gz` on Linux and macOS (was `.tar.xz`) | krew accepts only `.tar.gz` and `.zip` |

@@ -24,8 +24,16 @@ serde_json = "1.0.154"
 sha2 = "0.10.9"
 tokio = { version = "1.53.3", features = ["full"] }
 
-# The profile that 'dist' will build with
+# No symbols: a third of the binary, and nobody debugs a release with them (#22)
+[profile.release]
+strip = true
+
+# The profile that 'dist' will build with: about half the size of a plain
+# release build (#22), at the cost of slower release builds. Panics still
+# unwind, so one failing task does not take the whole server down.
 [profile.dist]
 inherits = "release"
-lto = "thin"
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
 
