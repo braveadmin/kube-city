@@ -1,6 +1,6 @@
 //! `--web`: the city in a browser.
 //!
-//! Serves the page and the Kenney sprites from the binary on 127.0.0.1 and
+//! Serves the page, the Kenney sprites and the fonts from the binary on 127.0.0.1 and
 //! streams world events to every open page over a WebSocket, as JSON arrays
 //! of the same events a recording holds, plus `{"Status": text}`,
 //! `{"Contexts": {"current", "all"}}` and `{"Reset": null}`. A page that
@@ -53,6 +53,13 @@ include!(concat!(env!("OUT_DIR"), "/sprites.rs"));
 const PIXI: &str = include_str!("../assets/pixi/pixi.min.js");
 /// Where the template loads PixiJS from when it is published as a page.
 const PIXI_CDN: &str = "https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js";
+include!(concat!(env!("OUT_DIR"), "/fonts.rs"));
+/// The `@font-face` rules for `FONTS`, put into the page in place of `GOOGLE_FONTS`.
+const FONTS_CSS: &str = include_str!("../assets/fonts/fonts.css");
+/// How the template loads its fonts when it is published as a page.
+const GOOGLE_FONTS: &str = r#"<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">"#;
 
 /// Batches a page may fall behind before it is sent the whole city again.
 const BACKLOG: usize = 1024;
@@ -146,6 +153,7 @@ pub async fn serve(
         .route("/ws", get(socket))
         .route("/sprites/{file}", get(sprite))
         .route("/pixi.min.js", get(pixi))
+        .route("/fonts/{file}", get(font))
         .with_state(shared);
     let url = format!("http://127.0.0.1:{port}/");
     eprintln!("kube-city: the city is at {url} (Ctrl+C to stop)");
@@ -159,7 +167,7 @@ pub async fn serve(
     Ok(())
 }
 
-/// The page with an empty live city and the sprites served next to it.
+/// The page with an empty live city and the sprites and fonts served next to it.
 fn page() -> String {
     let data = json!({ "ns": [], "wl": [], "events": [], "live": true, "version": env!("CARGO_PKG_VERSION") });
     let sprites: serde_json::Map<String, Value> =
@@ -167,7 +175,8 @@ fn page() -> String {
     let body = TEMPLATE
         .replacen("/*CITY_DATA*/null", &data.to_string(), 1)
         .replacen("/*KENNEY_SPRITES*/null", &Value::Object(sprites).to_string(), 1)
-        .replacen(PIXI_CDN, "pixi.min.js", 1);
+        .replacen(PIXI_CDN, "pixi.min.js", 1)
+        .replacen(GOOGLE_FONTS, &format!("<style>\n{FONTS_CSS}</style>"), 1);
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n{body}\n</html>\n"
@@ -396,6 +405,15 @@ async fn pixi() -> Response {
     ([(header::CONTENT_TYPE, "text/javascript"), (header::CACHE_CONTROL, "max-age=86400")], PIXI).into_response()
 }
 
+async fn font(Path(file): Path<String>) -> Response {
+    match FONTS.iter().find(|(font, _)| *font == file) {
+        Some((_, bytes)) => {
+            ([(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "max-age=86400")], *bytes).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 async fn socket(upgrade: WebSocketUpgrade, headers: HeaderMap, State(shared): State<Shared>) -> Response {
     if !from_own_page(&headers, shared.port) {
         return StatusCode::FORBIDDEN.into_response();
@@ -528,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn page_has_live_data_and_every_sprite_it_names() {
+    fn page_has_live_data_and_every_sprite_and_font_it_names() {
         let page = page();
         assert!(!page.contains("/*CITY_DATA*/") && !page.contains("/*KENNEY_SPRITES*/"));
         assert!(page.contains(r#""live":true"#));
@@ -536,6 +554,13 @@ mod tests {
         // The built-in PixiJS must be the version the template asks for.
         assert!(TEMPLATE.contains(PIXI_CDN) && PIXI.contains(" * pixi.js - v7.4.2"));
         assert!(page.contains(r#"<script src="pixi.min.js">"#) && !page.contains("cdnjs"));
+        // Nothing comes from Google; every font the page names is built in, and every built-in font is used.
+        assert!(TEMPLATE.contains(GOOGLE_FONTS) && !page.contains("googleapis") && !page.contains("gstatic"));
+        let fonts: Vec<&str> = page.split("url(fonts/").skip(1).map(|s| &s[..s.find(')').unwrap()]).collect();
+        assert_eq!(fonts.len(), FONTS.len());
+        for name in fonts {
+            assert!(FONTS.iter().any(|(font, _)| *font == name), "font {name} is not embedded");
+        }
         let named: Vec<&str> = TEMPLATE
             .split('"')
             .filter(|s| s.len() == 4 && s[1..].bytes().all(|b| b.is_ascii_digit()) && "bcd".contains(&s[..1]))

@@ -103,9 +103,8 @@ runs (keep the salt secret, or names could be matched by guessing).
   plain text.
 - Permission to `list` and `watch` pods, in all namespaces or in the ones
   you pass with `-n`.
-- A browser with WebGL. The page is served only on 127.0.0.1;
-  it loads its fonts from Google Fonts and falls back to system fonts
-  without internet. Everything else (PixiJS, sprites) is in the binary.
+- A browser with WebGL. The page is served only on 127.0.0.1 and needs
+  no internet: PixiJS, the sprites and the fonts are in the binary.
 
 ## The browser city
 
@@ -158,6 +157,5 @@ It includes:
 - Sprites from Kenney's *Isometric Buildings* and *Isometric City* packs
   (CC0, [kenney.nl](https://kenney.nl)), in `assets/kenney/`.
 - [PixiJS](https://pixijs.com) 7.4.2 (MIT, see `assets/pixi/LICENSE`).
-
-The page uses the Barlow, Barlow Condensed and IBM Plex Mono fonts from
-Google Fonts (SIL Open Font License).
+- The Barlow, Barlow Condensed and IBM Plex Mono fonts (SIL Open Font
+  License, see `assets/fonts/`).

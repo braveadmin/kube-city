@@ -176,7 +176,8 @@ direction before building a `--web` server.
 | License | MIT OR Apache-2.0 | The usual Rust dual license |
 | Binaries | cargo-dist on version tags: Linux x86_64 (static musl) and arm64, macOS arm64 and x86_64, Windows x86_64, plus shell and PowerShell installers; pull requests build the same without publishing | One command to install; musl runs on any distro |
 | Signing | None; README explains the macOS quarantine command | Apple signing needs a paid account |
-| PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN; fonts still come from Google Fonts and fall back to system fonts |
+| PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN |
+| Fonts (#21) | Latin subsets of Barlow, Barlow Condensed and IBM Plex Mono built into the binary (`assets/fonts`, about 180 KB); the page gets `@font-face` rules for `/fonts/…` in place of the Google Fonts link, which the template keeps for the published prototype | `--web` fully offline, no request to Google; Latin-only keeps the binary small (#22), other characters fall back to system fonts |
 | Line endings | `.gitattributes`: LF everywhere, PNG binary | Windows checkouts embedded CRLF copies of the page |
 | Package managers (0.1.1) | Homebrew tap `braveadmin/homebrew-tap` (formula pushed by the release workflow), crates.io `kube-city`; krew planned | One-command installs for macOS, Linux and Rust users; krew reaches kubectl users |
 | Archives | `.tar.gz` on Linux and macOS (was `.tar.xz`) | krew accepts only `.tar.gz` and `.zip` |

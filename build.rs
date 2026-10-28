@@ -1,8 +1,12 @@
 //! Embeds the Kenney sprites in `assets/kenney` for `--web`, under the short
 //! names the page uses: `buildingTiles_001.png` is "b001", `cityTiles_066.png`
-//! "c066", `cityDetails_010.png` "d010".
+//! "c066", `cityDetails_010.png` "d010". Also embeds the fonts in
+//! `assets/fonts` under their file names.
 
-use std::{env, fs, path::Path};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 fn main() {
     let root = Path::new(&env::var("CARGO_MANIFEST_DIR").expect("set by cargo")).join("assets/kenney");
@@ -29,6 +33,24 @@ fn main() {
          pub static SPRITES: &[(&str, &[u8])] = &[\n{}\n];\n",
         entries.join("\n")
     );
-    let out = Path::new(&env::var("OUT_DIR").expect("set by cargo")).join("sprites.rs");
-    fs::write(out, code).expect("cannot write sprites.rs");
+    let out = PathBuf::from(env::var("OUT_DIR").expect("set by cargo"));
+    fs::write(out.join("sprites.rs"), code).expect("cannot write sprites.rs");
+
+    let fonts = Path::new(&env::var("CARGO_MANIFEST_DIR").expect("set by cargo")).join("assets/fonts");
+    println!("cargo:rerun-if-changed=assets/fonts");
+    let mut entries = Vec::new();
+    for path in fs::read_dir(&fonts).expect("assets/fonts is missing").flatten().map(|file| file.path()) {
+        if let Some(name) = path.file_name().and_then(|name| name.to_str())
+            && name.ends_with(".woff2")
+        {
+            entries.push(format!("    ({name:?}, include_bytes!({:?})),", path.display().to_string()));
+        }
+    }
+    entries.sort();
+    let code = format!(
+        "/// Fonts (SIL Open Font License) by file name.\n\
+         pub static FONTS: &[(&str, &[u8])] = &[\n{}\n];\n",
+        entries.join("\n")
+    );
+    fs::write(out.join("fonts.rs"), code).expect("cannot write fonts.rs");
 }
