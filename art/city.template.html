@@ -1873,15 +1873,21 @@ app.ticker.add(() => {
 // It starts and ends on the whole city, so it loops; any pan, zoom or key
 // stops it. Targets are picked as each move starts, as the city keeps changing.
 
-const TOUR_LOOP = 15000;
+const TOUR_LOOP = 15000, TOUR_STREET = STREET * 1.7;
 const TOUR = [
   [0, () => fitCamera(true, 1200)],
-  [2500, t => { t.d = tourDistrict(); if (t.d) flyToDistrict(t.d, 1400); }],
-  [5000, t => { t.b = tourBuilding(t.d, null, l => l.fire) || tourBuilding(t.d, null, () => true); if (t.b) flyToBuilding(t.b, STREET * 1.7, 1400); }],
+  [2500, t => {
+    // Halfway (in scale) between the whole city and the street, whatever the
+    // size of the city or the district, so the three levels read as steps.
+    t.d = tourDistrict();
+    const s = clamp(Math.sqrt(cam.fit * TOUR_STREET), clusterLimit() * 1.1, STREET * 0.95);
+    if (t.d) flyTo(...iso(t.d.x + t.d.w / 2, t.d.y + t.d.h / 2), s, true, 1400);
+  }],
+  [5000, t => { t.b = tourBuilding(t.d, null, l => l.fire) || tourBuilding(t.d, null, () => true); if (t.b) flyToBuilding(t.b, TOUR_STREET, 1400); }],
   [8000, t => {
     const next = tourBuilding(t.d, t.b, l => l.cat === "build") || tourBuilding(null, t.b, l => l.cat === "build") ||
       tourBuilding(t.d, t.b, l => l.fire) || tourBuilding(t.d, t.b, () => true);
-    if (next) flyToBuilding(next, STREET * 1.7, 2200);
+    if (next) flyToBuilding(next, TOUR_STREET, 2200);
   }],
   [12500, () => fitCamera(true, 2000)],
 ];
