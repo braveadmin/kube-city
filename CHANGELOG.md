@@ -20,6 +20,9 @@
   road, instead of in rows: no more long straight roads across the whole
   city, blocks of their own proportions, main roads lined with trees,
   pocket parks, and cars that turn at junctions (#33).
+- Blocks are built along their streets first, with a green courtyard in the
+  middle; a namespace of more than about 50 workloads is a quarter of
+  several blocks with lanes between them, still one district (#34).
 
 ### Removed
 

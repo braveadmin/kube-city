@@ -3,23 +3,26 @@
 // city as a map of tiles, with a few numbers to compare layouts by. Only the
 // sizes of namespaces are used, so the output holds no names.
 //
-//   node art/layout_sketch.mjs recordings/big-cluster.jsonl [gap]
+//   node art/layout_sketch.mjs recordings/big-cluster.jsonl [gap] [--live]
 //
 // gap is the road width: 1 for the Kenney look (the default), 2 for Metropolis.
+// --live keeps spare lots for new workloads, as a live city does.
 //
-// Map: R main road, r road, + crossroads, s sidewalk, l lot, p spare lot, g pocket park.
+// Map: R main road, r road, + crossroads, s sidewalk, l lot, p courtyard (a
+// lot left over), g pocket park.
 
 import { readFileSync } from "node:fs";
 
-const [file, gapArg] = process.argv.slice(2);
-if (!file) { console.error("usage: node art/layout_sketch.mjs RECORDING.jsonl [gap]"); process.exit(2); }
+const args = process.argv.slice(2), live = args.includes("--live");
+const [file, gapArg] = args.filter(a => a !== "--live");
+if (!file) { console.error("usage: node art/layout_sketch.mjs RECORDING.jsonl [gap] [--live]"); process.exit(2); }
 const gap = Number(gapArg || 1);
 
 // The page's layout section, run as it is.
 const page = readFileSync(new URL("city.template.html", import.meta.url), "utf8");
 const MARK = "// ---------------------------------------------------------------- ";
 const from = page.indexOf(`${MARK}layout\n`), to = page.indexOf(MARK, from + MARK.length);
-const { planCity, roadTiles } = new Function(`${page.slice(from, to)}\nreturn { planCity, roadTiles };`)();
+const { planCity, roadTiles, lotsFor } = new Function(`${page.slice(from, to)}\nreturn { planCity, roadTiles, lotsFor };`)();
 
 // Workloads per namespace, as the page counts them: one building per workload.
 const workloads = new Map();
@@ -31,7 +34,7 @@ for (const line of readFileSync(file, "utf8").split("\n")) {
   workloads.get(p.namespace).add(`${p.kind}/${p.workload}`);
 }
 const sizes = [...workloads.values()].map(s => s.size);
-const needs = sizes.map((n, k) => ({ name: `ns-${String(k).padStart(3, "0")}`, n }));
+const needs = sizes.map((n, k) => ({ name: `ns-${String(k).padStart(3, "0")}`, n: lotsFor(n, live ? 0.3 : 0) }));
 
 const t0 = performance.now();
 const city = planCity(needs, gap);
@@ -42,12 +45,9 @@ const plan = { ...city, gap };
 const road = roadTiles(plan);
 const at = new Map();
 for (const [k, main] of road) at.set(k, main ? "R" : "r");
-city.blocks.forEach((b, k) => {
-  for (let j = b.y; j < b.y + b.h; j++) for (let i = b.x; i < b.x + b.w; i++) {
-    const ring = i === b.x || j === b.y || i === b.x + b.w - 1 || j === b.y + b.h - 1;
-    const lot = (j - b.y - 1) * b.cols + (i - b.x - 1);
-    at.set(`${i}/${j}`, ring ? "s" : lot < sizes[k] ? "l" : "p");
-  }
+city.districts.forEach((d, k) => {
+  for (const b of d.blocks) for (let j = b.y; j < b.y + b.h; j++) for (let i = b.x; i < b.x + b.w; i++) at.set(`${i}/${j}`, "s");
+  d.cells.forEach(([i, j], lot) => at.set(`${i}/${j}`, lot < sizes[k] ? "l" : "p"));
 });
 for (const p of city.parks) for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) at.set(`${i}/${j}`, "g");
 
@@ -80,5 +80,7 @@ const area = (city.W + 2 * gap) * (city.H + 2 * gap);
 console.log();
 console.log(`${needs.length} districts, ${buildings} buildings; city ${city.W} × ${city.H} inside the ring road; planned in ${ms.toFixed(1)} ms`);
 console.log(`tiles per building (ring road included): ${(area / buildings).toFixed(2)}`);
+const blocks = city.districts.reduce((s, d) => s + d.blocks.length, 0), lots = city.districts.reduce((s, d) => s + d.cells.length, 0);
 console.log(`roads: ${inner.length} cuts (${inner.filter(r => r.main).length} main), longest ${longest} tiles; pocket parks: ${city.parks.length}`);
+console.log(`blocks: ${blocks} (${city.districts.filter(d => d.blocks.length > 1).length} quarters); lots: ${lots}, ${(100 * buildings / lots).toFixed(0)} % built on`);
 if (gap === 1) console.log(`junctions: ${count.t} T, ${count.cross} crossroads, ${count.dead} dead ends`);

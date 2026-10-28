@@ -272,6 +272,23 @@ below, from a recording's sizes only).
 Land per building, ring road included, big recording: Kenney 3.14 today →
 2.96, Metropolis 4.05 → 3.92.
 
+Built (#34, 2026-10-28): `lotOrder()` and quarters in `planCity()`.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Lot order | Ring by ring from the street inwards, every block of a quarter before the next ring; each ring from the back corner along the long side, mirrored for a block standing on end | Spare lots end up as a courtyard in the middle; a 5 × 11 block puts a component where an 11 × 5 one does |
+| Courtyard | A district has lots for 1.25 × its workloads (live: the spare lots, 1.3 × + 1, already more); left-over lots are lawn with trees (Metropolis) or park tiles (Kenney) | The issue's land limit, and the live city's spare room reads as gardens instead of empty rows |
+| Quarters | Over 64 lots (about 50 workloads, not 40) a district is as many blocks as hold 64 lots each, cut like the city; the cuts are lanes (ordinary roads, never main) | 40 workloads with blocks of 50 lots gave 1.35 × the land; 64 lands on 1.25 × |
+| Shared lots | A quarter's blocks only need to hold its lots together, not a share each | Fixed shares left the lanes no room to dodge road ends: 150 random clusters with namespaces of up to 300 workloads had 650 crossroads, now 142 (master 51, with fewer roads) |
+| District | The rectangle round its blocks, lanes included, for the overlay, hover, labels and fly-to | One district, as the issue asks |
+
+Big recording, ring road included: land per building Kenney 2.96 → 3.70
+(1.25 ×), Metropolis 3.92 → 4.68 (1.19 ×); live 3.35 → 3.92 and 4.44 →
+5.26; 6 quarters, 33 blocks, 1 crossroads. Same-size namespaces that keep
+their landmark spots: 4 of 5 sizes (master 2 of 5 Kenney, 1 of 5
+Metropolis); the two 101-workload namespaces still get slots of different
+shapes, which only a block shape by size alone (and more parks) would fix.
+
 Found while sketching: today's layout already has mostly T-junctions (54
 against 3 crossroads), so the straight lines, not crossroads, are what
 reads as a grid. Water tiles in the Kenney City pack are not checked yet

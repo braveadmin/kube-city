@@ -557,85 +557,151 @@ function geometry(key, draw) {
 // The city is cut in two again and again, in proportion to the districts'
 // sizes, until every district has a slot of its own. Every cut is a road that
 // ends where it meets an earlier one, so only the first crosses the whole
-// city; the first cuts are main roads. Plain functions of the districts'
-// sizes: art/layout_sketch.mjs runs them outside the page.
+// city; the first cuts are main roads. A big district is cut the same way
+// into a quarter of blocks, with lanes between them. Plain functions of the
+// districts' sizes: art/layout_sketch.mjs runs them outside the page.
 
 const MAIN_DEPTH = 2;     // cuts this close to the first are main roads
 const LONG_BLOCK = 2.2;   // a block at most this many times as long as it is wide; the rest of a longer slot is a park
-const ROOM = 1.5;         // a block keeps lots for this many times its workloads before the rest of its slot is a park
+const ROOM = 1.5;         // a block keeps this many times the lots it needs before the rest of its slot is a park
 const NUDGE = 4;          // how far a cut may move from its share before it tries the other direction
 const SLACK = 2;          // how many tiles wider or longer the city may grow to do away with crossroads
+const YARD = 1.25;        // a district has lots for this many times its workloads; the ones left over are its courtyard
+const QUARTER = 64;       // a district with more lots than this (about 50 workloads) is a quarter of several blocks
 
-// The land a district of n lots takes at its nicest shape: lots, a ring of
+// The lots a district of n workloads keeps: room for a courtyard and, in a
+// live city, spare lots for new workloads (they make the courtyard too).
+function lotsFor(n, spare) {
+  return Math.max(1, Math.ceil(n * YARD), spare ? Math.ceil(n * (1 + spare)) + 1 : 0);
+}
+
+// The blocks of a district of n lots: as few as hold QUARTER lots each, all
+// about the same size.
+function piecesOf(n) {
+  const m = Math.ceil(n / QUARTER);
+  return Array.from({ length: m }, (_, k) => Math.floor((n + k) / m));
+}
+
+// The land a block of n lots takes at its nicest shape: lots, a ring of
 // sidewalk and its share of the roads.
 function blockArea(n, gap) {
   const cols = Math.max(2, Math.ceil(Math.sqrt(n * 1.15))), rows = Math.max(2, Math.ceil(n / cols));
   return (cols + 2 + gap) * (rows + 2 + gap);
 }
 
-// needs: [{ name, n }], n lots per district; gap: the width of a road.
-// Returns a block per district ({ x, y, w, h, cols, rows }, in tiles; the
-// lots are the cols × rows inside its sidewalk), the pocket parks, the roads
-// as centre lines ({ i0, j0, i1, j1, main }, the ring road included) and the
-// size of the land inside the ring road.
+// needs: [{ name, n }], n lots per district (see lotsFor); gap: the width of
+// a road. Returns per district its blocks ({ x, y, w, h }, in tiles, sidewalk
+// included), the rectangle around them and its lots in the order they are
+// handed out ([i, j], see lotOrder); the pocket parks; the roads as centre
+// lines ({ i0, j0, i1, j1, main }, the ring road and the lanes included) and
+// the size of the land inside the ring road.
 function planCity(needs, gap) {
-  if (!needs.length) return { blocks: [], parks: [], roads: [], W: 0, H: 0 };
+  if (!needs.length) return { districts: [], parks: [], roads: [], W: 0, H: 0 };
   // Each group of districts splits into two halves of about equal weight,
   // biggest district first into the lighter half, so big and small districts
   // mix instead of the small ones making a grid of their own.
   let ids = 0;
+  const weightOf = k => piecesOf(needs[k].n).reduce((s, n) => s + blockArea(n, gap), 0);
   function group(items) {
-    const g = { id: ids++, items, weight: items.reduce((s, k) => s + blockArea(needs[k].n, gap), 0) };
-    if (items.length > 1) {
-      const halves = [[], []], weight = [0, 0];
-      for (const k of items) {
-        const h = weight[0] <= weight[1] ? 0 : 1;
-        halves[h].push(k); weight[h] += blockArea(needs[k].n, gap);
-      }
-      // The heavier half goes first or second by turns, so the big
-      // districts do not all end up in one corner.
-      g.kids = (g.id % 2 ? halves.reverse() : halves).map(group);
+    if (items.length === 1) {
+      const k = items[0], n = needs[k].n, pieces = piecesOf(n), g = blocks(pieces);
+      // The least land the district can take: its lots, a sidewalk round
+      // every block and lanes between them.
+      return Object.assign(g, { district: k, n, least: g.kids ? n + 12 * g.m + 4 * gap * (g.m - 1) : leastBlock(n) });
     }
+    const g = { id: ids++, weight: items.reduce((s, k) => s + weightOf(k), 0) };
+    const halves = [[], []], weight = [0, 0];
+    for (const k of items) {
+      const h = weight[0] <= weight[1] ? 0 : 1;
+      halves[h].push(k); weight[h] += weightOf(k);
+    }
+    // The heavier half goes first or second by turns, so the big
+    // districts do not all end up in one corner.
+    g.kids = (g.id % 2 ? halves.reverse() : halves).map(group);
+    g.least = g.kids[0].least + g.kids[1].least + 4 * gap;
     return g;
+  }
+  // A district's blocks split in halves the same way; a leaf is one block.
+  // m is the number of blocks.
+  function blocks(pieces) {
+    const g = { id: ids++, weight: pieces.reduce((s, n) => s + blockArea(n, gap), 0), m: pieces.length };
+    if (pieces.length > 1) g.kids = [pieces.slice(0, pieces.length >> 1), pieces.slice(pieces.length >> 1)].map(blocks);
+    return g;
+  }
+  // The least land a block of n lots can take: a slot smaller than a
+  // group's least needs no search.
+  function leastBlock(n) {
+    let least = Infinity;
+    for (let c = 2; c <= Math.max(2, Math.ceil(n / 2)); c++) least = Math.min(least, (c + 2) * (Math.max(2, Math.ceil(n / c)) + 2));
+    return least;
   }
   const byWeight = needs.map((d, k) => k).sort((a, b) => needs[b].n - needs[a].n || needs[a].name.localeCompare(needs[b].name));
   const city = group(byWeight);
   const fitsBlock = (n, w, h) => w >= 4 && h >= 4 && (w - 2) * (h - 2) >= n;
-
-  // How a group fills a w × h slot, or null: the slot is cut across its
-  // longer side at the first half's share, or a little off it, or the other
-  // way. `only` keeps the cut to one direction: the halves of the city are
-  // cut across the first road, so that only it crosses the whole city.
-  const memo = new Map();
   const ways = (only, w, h) => only !== undefined ? [only] : w >= h ? [true, false] : [false, true];
+  // The slots either side of a cut, and the direction their own cuts must
+  // take: the halves of the city are cut across the first road, so that only
+  // it crosses the whole city.
+  const halvesOf = (g, w, h, t) => {
+    const next = g === city ? !t.across : undefined;
+    return t.across ? [[t.p, h, next], [t.len - t.p, h, next]] : [[w, t.p, next], [w, t.len - t.p, next]];
+  };
+  // Where a group may be cut: across the slot's longer side at the first
+  // half's share, then a little off it, then the same the other way.
+  function cuts(g, w, h, only, share) {
+    const options = [];
+    for (const across of ways(only, w, h)) {
+      const len = (across ? w : h) - gap, at = Math.round(len * share);
+      for (let k = 0; k <= 2 * NUDGE; k++) {
+        const p = at + (k % 2 ? (k + 1) / 2 : -k / 2);
+        if (p >= 4 && len - p >= 4) options.push({ across, len, p });
+      }
+    }
+    return options;
+  }
+
+  // How a group fills a w × h slot, or null.
+  const memo = new Map();
   function cut(g, w, h, only) {
     const key = `${g.id},${w},${h},${only}`;
     if (memo.has(key)) return memo.get(key);
+    if (w * h < g.least) return null;
     let found = null;
-    if (!g.kids) found = fitsBlock(needs[g.items[0]].n, w, h) ? { leaf: true } : null;
+    if (g.district !== undefined) found = (g.kids ? room(g, w, h, only) >= g.n : fitsBlock(g.n, w, h)) ? { leaf: true } : null;
     else {
-      const [g1, g2] = g.kids, share = g1.weight / g.weight;
-      const top = g === city;
-      for (const across of ways(only, w, h)) {
-        const len = (across ? w : h) - gap, side = across ? h : w, next = top ? !across : undefined;
-        const at = Math.round(len * share);
-        for (let k = 0; k <= 2 * NUDGE && !found; k++) {
-          const p = at + (k % 2 ? (k + 1) / 2 : -k / 2);
-          if (p < 4 || len - p < 4) continue;
-          const fit = across ? cut(g1, p, side, next) && cut(g2, len - p, side, next) : cut(g1, side, p, next) && cut(g2, side, len - p, next);
-          if (fit) found = { across, p };
-        }
-        if (found) break;
-      }
+      const [g1, g2] = g.kids;
+      found = cuts(g, w, h, only, g1.weight / g.weight).find(t => {
+        const [a, b] = halvesOf(g, w, h, t);
+        return cut(g1, ...a) && cut(g2, ...b);
+      }) || null;
     }
     memo.set(key, found);
     return found;
   }
+  // The most lots a quarter's blocks hold in a w × h slot (0: they do not
+  // fit). The blocks share the quarter's lots, so they only need to hold them
+  // together, which leaves the lanes room to keep clear of other roads. It
+  // depends only on the number of blocks, so quarters share the answers.
+  const rooms = new Map();
+  function room(g, w, h, only) {
+    if (!g.kids) return w >= 4 && h >= 4 ? (w - 2) * (h - 2) : 0;
+    const key = `${g.m},${w},${h},${only},${g === city}`;
+    if (rooms.has(key)) return rooms.get(key);
+    let most = 0;
+    for (const t of cuts(g, w, h, only, g.kids[0].m / g.m)) {
+      const [a, b] = halvesOf(g, w, h, t), r1 = room(g.kids[0], ...a), r2 = r1 && room(g.kids[1], ...b);
+      if (r1 && r2) most = Math.max(most, r1 + r2);
+    }
+    rooms.set(key, most);
+    return most;
+  }
 
   // Cuts the land for real. A cut may move a little, or turn, to keep clear
   // of where a road from the other side ends: that would make a crossroads.
+  // Cuts inside a district are its lanes; need is the lots a quarter's
+  // blocks in this slot must hold.
   function layout(W, H) {
-    const blocks = [], parks = [];
+    const districts = needs.map(() => ({ blocks: [] })), parks = [];
     const roads = [
       { i0: -gap / 2, j0: -gap / 2, i1: W + gap / 2, j1: -gap / 2 }, { i0: -gap / 2, j0: H + gap / 2, i1: W + gap / 2, j1: H + gap / 2 },
       { i0: -gap / 2, j0: -gap / 2, i1: -gap / 2, j1: H + gap / 2 }, { i0: W + gap / 2, j0: -gap / 2, i1: W + gap / 2, j1: H + gap / 2 },
@@ -643,17 +709,28 @@ function planCity(needs, gap) {
     const ends = new Set();
     const nearEnd = (i, j, di, dj) => [-1, 0, 1].some(k => ends.has(`${i + k * di},${j + k * dj}`));
     let crossroads = 0;
-    function place(g, x, y, w, h, depth, only) {
-      const c = cut(g, w, h, only);
-      if (c.leaf) { blocks[g.items[0]] = blockIn(needs[g.items[0]].n, x, y, w, h, parks); return; }
-      const [g1, g2] = g.kids, options = [];
-      for (const across of only !== undefined ? [only] : [c.across, !c.across]) {
-        const len = (across ? w : h) - gap, at = across === c.across ? c.p : Math.round(len * g1.weight / g.weight);
-        for (let k = 0; k <= 4; k++) options.push({ across, len, p: at + (k % 2 ? (k + 1) / 2 : -k / 2) });
+    function place(g, x, y, w, h, depth, only, inside, need) {
+      if (g.district !== undefined) { inside = g.district; need = g.n; }
+      if (!g.kids) { districts[inside].blocks.push(blockIn(need, x, y, w, h, parks)); return; }
+      const [g1, g2] = g.kids;
+      let options, fits;
+      if (inside !== undefined) {
+        options = cuts(g, w, h, only, g1.m / g.m);
+        fits = t => {
+          const [a, b] = halvesOf(g, w, h, t), r1 = room(g1, ...a), r2 = room(g2, ...b);
+          return r1 && r2 && r1 + r2 >= need;
+        };
+      } else {
+        // Where the search found room, or up to 2 tiles off it, or the same
+        // the other way.
+        const c = cut(g, w, h, only);
+        options = [];
+        for (const across of only !== undefined ? [only] : [c.across, !c.across]) {
+          const len = (across ? w : h) - gap, at = across === c.across ? c.p : Math.round(len * g1.weight / g.weight);
+          for (let k = 0; k <= 4; k++) options.push({ across, len, p: at + (k % 2 ? (k + 1) / 2 : -k / 2) });
+        }
+        fits = t => t.p >= 4 && t.len - t.p >= 4 && (([a, b]) => cut(g1, ...a) && cut(g2, ...b))(halvesOf(g, w, h, t));
       }
-      const next = t => (depth === 0 ? !t.across : undefined);
-      const fits = t => t.p >= 4 && t.len - t.p >= 4 &&
-        (t.across ? cut(g1, t.p, h, next(t)) && cut(g2, t.len - t.p, h, next(t)) : cut(g1, w, t.p, next(t)) && cut(g2, w, t.len - t.p, next(t)));
       const roadAt = t => t.across
         ? { i0: x + t.p + gap / 2, j0: y - gap / 2, i1: x + t.p + gap / 2, j1: y + h + gap / 2 }
         : { i0: x - gap / 2, j0: y + t.p + gap / 2, i1: x + w + gap / 2, j1: y + t.p + gap / 2 };
@@ -662,20 +739,32 @@ function planCity(needs, gap) {
         return !nearEnd(r.i0, r.j0, di, dj) && !nearEnd(r.i1, r.j1, di, dj);
       };
       let t = options.find(t => fits(t) && clear(t));
-      if (!t) { t = options[0]; crossroads++; }
-      const road = { ...roadAt(t), main: depth < MAIN_DEPTH };
+      if (!t) { t = options.find(fits); crossroads++; }
+      const road = { ...roadAt(t), main: inside === undefined && depth < MAIN_DEPTH };
       roads.push(road);
       ends.add(`${road.i0},${road.j0}`); ends.add(`${road.i1},${road.j1}`);
+      // A quarter's lots go to its halves by the room they have.
+      const [a, b] = halvesOf(g, w, h, t);
+      let n1, n2;
+      if (inside !== undefined) {
+        const r1 = room(g1, ...a), r2 = room(g2, ...b);
+        n1 = Math.min(r1, Math.max(need - r2, Math.round(need * r1 / (r1 + r2)))); n2 = need - n1;
+      }
       if (t.across) {
-        place(g1, x, y, t.p, h, depth + 1, next(t));
-        place(g2, x + t.p + gap, y, t.len - t.p, h, depth + 1, next(t));
+        place(g1, x, y, t.p, h, depth + 1, a[2], inside, n1);
+        place(g2, x + t.p + gap, y, t.len - t.p, h, depth + 1, b[2], inside, n2);
       } else {
-        place(g1, x, y, w, t.p, depth + 1, next(t));
-        place(g2, x, y + t.p + gap, w, t.len - t.p, depth + 1, next(t));
+        place(g1, x, y, w, t.p, depth + 1, a[2], inside, n1);
+        place(g2, x, y + t.p + gap, w, t.len - t.p, depth + 1, b[2], inside, n2);
       }
     }
     place(city, 0, 0, W, H, 0);
-    return { blocks, parks, roads, W, H, crossroads };
+    for (const d of districts) {
+      const x = Math.min(...d.blocks.map(b => b.x)), y = Math.min(...d.blocks.map(b => b.y));
+      const w = Math.max(...d.blocks.map(b => b.x + b.w)) - x, h = Math.max(...d.blocks.map(b => b.y + b.h)) - y;
+      Object.assign(d, { x, y, w, h, cells: lotOrder(d.blocks) });
+    }
+    return { districts, parks, roads, W, H, crossroads };
   }
 
   // The smallest city, square at first, that every district fits into; a
@@ -703,7 +792,30 @@ function blockIn(n, x, y, w, h, parks) {
   if (long - size < 3) size = long;   // no strips of park one or two tiles wide
   if (size < long) parks.push(across ? { x: x + size, y, w: w - size, h } : { x, y: y + size, w, h: h - size });
   const [bw, bh] = across ? [size, h] : [w, size];
-  return { x, y, w: bw, h: bh, cols: bw - 2, rows: bh - 2 };
+  return { x, y, w: bw, h: bh };
+}
+
+// A district's lots in the order they are handed out: the ring of lots along
+// the street first, in every block, from its back corner along its long side;
+// then the next ring in, and so on. The lots left over make a courtyard in the
+// middle. A block standing on end gets its lots mirrored, so a component sits
+// in the same spot of a block of the same shape either way. [i, j] is a lot's
+// tile.
+function lotOrder(blocks) {
+  const lots = [];
+  blocks.forEach((b, k) => {
+    const across = b.w >= b.h, long = (across ? b.w : b.h) - 2, short = (across ? b.h : b.w) - 2;
+    for (let t = 0; 2 * t < short; t++) {
+      const u0 = t, v0 = t, u1 = long - 1 - t, v1 = short - 1 - t, ring = [];
+      for (let u = u0; u <= u1; u++) ring.push([u, v0]);
+      for (let v = v0 + 1; v <= v1; v++) ring.push([u1, v]);
+      if (v1 > v0) for (let u = u1 - 1; u >= u0; u--) ring.push([u, v1]);
+      if (u1 > u0) for (let v = v1 - 1; v > v0; v--) ring.push([u0, v]);
+      ring.forEach(([u, v], at) => lots.push({ t, k, at, i: b.x + 1 + (across ? u : v), j: b.y + 1 + (across ? v : u) }));
+    }
+  });
+  lots.sort((a, b) => a.t - b.t || a.k - b.k || a.at - b.at);
+  return lots.map(l => [l.i, l.j]);
 }
 
 // Every road tile, key "i/j", with whether it belongs to a main road. Roads
@@ -748,16 +860,16 @@ function registerBatch(events) {
     const lots = registry[ns] ||= new Map();
     lots.set(wl, lots.size);
     const d = world.districts[ns];
-    if (!d || lots.size > d.cols * d.rows) planDirty = true;
+    if (!d || lots.size > d.cells.length) planDirty = true;
   }
 }
 
 function planDistricts() {
-  const needs = DATA.ns.map((name, idx) => ({ name, n: Math.max(1, Math.ceil((registry[idx] || new Map()).size * (1 + SPARE)) + (SPARE ? 1 : 0)) }));
+  const needs = DATA.ns.map((name, idx) => ({ name, n: lotsFor((registry[idx] || new Map()).size, SPARE) }));
   const city = planCity(needs, theme.gap);
   const districts = DATA.ns.map((name, idx) => {
     const branch = /^(feature|bugfix)-/.test(name);
-    return { idx, name, branch, ...city.blocks[idx], lots: registry[idx] || new Map(), stats: null, health: "ok" };
+    return { idx, name, branch, ...city.districts[idx], lots: registry[idx] || new Map(), stats: null, health: "ok" };
   });
   return { districts, parks: city.parks, roads: city.roads, W: city.W, H: city.H, gap: theme.gap };
 }
@@ -765,8 +877,8 @@ function planDistricts() {
 
 function lotOf(building) {
   const d = world.districts[building.ns];
-  const k = d.lots.get(building.wl);
-  return { i: d.x + 1 + (k % d.cols) + 0.5, j: d.y + 1 + Math.floor(k / d.cols) + 0.5 };
+  const [i, j] = d.cells[d.lots.get(building.wl)];
+  return { i: i + 0.5, j: j + 0.5 };
 }
 
 function variantOf(name, kind) {
@@ -849,7 +961,7 @@ function laneMarkings(g) {
 // (di, dj) pointing at the road.
 function avenueSpots() {
   const road = roadTiles(plan), spots = [];
-  for (const d of plan.districts) {
+  for (const d of plan.districts.flatMap(d => d.blocks)) {
     for (let j = d.y; j < d.y + d.h; j++) for (let i = d.x; i < d.x + d.w; i++) {
       const corner = (i === d.x || i === d.x + d.w - 1) && (j === d.y || j === d.y + d.h - 1);
       if (corner) continue;
@@ -891,16 +1003,19 @@ function drawGround() {
   poly(g, ART.asphalt, base);
   laneMarkings(g);
   for (const d of plan.districts) {
-    // Kerb, sidewalk, then lawn or plaza with a pad on every lot.
-    const s = rect(d.x, d.y, d.w, d.h);
-    poly(g, shade(ART.sidewalk, 0.72), [s[3], s[2], [s[2][0], s[2][1] + 3], [s[3][0], s[3][1] + 3]]);
-    poly(g, shade(ART.sidewalk, 0.6), [s[2], s[1], [s[1][0], s[1][1] + 3], [s[2][0], s[2][1] + 3]]);
-    poly(g, ART.sidewalk, s);
-    poly(g, d.branch ? ART.lawn : ART.plaza, rect(d.x + 0.4, d.y + 0.4, d.w - 0.8, d.h - 0.8));
-    for (let k = 0; k < d.cols * d.rows; k++) {
-      const i = d.x + 1 + (k % d.cols), j = d.y + 1 + Math.floor(k / d.cols);
-      if (k < d.lots.size) poly(g, d.branch ? shade(ART.lawn, 0.9) : ART.lot, rect(i + 0.06, j + 0.06, 0.88, 0.88));
+    // Kerb, sidewalk, then lawn or plaza with a pad on every lot; the
+    // courtyard is lawn.
+    for (const b of d.blocks) {
+      const s = rect(b.x, b.y, b.w, b.h);
+      poly(g, shade(ART.sidewalk, 0.72), [s[3], s[2], [s[2][0], s[2][1] + 3], [s[3][0], s[3][1] + 3]]);
+      poly(g, shade(ART.sidewalk, 0.6), [s[2], s[1], [s[1][0], s[1][1] + 3], [s[2][0], s[2][1] + 3]]);
+      poly(g, ART.sidewalk, s);
+      poly(g, d.branch ? ART.lawn : ART.plaza, rect(b.x + 0.4, b.y + 0.4, b.w - 0.8, b.h - 0.8));
     }
+    d.cells.forEach(([i, j], k) => {
+      if (k < d.lots.size) poly(g, d.branch ? shade(ART.lawn, 0.9) : ART.lot, rect(i + 0.06, j + 0.06, 0.88, 0.88));
+      else if (!d.branch) poly(g, ART.lawn, rect(i, j, 1, 1));
+    });
   }
   for (const p of plan.parks) {
     const s = rect(p.x, p.y, p.w, p.h);
@@ -913,7 +1028,7 @@ function drawGround() {
   // Trees on the empty lots, in the parks and along the main roads.
   const spots = [];
   for (const d of plan.districts) {
-    for (let k = d.lots.size; k < d.cols * d.rows; k++) spots.push([d.x + 1 + (k % d.cols) + 0.5, d.y + 1 + Math.floor(k / d.cols) + 0.5, 1.1, d.idx * 100 + k]);
+    for (let k = d.lots.size; k < d.cells.length; k++) spots.push([d.cells[k][0] + 0.5, d.cells[k][1] + 0.5, 1.1, d.idx * 100 + k]);
   }
   for (const p of plan.parks) for (const [i, j] of parkTrees(p)) spots.push([i + 0.5, j + 0.5, 1.1, hash(`${i}/${j}`)]);
   for (const [i, j, di, dj] of avenueSpots()) spots.push([i + 0.5 + di * 0.3, j + 0.5 + dj * 0.3, 0.75, hash(`${i}/${j}/${di}/${dj}`)]);
@@ -1172,22 +1287,23 @@ const KENNEY = {
     const isRoad = (i, j) => road.has(`${i}/${j}`);
     const joins = (i, j) => (isRoad(i, j - 1) ? 1 : 0) | (isRoad(i + 1, j) ? 2 : 0) | (isRoad(i, j + 1) ? 4 : 0) | (isRoad(i - 1, j) ? 8 : 0);
     const junction = (i, j) => isRoad(i, j) && [1, 2, 4, 8].filter(b => joins(i, j) & b).length > 2;
+    // Blocks are sidewalk with lots inside, courtyards and pocket parks green.
+    const land = new Map();
+    const green = (i, j) => land.set(`${i}/${j}`, pick(KIT.parks, hash(`${i}/${j}`), 0));
+    for (const d of plan.districts) {
+      for (const b of d.blocks) for (let j = b.y; j < b.y + b.h; j++) for (let i = b.x; i < b.x + b.w; i++) land.set(`${i}/${j}`, KIT.sidewalk);
+      d.cells.forEach(([i, j], k) => (k < d.lots.size ? land.set(`${i}/${j}`, KIT.lot) : green(i, j)));
+    }
+    for (const p of plan.parks) for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) green(i, j);
     const tiles = [];
     for (let j = -m; j < H + m; j++) for (let i = -m; i < W + m; i++) {
-      const d = plan.districts.find(d => i >= d.x && i < d.x + d.w && j >= d.y && j < d.y + d.h);
-      const park = !d && plan.parks.some(p => i >= p.x && i < p.x + p.w && j >= p.y && j < p.y + p.h);
-      let name;
-      if (park) name = pick(KIT.parks, hash(`${i}/${j}`), 0);
-      else if (d) {
-        const ring = i === d.x || j === d.y || i === d.x + d.w - 1 || j === d.y + d.h - 1;
-        const k = (j - d.y - 1) * d.cols + (i - d.x - 1);
-        name = ring ? KIT.sidewalk : k < d.lots.size ? KIT.lot : pick(KIT.parks, hash(`${i}/${j}`), 0);
-      } else if (isRoad(i, j)) {
+      let name = land.get(`${i}/${j}`);
+      if (!name && isRoad(i, j)) {
         // A zebra crossing on the straight next to every junction.
         const n = joins(i, j);
         const crossing = (n === 5 && (junction(i, j - 1) || junction(i, j + 1))) || (n === 10 && (junction(i - 1, j) || junction(i + 1, j)));
         name = (crossing ? KIT.crossings[n] : KIT.roads[n]) || KIT.road;
-      } else {
+      } else if (!name) {
         name = pick(KIT.plaza, hash(`${i}/${j}`), 0);
       }
       tiles.push([i, j, name]);
@@ -1197,7 +1313,7 @@ const KENNEY = {
       const t = tileSprite(name); t.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(t);
     }
     // Lamps on the corners of every block, trees along the main roads and in the parks.
-    for (const d of plan.districts) {
+    for (const d of plan.districts.flatMap(d => d.blocks)) {
       for (const [i, j] of [[d.x, d.y], [d.x + d.w - 1, d.y], [d.x, d.y + d.h - 1], [d.x + d.w - 1, d.y + d.h - 1]])
         addScenery(ksprite(KIT.lamp, 0.5, 0.95), i + 0.5, j + 0.5);
     }
