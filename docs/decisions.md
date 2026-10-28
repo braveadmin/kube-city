@@ -81,7 +81,9 @@ direction before building a `--web` server.
   other namespaces"), search with rings on every match, focus mode, a
   "needs attention" list that flies to each problem, replay of the
   recording, toggles for finished jobs and simulated restarts and crashes.
-- Deep links: `#district`, `#street` or `#<namespace>`.
+- Deep links: `#district`, `#street` or `#<namespace>`; `#tour` plays a
+  15 s camera loop (whole city, district, a fire, a building site) for the
+  README GIF (`art/make_gif.sh`).
 - **Two looks** behind a switch in the header (Kenney by default, remembered
   per browser; `#metropolis.<deep link>` or `#kenney.<deep link>` picks one):
   - Metropolis: the vector art above.

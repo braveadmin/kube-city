@@ -1239,17 +1239,17 @@ function fitScale() {
   const [vw, vh] = viewSize();
   return Math.min((vw - inspectorWidth()) / (bounds.r - bounds.l), vh / (bounds.b - bounds.t)) * 0.94;
 }
-function fitCamera(animate) {
+function fitCamera(animate, dur) {
   const s = fitScale();
   cam.fit = s; cam.min = s * 0.55;
   const x = (bounds.l + bounds.r) / 2 + (inspectorWidth() / 2) / s, y = (bounds.t + bounds.b) / 2;
-  flyTo(x, y, s, animate);
+  flyTo(x, y, s, animate, dur);
 }
-function flyTo(x, y, s, animate = true) {
+function flyTo(x, y, s, animate = true, dur = 700) {
   s = clamp(s, cam.min, cam.max);
   if (animate) cam.moved = true;
   if (!animate || reducedMotion) { cam.x = x; cam.y = y; cam.s = s; cam.fly = null; cam.dirty = true; return; }
-  cam.fly = { from: { x: cam.x, y: cam.y, s: cam.s }, to: { x, y, s }, t0: performance.now(), dur: 700 };
+  cam.fly = { from: { x: cam.x, y: cam.y, s: cam.s }, to: { x, y, s }, t0: performance.now(), dur };
 }
 const s2w = (sx, sy) => { const [vw, vh] = viewSize(); return [(sx - vw / 2) / cam.s + cam.x, (sy - vh / 2) / cam.s + cam.y]; };
 const w2s = (wx, wy) => { const [vw, vh] = viewSize(); return [(wx - cam.x) * cam.s + vw / 2, (wy - cam.y) * cam.s + vh / 2]; };
@@ -1282,6 +1282,7 @@ let drag = null, hover = null, selected = null, pinch = null;
 const tip = document.getElementById("tip");
 
 sceneEl.addEventListener("pointerdown", (e) => {
+  tour = null;
   sceneEl.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
   if (pointers.size === 1) drag = { x: e.offsetX, y: e.offsetY, cx: cam.x, cy: cam.y, moved: false };
@@ -1316,6 +1317,7 @@ sceneEl.addEventListener("pointercancel", endPointer);
 sceneEl.addEventListener("pointerleave", () => { hover = null; tip.hidden = true; });
 sceneEl.addEventListener("wheel", (e) => {
   e.preventDefault();
+  tour = null;
   const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
   zoomAt(e.offsetX, e.offsetY, Math.exp(-dy * 0.0015));
 }, { passive: false });
@@ -1360,17 +1362,17 @@ function click(sx, sy) {
   if (d && level === "cluster") { flyToDistrict(d); return; }
   if (!d) select(null);
 }
-function flyToDistrict(d) {
+function flyToDistrict(d, dur) {
   const [x, y] = iso(d.x + d.w / 2, d.y + d.h / 2);
   const [vw, vh] = viewSize();
   const span = (d.w + d.h) * TW / 2;
   const s = clamp(Math.min((vw - inspectorWidth()) / span, vh / (span / 2 + 80)) * 0.8, clusterLimit() * 1.2, 2.2);
-  flyTo(x + (inspectorWidth() / 2) / s, y - 20, s);
+  flyTo(x + (inspectorWidth() / 2) / s, y - 20, s, true, dur);
 }
-function flyToBuilding(b, s) {
+function flyToBuilding(b, s, dur) {
   const [x, y] = iso(b.lot.i, b.lot.j);
   const scale = s || Math.max(cam.s, STREET * 1.35);
-  flyTo(x + (inspectorWidth() / 2) / scale, y - b.top / 2, scale);
+  flyTo(x + (inspectorWidth() / 2) / scale, y - b.top / 2, scale, true, dur);
 }
 
 addEventListener("keydown", (e) => {
@@ -1385,7 +1387,7 @@ addEventListener("keydown", (e) => {
     i: () => setPanel(inspectorEl.classList.contains("collapsed")),
     Escape: () => { select(null); setQuery(""); },
   };
-  if (keys[e.key]) { e.preventDefault(); cam.fly = null; cam.moved = true; keys[e.key](); cam.dirty = true; }
+  if (keys[e.key]) { e.preventDefault(); tour = null; cam.fly = null; cam.moved = true; keys[e.key](); cam.dirty = true; }
 });
 
 // ---------------------------------------------------------------- toolbar
@@ -1732,6 +1734,7 @@ app.ticker.add(() => {
     clockFill.style.width = `${(shownT / Math.max(1, replay.end)) * 100}%`;
   }
   simulate(now);
+  playTour(now);
 
   if (planDirty) replan();
   if (dirty.size) {
@@ -1864,6 +1867,59 @@ app.ticker.add(() => {
   if (panelDirty && now - panelAt > 250) { panelAt = now; renderPanel(); }
 });
 
+// ---------------------------------------------------------------- tour (#tour)
+// A fixed 15 s camera path for the README GIF (art/make_gif.sh): the whole
+// city, a district, a fire at street level, a building site, and back out.
+// It starts and ends on the whole city, so it loops; any pan, zoom or key
+// stops it. Targets are picked as each move starts, as the city keeps changing.
+
+const TOUR_LOOP = 15000;
+const TOUR = [
+  [0, () => fitCamera(true, 1200)],
+  [2500, t => { t.d = tourDistrict(); if (t.d) flyToDistrict(t.d, 1400); }],
+  [5000, t => { t.b = tourBuilding(t.d, null, l => l.fire) || tourBuilding(t.d, null, () => true); if (t.b) flyToBuilding(t.b, STREET * 1.7, 1400); }],
+  [8000, t => {
+    const next = tourBuilding(t.d, t.b, l => l.cat === "build") || tourBuilding(null, t.b, l => l.cat === "build") ||
+      tourBuilding(t.d, t.b, l => l.fire) || tourBuilding(t.d, t.b, () => true);
+    if (next) flyToBuilding(next, STREET * 1.7, 2200);
+  }],
+  [12500, () => fitCamera(true, 2000)],
+];
+let tour = null;
+function startTour() {
+  setPanel(false, false);
+  tour = { t0: performance.now(), step: -1, d: null, b: null };
+}
+function playTour(now) {
+  if (!tour) return;
+  const t = (now - tour.t0) % TOUR_LOOP;
+  const step = TOUR.findLastIndex(([at]) => at <= t);
+  if (step === tour.step) return;
+  tour.step = step;
+  TOUR[step][1](tour);
+}
+// The district with the most going on: fires first, then building sites, then size.
+function tourDistrict() {
+  const score = new Map(world.districts.map(d => [d, d.lots.size / 100]));
+  for (const b of world.buildings.values()) {
+    if (!b.view || !b.look) continue;
+    const d = world.districts[b.ns];
+    score.set(d, score.get(d) + (b.look.fire ? 10 : 0) + (b.look.cat === "build" ? 4 : 0));
+  }
+  const best = [...score].reduce((a, c) => (!a || c[1] > a[1] ? c : a), null);
+  return best && best[0];
+}
+// The building nearest `from` (or any) that matches; in district `d` if given.
+function tourBuilding(d, from, wanted) {
+  let best = null, bestDist = Infinity;
+  for (const b of world.buildings.values()) {
+    if (!b.view || !b.look || b === from || (d && world.districts[b.ns] !== d) || !wanted(b.look)) continue;
+    const dist = from ? Math.hypot(b.lot.i - from.lot.i, b.lot.j - from.lot.j) : 0;
+    if (dist < bestDist) { best = b; bestDist = dist; }
+  }
+  return best;
+}
+
 // ---------------------------------------------------------------- cars
 
 const cars = [];
@@ -1914,8 +1970,8 @@ else lookSelect.querySelector('[value="kenney"]').remove();
 document.getElementById("look-pick").hidden = lookSelect.options.length < 2;
 
 // #district and #street open the biggest branch namespace at that zoom;
-// a namespace name opens that namespace at street zoom. A "kenney." prefix
-// picks the Kenney look.
+// a namespace name opens that namespace at street zoom; #tour plays the
+// camera tour below. A "kenney." prefix picks the Kenney look.
 let deep = decodeURIComponent(location.hash.slice(1));
 let initialLook = KENNEY_SPRITES ? "kenney" : "metropolis";
 try { initialLook = localStorage.getItem("kube-city-look") || initialLook; } catch { /* no storage */ }
@@ -1924,6 +1980,11 @@ if (/^(kenney|metropolis)(\.|$)/.test(deep)) { initialLook = deep.split(".")[0];
 // Applies the deep link once its target exists; true when done.
 function applyDeepLink() {
   if (!deep) return true;
+  if (deep === "tour") {
+    if (!world.districts.some(d => d.lots.size)) return false;
+    startTour(); deep = "";
+    return true;
+  }
   const named = world.districts.find(d => d.name === deep);
   if (!named && deep !== "district" && deep !== "street") return false;
   const d = named || [...world.districts].sort((a, b) => (b.branch - a.branch) || (b.lots.size - a.lots.size))[0];
