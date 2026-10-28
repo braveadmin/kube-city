@@ -21,6 +21,13 @@ Browser prototype from a recording (anonymised, writes `art/out/city.html`):
 python3 art/web_prototype.py recordings/big-cluster.jsonl art/out
 ```
 
+The city's layout as a map of tiles, with land per building and junction
+counts (sizes only, no names; `2` for Metropolis's road width):
+
+```bash
+node art/layout_sketch.mjs recordings/big-cluster.jsonl [2]
+```
+
 Kenney sprites (CC0) live in `assets/kenney/`; see its README to add more.
 
 ## Layout

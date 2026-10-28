@@ -16,6 +16,11 @@
 - The city appears sooner: the sprites come inside the page instead of in
   144 requests, and a live city connects while the sprites load (#22).
 
+- The city is laid out by cutting it in two again and again, each cut a
+  road, instead of in rows: no more long straight roads across the whole
+  city, blocks of their own proportions, main roads lined with trees,
+  pocket parks, and cars that turn at junctions (#33).
+
 ### Removed
 
 - The terminal view (`--tui`), deprecated since 0.2.0, with `--fps` and

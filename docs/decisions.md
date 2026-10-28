@@ -147,9 +147,10 @@ direction before building a `--web` server.
 - The page plans lots incrementally: a workload keeps its first lot; a batch
   of new workloads is sorted by kind and name first (landmarks); live
   districts keep 30 % spare lots plus one, and the city re-packs only when a
-  district overflows or a namespace appears. Districts are shelf-packed
-  tallest first (the platform/branch split left large empty areas on small
-  clusters).
+  district overflows or a namespace appears. Districts were shelf-packed
+  tallest first until #33 (the platform/branch split left large empty areas
+  on small clusters); now the city is cut by roads, see "A more natural
+  city".
 - Live mode hides replay and simulated changes; the header shows the source
   status ("my-cluster · live"); the page reconnects with backoff.
 - Opening the browser: `wslview` or `explorer.exe` under WSL, `open` on
@@ -252,6 +253,24 @@ and the cluster overlay keep working.
 | Edge | No ring road; edge blocks give back the rows they do not need (#35) | A town should thin out, not end in a rectangle |
 | River | A river cut through town with bridges (#37) | Owner's pick among the ingredients |
 | Zones | Centre, industry, suburbs by namespace (#36); with #47 this decides where quarters sit | Open: by name, by content, or both |
+
+Built (#33, 2026-10-28): `planCity()` in the page's layout section, run
+outside the page by `art/layout_sketch.mjs` (a map of tiles and the numbers
+below, from a recording's sizes only).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Halves | Each group splits into two halves of about equal weight, biggest district first into the lighter half; the heavier half goes first or second by turns | Biggest-first ranges put every small namespace together, where their 4 × 4 blocks made a little grid with crossroads |
+| Weight | A district's block at its nicest shape plus its share of roads | Without the roads small districts came out too big |
+| Cuts | Across the slot's longer side at the half's share; up to 4 tiles off it, then the other way; the city grows a tile at a time, square at first, until everything fits | Feasibility is memoised per group and slot size, about 15–40 ms on the big recording, under 100 ms with 120 namespaces |
+| Crossings | A cut moves up to 2 tiles, or turns, to keep clear of a road ending on the other side; if crossroads remain the city may grow up to 2 tiles to lose them | Big recording: 50 T-junctions, 1 crossroads (sketch 48 and 2) |
+| First cut | The only road across the whole city: the two cuts after it run across it | Otherwise the second cut on one side can run the city's full length too |
+| Main roads | The first three cuts; trees on every sidewalk tile beside them (both looks), dashes down the middle in Metropolis; lanes have no trees or dashes | The issue's "for example lined with trees"; the old front-kerb trees on every block would blur the difference |
+| Blocks | The whole slot, unless that makes a block longer than 2.2 × its width or gives it more than 1.5 × the lots it needs; then the far end of the slot becomes a pocket park (never one only 1–2 tiles wide) | "A long, thin slot keeps a block of sensible shape" |
+| Cars | Drive the road network on the right-hand lane, turning at random at junctions | Roads no longer run edge to edge, so wrapping around the city no longer works |
+
+Land per building, ring road included, big recording: Kenney 3.14 today →
+2.96, Metropolis 4.05 → 3.92.
 
 Found while sketching: today's layout already has mostly T-junctions (54
 against 3 crossroads), so the straight lines, not crossroads, are what

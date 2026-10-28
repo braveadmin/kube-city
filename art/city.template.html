@@ -525,10 +525,17 @@ function tree(g, x, y, s, seed) {
   g.beginFill(shade(green, 1.18)); g.drawCircle(px - 2, py - 16 * s, 2.5 * s); g.endFill();
 }
 
-function car(g, color) {
-  shadedBox(g, 0, 0, 0.17, 0.08, 5, color, 1);
-  shadedBox(g, -0.02, 0, 0.08, 0.07, 3.5, shade(color, 1.05), 6);
-  poly(g, 0x2c3a46, [P(0.06, 0.07, 6.2), P(0.06, -0.07, 6.2), P(0.06, -0.07, 9), P(0.06, 0.07, 9)]);
+// A car along i, or along j when `turned`.
+function car(g, color, turned = false) {
+  const Q = turned ? (a, b, z) => P(b, a, z) : P;
+  if (turned) {
+    shadedBox(g, 0, 0, 0.08, 0.17, 5, color, 1);
+    shadedBox(g, 0, -0.02, 0.07, 0.08, 3.5, shade(color, 1.05), 6);
+  } else {
+    shadedBox(g, 0, 0, 0.17, 0.08, 5, color, 1);
+    shadedBox(g, -0.02, 0, 0.08, 0.07, 3.5, shade(color, 1.05), 6);
+  }
+  poly(g, 0x2c3a46, [Q(0.06, 0.07, 6.2), Q(0.06, -0.07, 6.2), Q(0.06, -0.07, 9), Q(0.06, 0.07, 9)]);
 }
 
 function flame(g) {
@@ -544,6 +551,173 @@ function geometry(key, draw) {
     GEOMETRY.set(key, { geometry: g.geometry, template: g, top });
   }
   return GEOMETRY.get(key);
+}
+
+// ---------------------------------------------------------------- layout
+// The city is cut in two again and again, in proportion to the districts'
+// sizes, until every district has a slot of its own. Every cut is a road that
+// ends where it meets an earlier one, so only the first crosses the whole
+// city; the first cuts are main roads. Plain functions of the districts'
+// sizes: art/layout_sketch.mjs runs them outside the page.
+
+const MAIN_DEPTH = 2;     // cuts this close to the first are main roads
+const LONG_BLOCK = 2.2;   // a block at most this many times as long as it is wide; the rest of a longer slot is a park
+const ROOM = 1.5;         // a block keeps lots for this many times its workloads before the rest of its slot is a park
+const NUDGE = 4;          // how far a cut may move from its share before it tries the other direction
+const SLACK = 2;          // how many tiles wider or longer the city may grow to do away with crossroads
+
+// The land a district of n lots takes at its nicest shape: lots, a ring of
+// sidewalk and its share of the roads.
+function blockArea(n, gap) {
+  const cols = Math.max(2, Math.ceil(Math.sqrt(n * 1.15))), rows = Math.max(2, Math.ceil(n / cols));
+  return (cols + 2 + gap) * (rows + 2 + gap);
+}
+
+// needs: [{ name, n }], n lots per district; gap: the width of a road.
+// Returns a block per district ({ x, y, w, h, cols, rows }, in tiles; the
+// lots are the cols × rows inside its sidewalk), the pocket parks, the roads
+// as centre lines ({ i0, j0, i1, j1, main }, the ring road included) and the
+// size of the land inside the ring road.
+function planCity(needs, gap) {
+  if (!needs.length) return { blocks: [], parks: [], roads: [], W: 0, H: 0 };
+  // Each group of districts splits into two halves of about equal weight,
+  // biggest district first into the lighter half, so big and small districts
+  // mix instead of the small ones making a grid of their own.
+  let ids = 0;
+  function group(items) {
+    const g = { id: ids++, items, weight: items.reduce((s, k) => s + blockArea(needs[k].n, gap), 0) };
+    if (items.length > 1) {
+      const halves = [[], []], weight = [0, 0];
+      for (const k of items) {
+        const h = weight[0] <= weight[1] ? 0 : 1;
+        halves[h].push(k); weight[h] += blockArea(needs[k].n, gap);
+      }
+      // The heavier half goes first or second by turns, so the big
+      // districts do not all end up in one corner.
+      g.kids = (g.id % 2 ? halves.reverse() : halves).map(group);
+    }
+    return g;
+  }
+  const byWeight = needs.map((d, k) => k).sort((a, b) => needs[b].n - needs[a].n || needs[a].name.localeCompare(needs[b].name));
+  const city = group(byWeight);
+  const fitsBlock = (n, w, h) => w >= 4 && h >= 4 && (w - 2) * (h - 2) >= n;
+
+  // How a group fills a w × h slot, or null: the slot is cut across its
+  // longer side at the first half's share, or a little off it, or the other
+  // way. `only` keeps the cut to one direction: the halves of the city are
+  // cut across the first road, so that only it crosses the whole city.
+  const memo = new Map();
+  const ways = (only, w, h) => only !== undefined ? [only] : w >= h ? [true, false] : [false, true];
+  function cut(g, w, h, only) {
+    const key = `${g.id},${w},${h},${only}`;
+    if (memo.has(key)) return memo.get(key);
+    let found = null;
+    if (!g.kids) found = fitsBlock(needs[g.items[0]].n, w, h) ? { leaf: true } : null;
+    else {
+      const [g1, g2] = g.kids, share = g1.weight / g.weight;
+      const top = g === city;
+      for (const across of ways(only, w, h)) {
+        const len = (across ? w : h) - gap, side = across ? h : w, next = top ? !across : undefined;
+        const at = Math.round(len * share);
+        for (let k = 0; k <= 2 * NUDGE && !found; k++) {
+          const p = at + (k % 2 ? (k + 1) / 2 : -k / 2);
+          if (p < 4 || len - p < 4) continue;
+          const fit = across ? cut(g1, p, side, next) && cut(g2, len - p, side, next) : cut(g1, side, p, next) && cut(g2, side, len - p, next);
+          if (fit) found = { across, p };
+        }
+        if (found) break;
+      }
+    }
+    memo.set(key, found);
+    return found;
+  }
+
+  // Cuts the land for real. A cut may move a little, or turn, to keep clear
+  // of where a road from the other side ends: that would make a crossroads.
+  function layout(W, H) {
+    const blocks = [], parks = [];
+    const roads = [
+      { i0: -gap / 2, j0: -gap / 2, i1: W + gap / 2, j1: -gap / 2 }, { i0: -gap / 2, j0: H + gap / 2, i1: W + gap / 2, j1: H + gap / 2 },
+      { i0: -gap / 2, j0: -gap / 2, i1: -gap / 2, j1: H + gap / 2 }, { i0: W + gap / 2, j0: -gap / 2, i1: W + gap / 2, j1: H + gap / 2 },
+    ].map(r => ({ ...r, main: false }));
+    const ends = new Set();
+    const nearEnd = (i, j, di, dj) => [-1, 0, 1].some(k => ends.has(`${i + k * di},${j + k * dj}`));
+    let crossroads = 0;
+    function place(g, x, y, w, h, depth, only) {
+      const c = cut(g, w, h, only);
+      if (c.leaf) { blocks[g.items[0]] = blockIn(needs[g.items[0]].n, x, y, w, h, parks); return; }
+      const [g1, g2] = g.kids, options = [];
+      for (const across of only !== undefined ? [only] : [c.across, !c.across]) {
+        const len = (across ? w : h) - gap, at = across === c.across ? c.p : Math.round(len * g1.weight / g.weight);
+        for (let k = 0; k <= 4; k++) options.push({ across, len, p: at + (k % 2 ? (k + 1) / 2 : -k / 2) });
+      }
+      const next = t => (depth === 0 ? !t.across : undefined);
+      const fits = t => t.p >= 4 && t.len - t.p >= 4 &&
+        (t.across ? cut(g1, t.p, h, next(t)) && cut(g2, t.len - t.p, h, next(t)) : cut(g1, w, t.p, next(t)) && cut(g2, w, t.len - t.p, next(t)));
+      const roadAt = t => t.across
+        ? { i0: x + t.p + gap / 2, j0: y - gap / 2, i1: x + t.p + gap / 2, j1: y + h + gap / 2 }
+        : { i0: x - gap / 2, j0: y + t.p + gap / 2, i1: x + w + gap / 2, j1: y + t.p + gap / 2 };
+      const clear = t => {
+        const r = roadAt(t), [di, dj] = t.across ? [1, 0] : [0, 1];
+        return !nearEnd(r.i0, r.j0, di, dj) && !nearEnd(r.i1, r.j1, di, dj);
+      };
+      let t = options.find(t => fits(t) && clear(t));
+      if (!t) { t = options[0]; crossroads++; }
+      const road = { ...roadAt(t), main: depth < MAIN_DEPTH };
+      roads.push(road);
+      ends.add(`${road.i0},${road.j0}`); ends.add(`${road.i1},${road.j1}`);
+      if (t.across) {
+        place(g1, x, y, t.p, h, depth + 1, next(t));
+        place(g2, x + t.p + gap, y, t.len - t.p, h, depth + 1, next(t));
+      } else {
+        place(g1, x, y, w, t.p, depth + 1, next(t));
+        place(g2, x, y + t.p + gap, w, t.len - t.p, depth + 1, next(t));
+      }
+    }
+    place(city, 0, 0, W, H, 0);
+    return { blocks, parks, roads, W, H, crossroads };
+  }
+
+  // The smallest city, square at first, that every district fits into; a
+  // little more land if that does away with crossroads.
+  let W = Math.max(4, Math.floor(Math.sqrt(city.weight))), H = W;
+  while (!cut(city, W, H)) { if (W <= H) W++; else H++; }
+  let best = layout(W, H);
+  for (let more = 1; more <= SLACK && best.crossroads; more++) {
+    for (const [w, h] of [[W + more, H], [W, H + more], [W + more, H + more]]) {
+      const next = cut(city, w, h) && layout(w, h);
+      if (next && next.crossroads < best.crossroads) best = next;
+    }
+  }
+  delete best.crossroads;
+  return best;
+}
+
+// A district's block in its slot: the whole slot, unless that would make the
+// block a strip or leave most of its lots empty; then the block keeps a
+// sensible length and the far end of the slot becomes a pocket park.
+function blockIn(n, x, y, w, h, parks) {
+  const across = w >= h, long = across ? w : h, short = across ? h : w;
+  const length = lots => Math.max(2, Math.ceil(lots / (short - 2))) + 2;
+  let size = Math.min(long, Math.max(length(n), Math.min(Math.round(short * LONG_BLOCK), length(n * ROOM))));
+  if (long - size < 3) size = long;   // no strips of park one or two tiles wide
+  if (size < long) parks.push(across ? { x: x + size, y, w: w - size, h } : { x, y: y + size, w, h: h - size });
+  const [bw, bh] = across ? [size, h] : [w, size];
+  return { x, y, w: bw, h: bh, cols: bw - 2, rows: bh - 2 };
+}
+
+// Every road tile, key "i/j", with whether it belongs to a main road. Roads
+// are `gap` tiles wide and run on to the middle of the road they meet.
+function roadTiles(plan) {
+  const tiles = new Map(), half = plan.gap / 2;
+  for (const r of plan.roads) {
+    for (let j = Math.min(r.j0, r.j1) - half; j < Math.max(r.j0, r.j1) + half; j++)
+      for (let i = Math.min(r.i0, r.i1) - half; i < Math.max(r.i0, r.i1) + half; i++) {
+        const k = `${i}/${j}`;
+        tiles.set(k, tiles.get(k) || r.main);
+      }
+  }
+  return tiles;
 }
 
 // ---------------------------------------------------------------- world model
@@ -579,33 +753,15 @@ function registerBatch(events) {
 }
 
 function planDistricts() {
+  const needs = DATA.ns.map((name, idx) => ({ name, n: Math.max(1, Math.ceil((registry[idx] || new Map()).size * (1 + SPARE)) + (SPARE ? 1 : 0)) }));
+  const city = planCity(needs, theme.gap);
   const districts = DATA.ns.map((name, idx) => {
-    const lots = registry[idx] || new Map();
-    const n = Math.max(1, Math.ceil(lots.size * (1 + SPARE)) + (SPARE ? 1 : 0));
-    const cols = Math.max(2, Math.ceil(Math.sqrt(n * 1.15)));
-    const rows = Math.max(2, Math.ceil(n / cols));
     const branch = /^(feature|bugfix)-/.test(name);
-    return { idx, name, branch, cols, rows, w: cols + 2, h: rows + 2, lots, x: 0, y: 0, stats: null, health: "ok" };
+    return { idx, name, branch, ...city.blocks[idx], lots: registry[idx] || new Map(), stats: null, health: "ok" };
   });
-  // Shelf packing, tallest first: rows of districts with roads between them,
-  // as wide as the look's roads.
-  const GAP = theme.gap;
-  const order = [...districts].sort((a, b) => (b.h - a.h) || (b.w - a.w) || a.name.localeCompare(b.name));
-  const area = districts.reduce((s, d) => s + (d.w + GAP) * (d.h + GAP), 0);
-  const maxW = Math.max(Math.ceil(Math.sqrt(area) * 1.15), ...districts.map(d => d.w));
-  const roads = { across: [], along: [] };
-  let x = 0, y = 0, shelfH = 0;
-  for (const d of order) {
-    if (x > 0 && x + d.w > maxW) {
-      y += shelfH + GAP; x = 0; shelfH = 0;
-      roads.across.push(y - GAP / 2);
-    }
-    if (x > 0) roads.along.push({ i: x - GAP / 2, j0: y, j1: y + d.h });
-    d.x = x; d.y = y; x += d.w + GAP; shelfH = Math.max(shelfH, d.h);
-  }
-  const W = districts.length ? Math.max(...districts.map(d => d.x + d.w)) : 0, H = y + shelfH;
-  return { districts, W, H, roads };
+  return { districts, parks: city.parks, roads: city.roads, W: city.W, H: city.H, gap: theme.gap };
 }
+
 
 function lotOf(building) {
   const d = world.districts[building.ns];
@@ -672,14 +828,45 @@ const markers = new PIXI.Graphics();
 root.addChild(groundLayer, cityLayer, overlay, markers);
 app.stage.addChild(root);
 
-const plan = { districts: [], W: 0, H: 0, roads: { across: [], along: [] } };
+const plan = { districts: [], parks: [], W: 0, H: 0, roads: [], gap: 1 };
 
+// Dashes down the middle of the main roads, stopping short of junctions.
 function laneMarkings(g) {
-  const { W } = plan, m = 2;
+  const half = plan.gap / 2;
   g.lineStyle(1.4, 0xf2efe6, 0.85);
-  for (const j of plan.roads.across) for (let i = -m; i < W + m; i += 1) { g.moveTo(...iso(i + 0.15, j)); g.lineTo(...iso(i + 0.55, j)); }
-  for (const r of plan.roads.along) for (let j = r.j0; j < r.j1; j += 1) { g.moveTo(...iso(r.i, j + 0.15)); g.lineTo(...iso(r.i, j + 0.55)); }
+  for (const r of plan.roads) {
+    if (!r.main) continue;
+    const di = r.i0 === r.i1 ? 0 : 1, dj = 1 - di, len = r.i1 - r.i0 + r.j1 - r.j0;
+    for (let t = half + 0.5; t + 0.6 < len - half; t += 1) {
+      g.moveTo(...iso(r.i0 + di * (t + 0.15), r.j0 + dj * (t + 0.15))); g.lineTo(...iso(r.i0 + di * (t + 0.55), r.j0 + dj * (t + 0.55)));
+    }
+  }
   g.lineStyle(0);
+}
+
+// The sidewalk tiles along the main roads, where trees line them: a block's
+// edge tiles next to a main road, its corners left out. [i, j, di, dj], with
+// (di, dj) pointing at the road.
+function avenueSpots() {
+  const road = roadTiles(plan), spots = [];
+  for (const d of plan.districts) {
+    for (let j = d.y; j < d.y + d.h; j++) for (let i = d.x; i < d.x + d.w; i++) {
+      const corner = (i === d.x || i === d.x + d.w - 1) && (j === d.y || j === d.y + d.h - 1);
+      if (corner) continue;
+      for (const [di, dj] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+        const out = i + di < d.x || i + di >= d.x + d.w || j + dj < d.y || j + dj >= d.y + d.h;
+        if (out && road.get(`${i + di}/${j + dj}`)) spots.push([i, j, di, dj]);
+      }
+    }
+  }
+  return spots;
+}
+
+// Where trees stand in a pocket park: about one tile in two, by position.
+function parkTrees(p) {
+  const spots = [];
+  for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) if (hash(`park ${i}/${j}`) % 5 < 3) spots.push([i, j]);
+  return spots;
 }
 
 // Static things a theme puts in the city layer (trees, lamps); removed when the look changes.
@@ -715,13 +902,21 @@ function drawGround() {
       if (k < d.lots.size) poly(g, d.branch ? shade(ART.lawn, 0.9) : ART.lot, rect(i + 0.06, j + 0.06, 0.88, 0.88));
     }
   }
+  for (const p of plan.parks) {
+    const s = rect(p.x, p.y, p.w, p.h);
+    poly(g, shade(ART.sidewalk, 0.72), [s[3], s[2], [s[2][0], s[2][1] + 3], [s[3][0], s[3][1] + 3]]);
+    poly(g, shade(ART.sidewalk, 0.6), [s[2], s[1], [s[1][0], s[1][1] + 3], [s[2][0], s[2][1] + 3]]);
+    poly(g, ART.sidewalk, s);
+    poly(g, ART.lawn, rect(p.x + 0.25, p.y + 0.25, p.w - 0.5, p.h - 0.5));
+  }
   groundLayer.addChild(g);
-  // Trees on the empty lots and along the kerbs.
+  // Trees on the empty lots, in the parks and along the main roads.
   const spots = [];
   for (const d of plan.districts) {
     for (let k = d.lots.size; k < d.cols * d.rows; k++) spots.push([d.x + 1 + (k % d.cols) + 0.5, d.y + 1 + Math.floor(k / d.cols) + 0.5, 1.1, d.idx * 100 + k]);
-    for (let i = 0; i < d.w; i += 2) spots.push([d.x + i + 0.5, d.y + d.h - 0.2, 0.75, d.idx * 1000 + i]);
   }
+  for (const p of plan.parks) for (const [i, j] of parkTrees(p)) spots.push([i + 0.5, j + 0.5, 1.1, hash(`${i}/${j}`)]);
+  for (const [i, j, di, dj] of avenueSpots()) spots.push([i + 0.5 + di * 0.3, j + 0.5 + dj * 0.3, 0.75, hash(`${i}/${j}/${di}/${dj}`)]);
   spots.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
   for (const [i, j, s, seed] of spots) {
     const tg = new PIXI.Graphics(); tree(tg, 0, 0, s, seed);
@@ -972,27 +1167,18 @@ const KENNEY = {
   },
   ground() {
     const { W, H } = plan, m = 2;
-    // One-tile roads with their own kerbs: around the city, between the
-    // shelves and along both sides of every block. A block that ends one tile
-    // short of the city's edge gets no road of its own there: two roads side
-    // by side would make a strip of junctions.
-    const road = new Set(), key = (i, j) => `${i}/${j}`;
-    for (const j of [-1, ...plan.roads.across.map(j => j - 0.5), H]) for (let i = -1; i <= W; i++) road.add(key(i, j));
-    for (let j = -1; j <= H; j++) { road.add(key(-1, j)); road.add(key(W, j)); }
-    const shelfH = new Map();
-    for (const d of plan.districts) shelfH.set(d.y, Math.max(shelfH.get(d.y) || 0, d.h));
-    for (const d of plan.districts) for (let j = d.y; j < d.y + shelfH.get(d.y); j++) {
-      road.add(key(d.x - 1, j));
-      if (d.x + d.w !== W - 1) road.add(key(d.x + d.w, j));
-    }
-    const isRoad = (i, j) => road.has(key(i, j));
+    // One-tile roads with their own kerbs: the ring road and the cuts.
+    const road = roadTiles(plan);
+    const isRoad = (i, j) => road.has(`${i}/${j}`);
     const joins = (i, j) => (isRoad(i, j - 1) ? 1 : 0) | (isRoad(i + 1, j) ? 2 : 0) | (isRoad(i, j + 1) ? 4 : 0) | (isRoad(i - 1, j) ? 8 : 0);
     const junction = (i, j) => isRoad(i, j) && [1, 2, 4, 8].filter(b => joins(i, j) & b).length > 2;
     const tiles = [];
     for (let j = -m; j < H + m; j++) for (let i = -m; i < W + m; i++) {
       const d = plan.districts.find(d => i >= d.x && i < d.x + d.w && j >= d.y && j < d.y + d.h);
+      const park = !d && plan.parks.some(p => i >= p.x && i < p.x + p.w && j >= p.y && j < p.y + p.h);
       let name;
-      if (d) {
+      if (park) name = pick(KIT.parks, hash(`${i}/${j}`), 0);
+      else if (d) {
         const ring = i === d.x || j === d.y || i === d.x + d.w - 1 || j === d.y + d.h - 1;
         const k = (j - d.y - 1) * d.cols + (i - d.x - 1);
         name = ring ? KIT.sidewalk : k < d.lots.size ? KIT.lot : pick(KIT.parks, hash(`${i}/${j}`), 0);
@@ -1010,12 +1196,15 @@ const KENNEY = {
     for (const [i, j, name] of tiles) {
       const t = tileSprite(name); t.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(t);
     }
-    // Lamps on the corners of every block, trees along its front kerbs.
+    // Lamps on the corners of every block, trees along the main roads and in the parks.
     for (const d of plan.districts) {
       for (const [i, j] of [[d.x, d.y], [d.x + d.w - 1, d.y], [d.x, d.y + d.h - 1], [d.x + d.w - 1, d.y + d.h - 1]])
         addScenery(ksprite(KIT.lamp, 0.5, 0.95), i + 0.5, j + 0.5);
-      for (let i = d.x + 2; i < d.x + d.w - 1; i += 2) addScenery(ksprite(KIT.tree, 0.5, 43 / 45), i + 0.5, d.y + d.h - 0.5);
-      for (let j = d.y + 2; j < d.y + d.h - 1; j += 2) addScenery(ksprite(KIT.tree, 0.5, 43 / 45), d.x + d.w - 0.5, j + 0.5);
+    }
+    const trees = new Set([...avenueSpots().map(([i, j]) => `${i}/${j}`), ...plan.parks.flatMap(p => parkTrees(p).map(([i, j]) => `${i}/${j}`))]);
+    for (const k of trees) {
+      const [i, j] = k.split("/").map(Number);
+      addScenery(ksprite(KIT.tree, 0.5, 43 / 45), i + 0.5, j + 0.5);
     }
   },
   chimney: look => [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - KENNEY.stackOf(kenneyParts(look.p.seed)).h - 4],
@@ -1929,31 +2118,51 @@ function tourBuilding(d, from, wanted) {
 
 // ---------------------------------------------------------------- cars
 
+// Cars drive the roads: along a road to the next junction, then on in a
+// direction picked at random, back only where a road ends.
 const cars = [];
+function roadNetwork() {
+  const points = new Map();
+  const point = (i, j) => points.get(`${i},${j}`) || points.set(`${i},${j}`, { i, j, next: [] }).get(`${i},${j}`);
+  for (const r of plan.roads) { point(r.i0, r.j0); point(r.i1, r.j1); }
+  for (const r of plan.roads) {
+    const on = [...points.values()].filter(p => p.i >= r.i0 && p.i <= r.i1 && p.j >= r.j0 && p.j <= r.j1).sort((a, b) => a.i - b.i || a.j - b.j);
+    for (let k = 1; k < on.length; k++) { on[k - 1].next.push(on[k]); on[k].next.push(on[k - 1]); }
+  }
+  return [...points.values()].filter(p => p.next.length);
+}
 function makeCars() {
-  for (const c of cars) c.g.destroy();
+  for (const c of cars) c.g.destroy({ children: true });
   cars.length = 0;
   const colors = [0xd8453a, 0x2f6fb5, 0xf2c14e, 0xf4f4f0, 0x3b8f5a, 0x333a40];
-  const { W } = plan;
-  for (const j of plan.roads.across) {
-    for (let k = 0; k < Math.max(2, Math.round(W / 9)); k++) {
-      const dir = k % 2 ? 1 : -1;
-      const g = new PIXI.Graphics(geometry(`car:${k % colors.length}`, gg => (car(gg, colors[k % colors.length]), 10)).geometry);
-      cars.push({ g, j: j + (dir > 0 ? theme.lane : -theme.lane), i: Math.random() * (W + 2 * theme.gap) - theme.gap, dir, speed: 0.9 + Math.random() * 0.8 });
-      cityLayer.addChild(g);
-    }
+  const points = roadNetwork();
+  const length = plan.roads.reduce((s, r) => s + r.i1 - r.i0 + r.j1 - r.j0, 0);
+  for (let k = 0; points.length && k < Math.max(2, Math.round(length / 9)); k++) {
+    const color = k % colors.length, g = new PIXI.Container();
+    for (const turned of [false, true]) g.addChild(new PIXI.Graphics(geometry(`car:${color}:${turned}`, gg => (car(gg, colors[color], turned), 10)).geometry));
+    const from = points[Math.floor(Math.random() * points.length)], to = from.next[Math.floor(Math.random() * from.next.length)];
+    const c = { g, from, to, len: Math.abs(to.i - from.i) + Math.abs(to.j - from.j), speed: 0.9 + Math.random() * 0.8 };
+    c.t = Math.random() * c.len;
+    cars.push(c);
+    cityLayer.addChild(g);
   }
 }
 let lastCars = 0;
 function moveCars(now) {
   const dt = lastCars ? Math.min(0.1, (now - lastCars) / 1000) : 0; lastCars = now;
-  const { W } = plan, end = theme.gap;  // where the road ends
   for (const c of cars) {
-    c.i += c.dir * c.speed * dt;
-    if (c.i > W + end) c.i = -end; if (c.i < -end) c.i = W + end;
-    const [x, y] = iso(c.i, c.j);
+    c.t += c.speed * dt;
+    while (c.t >= c.len) {
+      const on = c.to.next.filter(p => p !== c.from), next = on.length ? on[Math.floor(Math.random() * on.length)] : c.from;
+      c.t -= c.len; c.from = c.to; c.to = next; c.len = Math.abs(next.i - c.from.i) + Math.abs(next.j - c.from.j);
+    }
+    // Drive on the right-hand lane.
+    const di = (c.to.i - c.from.i) / c.len, dj = (c.to.j - c.from.j) / c.len;
+    const i = c.from.i + di * c.t - dj * theme.lane, j = c.from.j + dj * c.t + di * theme.lane;
+    c.g.children[0].visible = di !== 0; c.g.children[1].visible = di === 0;
+    const [x, y] = iso(i, j);
     c.g.position.set(x, y);
-    c.g.zIndex = (c.i + c.j) * 10;
+    c.g.zIndex = (i + j) * 10;
   }
 }
 
