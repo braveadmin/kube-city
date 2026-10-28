@@ -4,7 +4,7 @@ A living isometric city of your Kubernetes cluster. Namespaces are
 districts, workloads are buildings, and pods coming and going make the city
 grow, burn and rebuild, live.
 
-![kube-city in the browser: districts of office blocks, houses and brick halls, one of them on fire](https://raw.githubusercontent.com/braveadmin/kube-city/master/docs/screenshot.png)
+![kube-city in the browser: the camera flies from the whole city into a district and down to street level, past buildings on fire, a building site with a crane and cars on the roads, then back out](https://raw.githubusercontent.com/braveadmin/kube-city/master/docs/demo.gif)
 
 - **In your browser.** `kube-city` opens the city in your browser (WebGL,
   mouse-wheel zoom, search, details on click). The old terminal view
