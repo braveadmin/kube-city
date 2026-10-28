@@ -59,7 +59,9 @@ repo's git config); keep it that way and keep employer or cluster names out.
 
 After changing dist settings: `allow-dirty = ["ci"]` (so Dependabot can bump
 actions) makes `dist generate` skip the workflow, so remove that line, run
-`dist generate`, then put the line back.
+`dist generate`, then put the line back, and restore the hand-made
+`paths-ignore` on `pull_request` in `release.yml` (docs-only PRs skip the
+release builds; `plan` is not a required check for that reason).
 
 ## Working agreement
 
