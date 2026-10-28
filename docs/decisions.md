@@ -24,6 +24,8 @@ KubeDoom, KubeCraftAdmin, kube-universe; none is an ambient city).
 - Evaluation page (private): https://claude.ai/artifact/5LBNjXKHiRMQLLoPJGhDCT
 - Style samples page (private): https://claude.ai/artifact/HQhiDTRhhnCZ4VitLRu1fb
 - Browser prototype (private): https://claude.ai/artifact/KmCkfNCaFEUc2yTUPvAbot
+- Layout sketches (private): https://claude.ai/artifact/FvpTBm1czGseeufRkjbZx4
+- Terrain seeds sketch (private): https://claude.ai/artifact/Xf8STkK2mYYScQoCPf2bv5
 
 ## Decisions
 
@@ -178,7 +180,8 @@ direction before building a `--web` server.
 | License | MIT OR Apache-2.0 | The usual Rust dual license |
 | Binaries | cargo-dist on version tags: Linux x86_64 (static musl) and arm64, macOS arm64 and x86_64, Windows x86_64, plus shell and PowerShell installers; pull requests build the same without publishing | One command to install; musl runs on any distro |
 | Signing | None; README explains the macOS quarantine command | Apple signing needs a paid account |
-| PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN; fonts still come from Google Fonts and fall back to system fonts |
+| PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN |
+| Fonts (#21) | Latin subsets of Barlow, Barlow Condensed and IBM Plex Mono built into the binary (`assets/fonts`, about 180 KB); the page gets `@font-face` rules for `/fonts/…` in place of the Google Fonts link, which the template keeps for the published prototype | `--web` fully offline, no request to Google; Latin-only keeps the binary small (#22), other characters fall back to system fonts |
 | Line endings | `.gitattributes`: LF everywhere, PNG binary | Windows checkouts embedded CRLF copies of the page |
 | Package managers (0.1.1) | Homebrew tap `braveadmin/homebrew-tap` (formula pushed by the release workflow), crates.io `kube-city`; krew planned | One-command installs for macOS, Linux and Rust users; krew reaches kubectl users |
 | Archives | `.tar.gz` on Linux and macOS (was `.tar.xz`) | krew accepts only `.tar.gz` and `.zip` |
@@ -229,6 +232,70 @@ now only holds the events sources send), the unused hash helpers in
 lines and 34 tests. `--tui` stays as a hidden flag that exits with a
 message pointing to 0.3.0 (`cargo install kube-city --version 0.3.0`). The
 browser's own layout and both looks live in `art/city.template.html`.
+
+## A more natural city (2026-10-27, #33–#50)
+
+The owner's feedback: the city looks great but feels squared and
+predictable. Planned in three parts, each judged from sketches made from
+the big recording's sizes (no names in them; links above).
+
+**Layout** (#33–#37). Districts stay rectangles, so stable lots, landmarks
+and the cluster overlay keep working.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Layout | Cut the city in two again and again, by namespace size; every cut is a road (#33) | Removes the long straight roads that cross the whole city; blocks get their own proportions; no more land than today (sketch: 3.2 tiles per building, today 3.4) |
+| Blocks | Buildings along the streets, courtyards inside; namespaces over ~40 workloads become several blocks with lanes (#34) | Real blocks instead of lot grids; about 1.2× today's land |
+| Edge | No ring road; edge blocks give back the rows they do not need (#35) | A town should thin out, not end in a rectangle |
+| River | A river cut through town with bridges (#37) | Owner's pick among the ingredients |
+| Zones | Centre, industry, suburbs by namespace (#36); with #47 this decides where quarters sit | Open: by name, by content, or both |
+
+Found while sketching: today's layout already has mostly T-junctions (54
+against 3 crossroads), so the straight lines, not crossroads, are what
+reads as a grid. Water tiles in the Kenney City pack are not checked yet
+(#37 decides: download the full pack, or draw water in code).
+
+**Terrain** (#38–#46): a world generated once from a seed: hills,
+mountains, sea, lakes, rivers, forests, fields and roads out of town.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Seed | Random the first time a context is opened, kept in the browser per context; "New world" rolls another (#38) | Owner's choice. Costs: another browser or cleared site data gives a new world, and with `--anonymise` without `--anonymise-salt` the world changes every run |
+| Town site | Flat; terrain blends in a few tiles out; mountains mostly behind the town | In the isometric view nothing may stand in front of a district |
+| Styles | Valley, Coast, Island, Lake country, Highlands; the seed picks, a dropdown overrides (#45) | Owner's choice: variety without a setting to learn |
+| Height in the Kenney look | Pack tiles as tops, sides and cliffs drawn in code (#40) | Owner's choice; no new download |
+| Ground drawing | Drawn once into textures, not a sprite per tile (#40) | About four times today's tiles (~14,000 on the big recording) |
+| #35 and #37 | Kept, narrowed: #35 the edge (grass until #43), #37 the river in town (#42 continues it) | Owner's choice: they can ship before the terrain |
+| Readability | Calmer terrain at cluster zoom; "fit" frames the town (#46) | Terrain must not hide problems |
+
+Generator, as sketched: layered and ridged noise from seeded tables;
+height in 13 levels with tapering peaks; a priority flood turns each hollow
+into a whole lake or fills it; the town river runs from its cut into the
+hills and down to the sea along the cheapest path; side rivers from water
+collecting downhill; ground cover from height, slope and moisture. About
+60–130 ms for the big recording in Node.
+
+**Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
+out like SimCity or Cities: Skylines (houses, shops, towers).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Unit | Related namespaces (sharing at least half their workloads) form a quarter; each namespace is a neighbourhood (#47) | Owner's choice; branches of one stack belong together |
+| Spacing | One city, neighbourhoods a few tiles apart, split by parks, rivers and main roads (#47) | Owner's choice; keeps the overview near today's size (target ≤1.5× today's land) |
+| Stability | A new namespace becomes a neighbourhood on free land without moving the others (#47) | Today a new namespace re-packs the whole city |
+| Zones | From what workloads run: image roles (#48), towers from CPU and memory requests (#49), shops from Ingress or LoadBalancer exposure (#50, after #19) | Owner's choice; a building keeps its kind's shape, zones only decide where it stands |
+| Roles and `--anonymise` | The server works out the role from images before anonymising and sends only the role word (#48) | Pseudonymised images say nothing |
+
+Why zones need new signals (big recording, 731 workloads): 57 % are
+StatefulSets, 26 % Deployments, 16 % Jobs and 1 % DaemonSets (9 houses);
+180 of 190 Deployments run one replica, so height by replicas gives no
+towers; 70–75 % of workload names contain no role word. Grouping by shared
+workloads gives one quarter of 13 branch namespaces with 674 workloads and
+14 small namespaces on their own, so the branch quarter needs #48's inner
+structure to stay readable.
+
+Order: #33, #34, #35, #37 first; the terrain (#38–#46) and neighbourhoods
+(#47–#50) are planned again once those are in and the owner has seen them.
 
 ## Roadmap
 
