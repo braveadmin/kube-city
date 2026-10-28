@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [master]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE-*']
+  # Not paths-ignore here: the matrix checks are required, so they must still
+  # report on docs-only PRs; their steps skip instead
   pull_request:
 
 permissions:
@@ -18,14 +21,33 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - name: Changes
+        id: changes
+        shell: bash
+        # HEAD is the PR's merge commit (or the pushed commit); its first
+        # parent is master, so this lists the files the change touches
+        run: |
+          files=$(git diff --name-only HEAD^1 HEAD)
+          if grep -qvE '\.md$|^docs/|^LICENSE-' <<< "$files"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Docs only, skipping the build"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.changes.outputs.code == 'true'
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        if: steps.changes.outputs.code == 'true'
       - name: Format
-        if: runner.os == 'Linux'
+        if: steps.changes.outputs.code == 'true' && runner.os == 'Linux'
         run: cargo fmt --check
       - name: Clippy
+        if: steps.changes.outputs.code == 'true'
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
+        if: steps.changes.outputs.code == 'true'
         run: cargo test
