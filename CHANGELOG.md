@@ -8,6 +8,14 @@
   binary, so the page makes no request to Google Fonts and looks the same
   without internet (#21).
 
+### Changed
+
+- Release binaries are about half the size (17 MB to 8 MB on Linux, about
+  4 MB to download): symbols stripped, built with full LTO and optimised
+  for size; `cargo install` builds are stripped too (#22).
+- The city appears sooner: the sprites come inside the page instead of in
+  144 requests, and a live city connects while the sprites load (#22).
+
 ### Removed
 
 - The terminal view (`--tui`), deprecated since 0.2.0, with `--fps` and

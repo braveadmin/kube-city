@@ -753,8 +753,9 @@ const METROPOLIS = {
 };
 
 // Sprites from Kenney's Isometric Buildings and Isometric City packs (CC0,
-// kenney.nl), embedded by art/web_prototype.py --kenney. Buildings are stacked
-// from a ground floor, upper floors and a roof, the way the packs are built.
+// kenney.nl) as data URIs, put in by kube-city or art/web_prototype.py.
+// Buildings are stacked from a ground floor, upper floors and a roof, the way
+// the packs are built.
 const KENNEY_SPRITES = /*KENNEY_SPRITES*/null;
 const KS = TW / 132;     // sprite pixels to world pixels: a 132 px tile is one lot
 const STOREY = 35;       // height of one storey in sprite pixels
@@ -2011,6 +2012,8 @@ function applyDeepLink() {
 const live = DATA.live ? {
   connected: false, retries: 0, status: "connecting", ws: null, context: null,
   pods: new Map(), ns: new Map(), wl: new Map(), next: 0,
+  // Batches that arrive before the first plan, applied once it is done.
+  held: [],
 } : null;
 const contextSelect = document.getElementById("context");
 
@@ -2073,7 +2076,7 @@ function connectLive() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`);
   live.ws = ws;
   ws.onopen = () => { live.connected = true; live.retries = 0; panelDirty = true; };
-  ws.onmessage = (m) => liveBatch(JSON.parse(m.data));
+  ws.onmessage = (m) => (live.held ? live.held.push(JSON.parse(m.data)) : liveBatch(JSON.parse(m.data)));
   ws.onclose = () => {
     live.connected = false; panelDirty = true;
     setTimeout(connectLive, Math.min(10000, 500 * 2 ** live.retries++));
@@ -2090,9 +2093,15 @@ if (live) {
     "A live, read-only view of your cluster. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, + and - zoom, c fit, / find, i details, b banners, Esc clear.";
 }
 registerBatch(DATA.events);
-// The first plan waits for the look, whose roads set the space between districts.
+// The first plan waits for the look, whose roads set the space between
+// districts; a live city connects meanwhile and holds what arrives.
+if (live) connectLive();
 const firstLook = initialLook === "kenney" ? kenneyReady().then(() => "kenney", () => "metropolis") : Promise.resolve("metropolis");
 firstLook.then(name => { theme = THEMES[name]; replan(); return setLook(name); })
-  .then(() => (live ? connectLive() : startReplay()));
+  .then(() => {
+    if (!live) return startReplay();
+    const held = live.held; live.held = null;
+    for (const items of held) liveBatch(items);
+  });
 districtStats();
 </script>
