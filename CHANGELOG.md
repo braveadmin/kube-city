@@ -23,6 +23,9 @@
 - Blocks are built along their streets first, with a green courtyard in the
   middle; a namespace of more than about 50 workloads is a quarter of
   several blocks with lanes between them, still one district (#34).
+- No more ring road: the town thins out into grass with a few trees, edge
+  blocks give back the rows they do not need, main roads run on out of town
+  and lanes may end at its edge (#35).
 
 ### Removed
 
