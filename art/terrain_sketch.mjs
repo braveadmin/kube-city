@@ -22,9 +22,13 @@ const gap = Number(gapArg || 1);
 const page = readFileSync(new URL("city.template.html", import.meta.url), "utf8");
 const MARK = "// ---------------------------------------------------------------- ";
 const section = name => { const from = page.indexOf(`${MARK}${name}\n`); return page.slice(from, page.indexOf(MARK, from + MARK.length)); };
-const helpers = page.slice(page.indexOf("function hash("), page.indexOf("function shade("));
-const code = `${helpers}${section("layout")}${section("terrain")}`;
-const { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT } = new Function(`${code}\nreturn { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT };`)();
+const helpers = page.slice(page.indexOf("const TW = "), page.indexOf("function shade("));
+const polyCode = page.match(/^function poly\(.*$/m)[0];
+const code = `${helpers}${polyCode}\n${section("layout")}${section("terrain")}`;
+// The ground's mesh builder, without the mesh (that needs PIXI).
+const pen = page.slice(page.indexOf("class GroundPen {"), page.indexOf("\n}\n", page.indexOf("class GroundPen {")) + 2);
+const { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, MARGIN, TREE, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen } =
+  new Function(`${code}\n${pen}\nreturn { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, MARGIN, TREE, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen };`)();
 
 // Workloads per namespace, as the page counts them: one building per workload.
 const workloads = new Map(), daemons = new Set();
@@ -71,6 +75,41 @@ for (let k = 0; k < W * H; k++) {
   if (level[k] > low + 2) slopeOk = false;
 }
 
+// Drawing (#40): the town's ground is drawn over the terrain and buildings
+// and trees stand in the city layer, which is only right where no higher
+// ground in front reaches over them. Every town tile, every block tile with
+// a 200 px building on it, and every tile of the grass round the town where a
+// tree may stand. A tree the ground hides is drawn into the ground instead,
+// which is only right away from the town (2 tiles or more).
+let townHidden = 0, buildingsHidden = 0, treesHidden = 0, treesNearTown = 0;
+const blockTiles = new Set();
+for (const b of plan.districts.flatMap(d => d.blocks)) for (let j = b.y; j < b.y + b.h; j++) for (let i = b.x; i < b.x + b.w; i++) blockTiles.add(`${i}/${j}`);
+for (let k = 0; k < W * H; k++) {
+  const i = k % W + t.x0, j = ((k / W) | 0) + t.y0;
+  if (isTown(k)) {
+    if (hiddenBy(t, i, j)) townHidden++;
+    if (blockTiles.has(`${i}/${j}`) && hiddenBy(t, i, j, 200, 52)) buildingsHidden++;
+  } else if (i >= -MARGIN && j >= -MARGIN && i < plan.W + MARGIN && j < plan.H + MARGIN && hiddenBy(t, i, j, TREE[1], TREE[0])) {
+    treesHidden++;
+    if (toTown[k] < 2) treesNearTown++;
+  }
+}
+
+// Building the ground's mesh as the Metropolis look does (faces, a top per
+// tile), timed; the Kenney look adds a quad per tile and its water.
+const white = { baseTexture: { width: 16, height: 16 }, frame: { x: 0, y: 0, width: 16, height: 16 } };
+const groundTimes = [];
+let built;
+for (let n = 0; n < 6; n++) {
+  const t0 = performance.now();
+  built = new GroundPen(white);
+  eachGroundTile(t, (i, j, z, left, right) => {
+    groundFaces(built, i, j, z, left, right, [0x6e9a58, 0x5b8248], [0x8a6a4a, 0x6b523a]);
+    poly(built, 0x8cba6c, [iso(i, j), iso(i + 1, j), iso(i + 1, j + 1), iso(i, j + 1)].map(([x, y]) => [x, y - z]));
+  });
+  groundTimes.push(performance.now() - t0);
+}
+
 for (let j = 0; j < H; j++) {
   let row = "";
   for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : level[k].toString(13); }
@@ -83,6 +122,8 @@ console.log(`levels: ${hist.map((n, l) => `${l.toString(13)} ${(100 * n / (W * H
 console.log(`mountains (level 8 and up): ${high} tiles, ${high ? (100 * highBack / high).toFixed(0) : "–"} % in the back half of the map; highest level within ${FRONT_LOW} tiles in front of the town: ${front}`);
 console.log(`town and ${FLAT} tiles round it flat: ${flatOk ? "yes" : "NO"}; peaks taper: ${slopeOk ? "yes" : "NO"}`);
 console.log(`same terrain twice: ${same ? "yes" : "NO"}; another seed, other terrain: ${differs ? "yes" : "NO"}`);
+console.log(`hidden by higher ground in front: town tiles ${townHidden}, buildings ${buildingsHidden}; tree spots round the town ${treesHidden} (drawn into the ground), ${treesNearTown} of them next to it`);
+console.log(`ground mesh in ${groundTimes[0].toFixed(1)} ms the first time, then ${Math.min(...groundTimes.slice(1)).toFixed(1)}–${Math.max(...groundTimes.slice(1)).toFixed(1)} ms: ${built.xy.length / 2} vertices, ${built.index.length / 3} triangles`);
 
 // The page: the same code and plan, drawn in the browser, any seed.
 const html = `<!doctype html>
@@ -98,7 +139,7 @@ const html = `<!doctype html>
 <form onsubmit="return false">
   <label>Seed <input id="seed" type="text" maxlength="40" value=${JSON.stringify(JSON.stringify(seed))}></label>
   <button id="new" type="button">New world</button>
-  <label>Relief <input id="relief" type="range" min="0" max="12" value="6"></label>
+  <label>Relief <input id="relief" type="range" min="0" max="12" value="8"></label>
 </form>
 <p id="facts"></p>
 <canvas id="map"></canvas>
