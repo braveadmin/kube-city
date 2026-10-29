@@ -1058,6 +1058,10 @@ const LEVEL_H = 16;       // pixels from one ground level to the next: about the
 const BASE = 22;          // the earth base's depth below level 0, in pixels
 const SINK = 5;           // pixels a sea or lake lies below its shore
 const LAKE_MIN = 4;       // tiles; a smaller hollow is always filled in, a smaller bay of sea too
+const HILLS = 5;          // the town's river rises where the ground is at least this level
+const RIVER_FLOW = 250;   // tiles that drain through a tile before a side river runs on it
+const DIG = 2;            // what digging a tile down a level costs a river's path, in tiles of length
+const RING_COST = 6;      // what a tile of the town's flat ring costs a river's path, but at its own ends
 // The shape of the land; #45's world styles will be presets of these. `coast`
 // is the share of worlds whose sea comes in over one of the map's front sides,
 // `sea` how deep it cuts there, `lakes` the share of hollows that hold a lake.
@@ -1065,7 +1069,7 @@ const LAKE_MIN = 4;       // tiles; a smaller hollow is always filled in, a smal
 // far out fields reach at most, in tiles.
 const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, back: 0.85, coast: 0.5, sea: 1.2, lakes: 0.5, forest: 0.6, woods: 0.53, fields: 12 };
 // What covers a tile of terrain; grass is meadow.
-const COVER = { grass: 0, sea: 1, lake: 2, beach: 3, forest: 4, woods: 5, field: 6, rock: 7, snow: 8 };
+const COVER = { grass: 0, sea: 1, lake: 2, beach: 3, forest: 4, woods: 5, field: 6, rock: 7, snow: 8, river: 9 };
 const PINES = 4;          // trees from this level up are pines (rock starts at 6 or higher)
 const ROCK_MIN = 6;       // no rock or snow below this level
 const PLOT = [4, 3];      // a field plot's size in tiles (along i, along j)
@@ -1098,8 +1102,10 @@ function noiseFrom(seed) {
 // the height before it was cut into levels, `toTown` the distance to the
 // nearest town tile, in tiles, `cover` what covers each tile (COVER), `depth`
 // how far a sea or lake tile lies from the shore, in tiles, a little uneven,
-// `crop` a field's crop (0 to CROPS - 1) and `farms` the tiles with a farm
-// (index -> the plot's hash).
+// `crop` a field's crop (0 to CROPS - 1), `farms` the tiles with a farm
+// (index -> the plot's hash), `main` 1 on the town river's water outside the
+// town and in it (its cut), and `down` the tile each tile drains to (-1: off
+// the map or into the sea or the town river, -2: none, the town).
 function planTerrain(plan, seed) {
   const x0 = -WORLD_MARGIN, y0 = -WORLD_MARGIN, W = plan.W + 2 * WORLD_MARGIN, H = plan.H + 2 * WORLD_MARGIN, N = W * H;
   const at = (i, j) => (j - y0) * W + (i - x0);
@@ -1167,25 +1173,155 @@ function planTerrain(plan, seed) {
 
   // Peaks taper: no tile more than SLOPE levels above its lowest neighbour,
   // in two passes (from the back corner, then from the front one).
-  for (let k = 0; k < N; k++) {
-    if (k % W > 0) level[k] = Math.min(level[k], level[k - 1] + SLOPE);
-    if (k >= W) level[k] = Math.min(level[k], level[k - W] + SLOPE);
+  const taper = () => {
+    for (let k = 0; k < N; k++) {
+      if (k % W > 0) level[k] = Math.min(level[k], level[k - 1] + SLOPE);
+      if (k >= W) level[k] = Math.min(level[k], level[k - W] + SLOPE);
+    }
+    for (let k = N - 1; k >= 0; k--) {
+      if (k % W < W - 1) level[k] = Math.min(level[k], level[k + 1] + SLOPE);
+      if (k + W < N) level[k] = Math.min(level[k], level[k + W] + SLOPE);
+    }
+  };
+  taper();
+
+  // The town's river runs on outside the town: downstream from its front end
+  // to the sea or the map's edge, dug down to the town's level where it has
+  // to cut through higher ground, and upstream from its back end into the
+  // hills, dug so it never runs uphill. The taper then pulls its banks down
+  // into a small valley. A town without a river gets a valley dug from its
+  // front in the same way, without water, so it drains.
+  const near = (k, visit) => { const i = k % W; if (i > 0) visit(k - 1); if (i < W - 1) visit(k + 1); if (k >= W) visit(k - W); if (k + W < N) visit(k + W); };
+  const edge = k => { const i = k % W, j = (k / W) | 0; return i === 0 || j === 0 || i === W - 1 || j === H - 1; };
+  const main = new Uint8Array(N), r = plan.river, inMap = (i, j) => i >= x0 && j >= y0 && i < x0 + W && j < y0 + H;
+  if (r) for (let j = r.y; j < r.y + r.h; j++) for (let i = r.x; i < r.x + r.w; i++) if (inMap(i, j)) main[at(i, j)] = 1;
+  // The flat ring by the river's own ends: closer to its water than to the rest of the town.
+  const toRiver = new Float32Array(N).fill(Infinity), ends = [];
+  for (let k = 0; k < N; k++) if (main[k]) { toRiver[k] = 0; ends.push(k); }
+  for (let q = 0; q < ends.length; q++) {
+    const k = ends[q], i = k % W, j = (k / W) | 0;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const ni = i + di, nj = j + dj, nk = nj * W + ni;
+      if (ni >= 0 && nj >= 0 && ni < W && nj < H && toRiver[nk] === Infinity && toRiver[k] < FLAT) { toRiver[nk] = toRiver[k] + 1; ends.push(nk); }
+    }
   }
-  for (let k = N - 1; k >= 0; k--) {
-    if (k % W < W - 1) level[k] = Math.min(level[k], level[k + 1] + SLOPE);
-    if (k + W < N) level[k] = Math.min(level[k], level[k + W] + SLOPE);
+  const ring = k => toTown[k] > 0 && toTown[k] <= FLAT && toRiver[k] > toTown[k];
+  // Sea that will stay sea: level 0 joined to the map's edge, LAKE_MIN tiles or more.
+  const open = new Uint8Array(N);
+  for (let k0 = 0; k0 < N; k0++) {
+    if (open[k0] || level[k0] !== 0 || !edge(k0)) continue;
+    const part = [k0];
+    open[k0] = 2;
+    for (let n = 0; n < part.length; n++) near(part[n], nk => { if (!open[nk] && level[nk] === 0) { open[nk] = 2; part.push(nk); } });
+    if (part.length >= LAKE_MIN) for (const k of part) open[k] = 1;
+  }
+  // A river's path is a chain of leads, each the back corner of a square of
+  // s × s tiles of its water. The cheapest chain from the leads `from` to one
+  // where `end` says it may stop, `cost` being what a lead's square costs
+  // (Infinity where it may not go); each is worked out once per lead. Without
+  // such an end, the chain to the lead with the highest `best`, if given.
+  const square = (k, s) => { const out = []; for (let b = 0; b < s; b++) for (let a = 0; a < s; a++) out.push(k + b * W + a); return out; };
+  const cheapest = (from, s, costOf, endOf, bestOf) => {
+    const fits = k => k % W <= W - s && ((k / W) | 0) <= H - s;
+    const cost = new Float32Array(N).fill(Infinity), end = new Uint8Array(N), best = new Float32Array(N);
+    for (let k = 0; k < N; k++) if (fits(k)) { cost[k] = costOf(k); end[k] = endOf(k) ? 1 : 0; if (bestOf) best[k] = bestOf(k); }
+    // A binary heap of leads by what reaching them cost.
+    const spent = new Float64Array(N).fill(Infinity), back = new Int32Array(N).fill(-1), heap = [];
+    const less = (a, b) => spent[heap[a]] < spent[heap[b]];
+    const swap = (a, b) => { const x = heap[a]; heap[a] = heap[b]; heap[b] = x; };
+    const push = k => { heap.push(k); for (let n = heap.length - 1; n > 0 && less(n, (n - 1) >> 1); n = (n - 1) >> 1) swap(n, (n - 1) >> 1); };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        for (let n = 0; ;) {
+          const a = 2 * n + 1, b = a + 1;
+          let m = n;
+          if (a < heap.length && less(a, m)) m = a;
+          if (b < heap.length && less(b, m)) m = b;
+          if (m === n) break;
+          swap(m, n); n = m;
+        }
+      }
+      return top;
+    };
+    const done = new Uint8Array(N);
+    for (const k of from) if (cost[k] < Infinity) { spent[k] = cost[k]; push(k); }
+    let found = -1, top = -1;
+    while (heap.length) {
+      const k = pop();
+      if (done[k]) continue;
+      done[k] = 1;
+      if (end[k]) { found = k; break; }
+      if (bestOf && (top < 0 || best[k] > best[top])) top = k;
+      const i = k % W;
+      for (const nk of [i > 0 ? k - 1 : -1, i < W - 1 ? k + 1 : -1, k - W, k + W]) {
+        if (nk < 0 || nk >= N || done[nk] || cost[nk] === Infinity) continue;
+        const c = spent[k] + cost[nk];
+        if (c < spent[nk]) { spent[nk] = c; back[nk] = k; push(nk); }
+      }
+    }
+    if (found < 0) found = top;
+    const path = [];
+    for (let k = found; k >= 0; k = back[k]) path.unshift(k);
+    return path;
+  };
+  const townTile = k => toTown[k] === 0 && !main[k];
+  const toSea = (k, s) => square(k, s).some(q => edge(q) || [q - 1, q + 1, q - W, q + W].some(n => n >= 0 && n < N && Math.abs(n % W - q % W) <= 1 && open[n] === 1));
+  // Down to the sea or the map's edge, at the town's level: what it costs is
+  // its length and the levels it digs away.
+  const downhill = s => k => {
+    const tiles = square(k, s);
+    if (tiles.some(q => townTile(q) || main[q] || open[q] === 1)) return Infinity;
+    return 1 + tiles.reduce((c, q) => c + DIG * Math.max(0, level[q] - 1) + (ring(q) ? RING_COST : 0), 0);
+  };
+  if (r) {
+    const down = r.h > r.w;
+    const lead = (i, j) => inMap(i, j) && inMap(i + RIVER - 1, j + RIVER - 1) ? [at(i, j)] : [];
+    const mouth = down ? lead(r.x, r.y + r.h) : lead(r.x + r.w, r.y);
+    const head = down ? lead(r.x, r.y - RIVER) : lead(r.x - RIVER, r.y);
+    const below = cheapest(mouth, RIVER, downhill(RIVER), k => toSea(k, RIVER));
+    for (const k of below) for (const q of square(k, RIVER)) { level[q] = 1; main[q] = 1; }
+    // Up into the hills along the gentlest way: a lead whose square spans
+    // levels lies on a slope.
+    // Each lead's lowest and highest tile, its square being 2 × 2 (RIVER).
+    const low = new Int8Array(N), high = new Int8Array(N);
+    for (let k = 0; k < N - W; k++) {
+      low[k] = Math.min(level[k], level[k + 1], level[k + W], level[k + W + 1]);
+      high[k] = Math.max(level[k], level[k + 1], level[k + W], level[k + W + 1]);
+    }
+    const above = cheapest(head, RIVER, k => {
+      const tiles = square(k, RIVER);
+      if (tiles.some(q => townTile(q) || main[q] || open[q])) return Infinity;
+      return 1 + 0.6 * (high[k] - low[k]) + tiles.reduce((c, q) => c + (ring(q) ? RING_COST : 0), 0);
+    }, k => low[k] >= HILLS, k => low[k]);
+    // Never uphill: from its source down, each square no higher than the one
+    // above it. Squares overlap; a tile of two keeps the upper one's level.
+    const dig = () => {
+      const runs = [];
+      for (let n = above.length - 1, run = Infinity; n >= 0; n--) runs[n] = run = Math.max(1, Math.min(run, ...square(above[n], RIVER).map(q => level[q])));
+      above.forEach((k, n) => { for (const q of square(k, RIVER)) { level[q] = runs[n]; main[q] = 1; } });
+    };
+    dig(); taper(); dig(); taper();
+  } else {
+    // The town's front corner, and a valley one tile wide from beside it.
+    let first = -1;
+    for (let k = 0; k < N; k++) if (toTown[k] === 0 && (first < 0 || k % W + ((k / W) | 0) > first % W + ((first / W) | 0))) first = k;
+    if (first >= 0) {
+      const from = [first + 1, first + W].filter(k => k < N && k % W > 0 && toTown[k] > 0);
+      for (const k of cheapest(from, 1, downhill(1), k => toSea(k, 1))) level[k] = 1;
+      taper();
+    }
   }
 
-  // Water. A priority flood from the map's edges and the town finds the level
-  // water would stand at on every tile before it ran off (`fill`): its
-  // hollow's lowest rim, or its own level. The town drains (its river carries
-  // the water away), so it never floods. Levels are few, so the queue is a
-  // bucket per level.
-  const near = (k, visit) => { const i = k % W; if (i > 0) visit(k - 1); if (i < W - 1) visit(k + 1); if (k >= W) visit(k - W); if (k + W < N) visit(k + W); };
+  // Water. A priority flood from the map's edges, the town and its river
+  // finds the level water would stand at on every tile before it ran off
+  // (`fill`): its hollow's lowest rim, or its own level. The town drains (its
+  // river carries the water away), so it never floods. Levels are few, so the
+  // queue is a bucket per level.
   const fill = new Int8Array(N).fill(-1), buckets = Array.from({ length: LEVELS }, () => []);
   for (let k = 0; k < N; k++) {
-    const i = k % W, j = (k / W) | 0;
-    if (i === 0 || j === 0 || i === W - 1 || j === H - 1 || toTown[k] === 0) { fill[k] = level[k]; buckets[level[k]].push(k); }
+    if (edge(k) || toTown[k] === 0 || main[k]) { fill[k] = level[k]; buckets[level[k]].push(k); }
   }
   for (let l = 0; l < LEVELS; l++) for (let n = 0; n < buckets[l].length; n++) {   // the bucket grows as it is walked
     near(buckets[l][n], nk => { if (fill[nk] < 0) { fill[nk] = Math.max(level[nk], l); buckets[fill[nk]].push(nk); } });
@@ -1210,6 +1346,33 @@ function planTerrain(plan, seed) {
       level[k] = Math.max(1, fill[k]);
     }
   }
+  // Where the rain runs: another flood, now over ground without hollows, from
+  // the map's edges, the sea and the town river. Each tile drains to its
+  // lowest neighbour if one is lower, else to the one the flood came from,
+  // so water never runs uphill and finds its way across flat ground and
+  // lakes. The town and its flat ring stay dry: water runs round them. A side
+  // river runs where RIVER_FLOW tiles drain through.
+  const downTo = new Int32Array(N).fill(-2), order = [];
+  const dry = k => (toTown[k] === 0 || ring(k)) && !main[k];
+  for (const b of buckets) b.length = 0;
+  for (let k = 0; k < N; k++) if (!dry(k) && (edge(k) || main[k] || cover[k] === COVER.sea)) { downTo[k] = -1; buckets[level[k]].push(k); }
+  for (let l = 0; l < LEVELS; l++) for (let n = 0; n < buckets[l].length; n++) {
+    const k = buckets[l][n];
+    order.push(k);
+    near(k, nk => { if (downTo[nk] === -2 && !dry(nk)) { downTo[nk] = k; buckets[Math.max(l, level[nk])].push(nk); } });
+  }
+  for (const k of order) {
+    if (downTo[k] === -1) continue;
+    let low = downTo[k];
+    near(k, nk => { if (downTo[nk] !== -2 && level[nk] < level[low]) low = nk; });
+    downTo[k] = low;
+  }
+  const flow = new Float32Array(N);
+  for (let n = order.length - 1; n >= 0; n--) { const k = order[n]; flow[k] += 1; if (downTo[k] >= 0) flow[downTo[k]] += flow[k]; }
+  for (let k = 0; k < N; k++) {
+    if (main[k] && toTown[k] > 0) cover[k] = COVER.river;
+    else if (!main[k] && !cover[k] && downTo[k] !== -2 && flow[k] >= RIVER_FLOW) cover[k] = COVER.river;
+  }
   // Beaches on the low land along the sea.
   for (let k = 0; k < N; k++) {
     if (cover[k] || level[k] !== 1 || toTown[k] === 0) continue;
@@ -1224,6 +1387,7 @@ function planTerrain(plan, seed) {
   for (let k = 0; k < N; k++) if (isWater(cover[k])) depth[k] = Infinity; else shore.push(k);
   for (let n = 0; n < shore.length; n++) near(shore[n], nk => { if (depth[nk] === Infinity) { depth[nk] = depth[shore[n]] + 1; shore.push(nk); } });
   for (let k = 0; k < N; k++) if (isWater(cover[k])) depth[k] += 2 * hills(k % W / 4 + 7.7, ((k / W) | 0) / 4 - 3.1, 2) - 1;
+  for (let k = 0; k < N; k++) if (cover[k] === COVER.river) depth[k] = 3;   // the river's own colour, as in town
 
   // Ground cover, on the land outside the town. Snow on the world's top two
   // levels, rock on the three below and on steep mountainsides; fields in
@@ -1262,7 +1426,7 @@ function planTerrain(plan, seed) {
     else if (damp > t.forest) cover[k] = COVER.forest;
     else if (damp > t.woods) cover[k] = COVER.woods;
   }
-  return { x0, y0, W, H, level, height, toTown, cover, depth, crop, farms };
+  return { x0, y0, W, H, level, height, toTown, cover, depth, crop, farms, main, down: downTo };
 }
 
 // The trees the ground cover grows: two or three a tile in a forest, about
@@ -1286,7 +1450,7 @@ function coverTrees(t, seed) {
 
 // How high a ground level stands above the town (level 1), in pixels.
 const zOfLevel = l => (l - 1) * LEVEL_H;
-const isWater = cover => cover === COVER.sea || cover === COVER.lake;
+const isWater = cover => cover === COVER.sea || cover === COVER.lake || cover === COVER.river;
 // How high tile k of a terrain stands, its ground or its water, in pixels.
 const zOfTile = (t, k) => zOfLevel(t.level[k]) - (isWater(t.cover[k]) ? SINK : 0);
 
@@ -1314,6 +1478,17 @@ function groundFaces(g, i, j, z, left, right, upper, lower) {
   face(L, B, 0, Math.min(left, LEVEL_H), upper[0]); face(L, B, LEVEL_H, left, lower[0]);
   face(B, R, 0, Math.min(right, LEVEL_H), upper[1]); face(B, R, LEVEL_H, right, lower[1]);
 }
+
+// Where a river on tile k of a terrain falls a level into the water in front
+// of it: 1 towards +j (left on screen), 2 towards +i (right). Its face there
+// is a small waterfall, in FOAM.
+const FOAM = [0xf2f7f8, 0xd9e6ea];
+function falls(t, k) {
+  if (t.cover[k] !== COVER.river) return 0;
+  const into = n => (isWater(t.cover[n]) || t.main[n]) && t.level[n] < t.level[k];
+  return (k + t.W < t.W * t.H && into(k + t.W) ? 1 : 0) | (k % t.W < t.W - 1 && into(k + 1) ? 2 : 0);
+}
+const foamed = (colors, f) => [f & 1 ? FOAM[0] : colors[0], f & 2 ? FOAM[1] : colors[1]];
 
 // Whether higher ground in front hides part of what stands on tile (i, j):
 // the tile's own top when h is 0, else something h pixels tall and w wide on
@@ -1454,6 +1629,11 @@ let terrain = null;
 function groundZ(i, j) {
   const t = terrain, a = Math.floor(i) - (t?.x0 ?? 0), b = Math.floor(j) - (t?.y0 ?? 0);
   return t && a >= 0 && b >= 0 && a < t.W && b < t.H ? zOfLevel(t.level[b * t.W + a]) : 0;
+}
+// What covers the terrain at tile (i, j) (COVER).
+function coverAt(i, j) {
+  const t = terrain, a = i - (t?.x0 ?? 0), b = j - (t?.y0 ?? 0);
+  return t && a >= 0 && b >= 0 && a < t.W && b < t.H ? t.cover[b * t.W + a] : COVER.grass;
 }
 
 // The ground is built once into one mesh, so the whole map costs one draw
@@ -1685,9 +1865,9 @@ function drawGround() {
     const water = { shallows: ART.shallows, water: ART.water, deep: ART.deep, ripple: ART.ripple };
     const tops = { [COVER.grass]: ART.grass, [COVER.forest]: ART.forest, [COVER.woods]: ART.woods };
     eachGroundTile(terrain, (i, j, z, left, right, k) => {
-      const cover = terrain.cover[k], high = cover === COVER.rock || cover === COVER.snow;
+      const cover = terrain.cover[k], high = cover === COVER.rock || cover === COVER.snow, f = falls(terrain, k);
       const sides = isWater(cover) ? waterSides : cover === COVER.beach ? sandSides : cover === COVER.rock ? rockSides : cover === COVER.snow ? snowSides : upper;
-      groundFaces(pen, i, j, z, left, right, sides, high ? rockLower : lower);
+      groundFaces(pen, i, j, z, left, right, foamed(sides, f), foamed(high ? rockLower : lower, f));
       if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], water); return; }
       const top = cover === COVER.beach ? ART.sand : cover === COVER.field ? ART.crops[terrain.crop[k]] : cover === COVER.rock ? ART.rock
         : cover === COVER.snow ? ART.snow : landColour(tops[cover], z);
@@ -2111,14 +2291,14 @@ const KENNEY = {
     // faces where the ground in front is lower (its own slab covers the first
     // level), the pack's tile, then what stands on it away from the town.
     // The river's water sinks below the banks, with a wall where a bank lies
-    // behind it (1: towards -i, 2: towards -j).
-    const pen = new GroundPen(TEX.white), water = (i, j) => inRiver(plan.river, i, j), bridges = [];
+    // behind it (1: towards -i, 2: towards -j), not where it flows in from upstream.
+    const pen = new GroundPen(TEX.white), water = (i, j) => inRiver(plan.river, i, j) || isWater(coverAt(i, j)), bridges = [];
     const tile = (name, x, y, tint) => pen.sprite(TEX[name], x, y, 0.5, tileAnchor(name), KS, tint);
     const drawn = (draw, x, y) => { pen.dx = x; pen.dy = y; draw(); pen.dx = pen.dy = 0; };
     if (terrain) eachGroundTile(terrain, (i, j, z, left, right, k) => {
-      const cover = terrain.cover[k];
+      const cover = terrain.cover[k], f = falls(terrain, k);
       const high = cover === COVER.rock || cover === COVER.snow;
-      groundFaces(pen, i, j, z, left, right, isWater(cover) ? KIT.water.side : high ? KIT.rock : KIT.earth, high ? KIT.rock : KIT.earth);
+      groundFaces(pen, i, j, z, left, right, foamed(isWater(cover) ? KIT.water.side : high ? KIT.rock : KIT.earth, f), foamed(high ? KIT.rock : KIT.earth, f));
       const name = nameAt(i, j), [x, y] = iso(i + 0.5, j + 0.5);
       if (isWater(cover)) openWater(pen, i, j, z, terrain.depth[k], KIT.open);
       else if (cover === COVER.beach) tile(KIT.grass, x, y - z, KIT.sandTint);

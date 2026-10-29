@@ -457,6 +457,29 @@ Big recording, 13 seeds: of the land outside town, meadow 24–42 %, forest
 level 1–2, snow above rock, farms away from the town, no tree next to the
 town hidden). The terrain takes about 6 ms more (best of 40: 15 → 21 ms).
 
+Built (#42, 2026-10-29): rivers from the hills to the sea, in
+`planTerrain()` (`main`, `down`, `COVER.river`), drawn in both looks.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Downstream | From the town river's front end, the cheapest path to the sea or the map's edge (`DIG`: digging a level costs 2 tiles of length; the flat ring off the river's own ends costs `RING_COST`), dug down to level 1 | Never uphill; through hills it cuts a valley, which #39's taper then widens |
+| Upstream | From its back end, the gentlest path (a square spanning levels costs more) to ground of level 5 (`HILLS`), dug so each square is no higher than the one above it | A prototype showed that following where water collects fails: on 3 of 13 seeds only 4 tiles drain to the back end, past a ridge |
+| Width | The town river 2 tiles all the way (a chain of 2 × 2 squares), side rivers 1 | As in town (#37) |
+| Side rivers | A second flood over the filled ground, from the edges, the sea and the town river; each tile drains to its lowest lower neighbour, else to where the flood came from; a river where 250 tiles drain (`RIVER_FLOW`) | Owner's choice (1A): a few big ones. Water never runs uphill and crosses flat ground and lakes |
+| Town | The town and its flat ring stay dry: water runs round them, to the river or away | The issue: the town never floods; inside it only #37's river runs |
+| No river cut | A dry valley one tile wide from the town's front corner to the sea or the edge | Owner's choice (3A); side rivers round the town often use it |
+| Bridges | None outside town: no road crosses a river yet; the general bridge moves to #44 | Owner's choice (2A): nothing built that nothing uses |
+| Drawing | Rivers are water tiles in the ground mesh in the river's own colour, with the lakes' glints; where one drops a level into water in front, its face is foam (`FOAM`). The Kenney town river has no wall where the river flows in | Owner's choice (4A); one water style |
+
+Big recording, 13 seeds, both road widths: the town river 148–442 tiles,
+always from level 5 to the sea or the map's edge, never uphill; side rivers
+21–220 tiles from 3–12 sources, none uphill, all ending in water or at the
+edge, at most 1 starting next to the town river; the town drains; every
+#39–#41 check still passes (lakes, flat ring dry, nothing hidden). A town of
+one namespace: no river, side rivers from 1–5 sources, drains. The terrain
+takes about 1–1.5 × master's time (55–80 ms against 53 ms on a busy
+machine; not measured quiet).
+
 **Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
 out like SimCity or Cities: Skylines (houses, shops, towers).
 
