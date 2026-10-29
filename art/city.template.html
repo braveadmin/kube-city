@@ -1008,6 +1008,119 @@ function roadTiles(plan) {
 // Whether a tile is the river's water (bridges stand on it too).
 const inRiver = (river, i, j) => !!river && i >= river.x && i < river.x + river.w && j >= river.y && j < river.y + river.h;
 
+// ---------------------------------------------------------------- terrain
+// The land round the town grows from the world's seed: rolling hills from
+// layered noise and mountain ranges from ridged noise, in LEVELS levels. The
+// town stands on flat ground at level 1 that blends into the hills a few tiles
+// out, so a growing town pushes the hills back. The mountains keep to the back
+// of the view (the top of the screen) and the ground in front of the town
+// stays low, so no terrain stands in front of a district. Rebuilt when the
+// city re-packs or the seed changes. A plain function of the plan and the
+// seed: art/terrain_sketch.mjs runs it outside the page.
+
+const WORLD_MARGIN = 30;  // tiles of land round the town
+const LEVELS = 13;        // ground levels 0–12; the town stands on level 1
+const FLAT = 2;           // tiles of flat ground round the town
+const BLEND = 15;         // the hills reach their full height this many tiles from the town
+const FRONT_LOW = 10;     // the ground this many tiles in front of the town stays at level 1
+const SLOPE = 2;          // a tile stands at most this many levels above its lowest neighbour
+// The shape of the land; #45's world styles will be presets of these.
+const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, back: 0.85 };
+
+// Smooth noise in [0, 1] from a table of random numbers: `octaves` layers,
+// each twice as fine and half as strong as the one before. The table repeats
+// every 256 units, far beyond any map.
+function noiseFrom(seed) {
+  const r = rng(seed), table = new Float32Array(65536);
+  for (let n = 0; n < table.length; n++) table[n] = r();
+  const at = (x, y) => table[((x & 255) << 8) | (y & 255)];
+  const ease = t => t * t * (3 - 2 * t);
+  const value = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), u = ease(x - xi), v = ease(y - yi);
+    const a = at(xi, yi), b = at(xi + 1, yi), c = at(xi, yi + 1), d = at(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  };
+  return (x, y, octaves) => {
+    let sum = 0, amp = 1, f = 1, norm = 0;
+    for (let o = 0; o < octaves; o++) { sum += value(x * f + o * 17.31, y * f - o * 9.13) * amp; norm += amp; amp /= 2; f *= 2.03; }
+    return sum / norm;
+  };
+}
+
+// The terrain round a plan: a map of WORLD_MARGIN tiles round the town, tile
+// (i, j) at index (j - y0) * W + (i - x0). `level` is the ground level of each
+// tile, `height` the height before it was cut into levels (#41 and #43 read
+// it), `toTown` the distance to the nearest town tile, in tiles.
+function planTerrain(plan, seed) {
+  const x0 = -WORLD_MARGIN, y0 = -WORLD_MARGIN, W = plan.W + 2 * WORLD_MARGIN, H = plan.H + 2 * WORLD_MARGIN, N = W * H;
+  const at = (i, j) => (j - y0) * W + (i - x0);
+
+  // The town: its blocks, pocket parks, river and roads.
+  const toTown = new Float32Array(N).fill(Infinity), queue = [];
+  const town = k => { if (toTown[k] === Infinity) { toTown[k] = 0; queue.push(k); } };
+  for (const r of [...plan.districts.flatMap(d => d.blocks), ...plan.parks, ...(plan.river ? [plan.river] : [])])
+    for (let j = Math.max(r.y, y0); j < Math.min(r.y + r.h, y0 + H); j++)
+      for (let i = Math.max(r.x, x0); i < Math.min(r.x + r.w, x0 + W); i++) town(at(i, j));
+  for (const key of roadTiles(plan).keys()) {
+    const [i, j] = key.split("/").map(Number);
+    if (i >= x0 && j >= y0 && i < x0 + W && j < y0 + H) town(at(i, j));
+  }
+  // The town's front row in each screen column (i - j): the largest i + j.
+  const front = new Float64Array(W + H).fill(-Infinity), col = k => k % W - ((k / W) | 0) + H - 1;
+  for (const k of queue) front[col(k)] = Math.max(front[col(k)], k % W + ((k / W) | 0));
+  // Distance to the town, a step to any of the eight neighbours.
+  for (let q = 0; q < queue.length; q++) {
+    const k = queue[q], i = k % W, j = (k / W) | 0;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const ni = i + di, nj = j + dj, nk = nj * W + ni;
+      if (ni >= 0 && nj >= 0 && ni < W && nj < H && toTown[nk] === Infinity) { toTown[nk] = toTown[k] + 1; queue.push(nk); }
+    }
+  }
+
+  // Height: hills everywhere, mountains along the ridges of a second noise
+  // where a third says there is a range, fading towards the front of the view;
+  // finer noise along a ridge makes peaks and saddles of it.
+  const hills = noiseFrom(hash(`${seed} hills`)), ridges = noiseFrom(hash(`${seed} ridges`)), ranges = noiseFrom(hash(`${seed} ranges`));
+  const t = TERRAIN, cx = Math.floor(plan.W / 2), cy = Math.floor(plan.H / 2);
+  const smooth = (a, b, x) => { const s = Math.min(1, Math.max(0, (x - a) / (b - a))); return s * s * (3 - 2 * s); };
+  const height = new Float32Array(N), level = new Int8Array(N);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const k = j * W + i, x = i + x0 - cx, y = j + y0 - cy;
+    const away = smooth(FLAT, BLEND, toTown[k]);
+    const forward = (x + y) / ((W + H) / 2);   // -1 at the back corner, +1 at the front one
+    const ridge = 1 - Math.abs(2 * ridges(x / t.rangeSize, y / t.rangeSize, 3) - 1);
+    const range = smooth(0.35, 0.6, ranges(x / (2 * t.rangeSize), y / (2 * t.rangeSize), 2));
+    const peaks = 0.45 + 0.55 * ridges(x / 7 + 91.7, y / 7 - 33.1, 2);
+    const mountain = t.mountains * Math.pow(ridge, 4) * peaks * range * (1 - t.back * smooth(-0.3, 0.5, forward));
+    const h = away * (t.hills * (2 * hills(x / t.hillSize, y / t.hillSize, 4) - 1) + t.rise + mountain);
+    height[k] = h;
+    level[k] = h < -0.06 ? 0 : Math.min(LEVELS - 1, 1 + Math.floor((LEVELS - 1) * (1 - Math.exp(-1.4 * Math.max(0, h)))));
+  }
+
+  // In front of the town the ground stays at level 1 for FRONT_LOW tiles and a
+  // few more where the hills say so (a ragged edge, not a straight one), then
+  // may rise a level a tile.
+  for (let k = 0; k < N; k++) {
+    const c = col(k);
+    const row = Math.max(front[c], c > 0 ? front[c - 1] : -Infinity, c + 1 < front.length ? front[c + 1] : -Infinity);
+    const ahead = (k % W + ((k / W) | 0) - row) / 2;   // tiles in front of the town's front row
+    const low = FRONT_LOW + 6 * hills(k % W / 5 + 51.3, ((k / W) | 0) / 5 - 17.9, 2);
+    if (ahead > 0) level[k] = Math.min(level[k], Math.max(1, 1 + Math.floor(ahead - low)));
+  }
+
+  // Peaks taper: no tile more than SLOPE levels above its lowest neighbour,
+  // in two passes (from the back corner, then from the front one).
+  for (let k = 0; k < N; k++) {
+    if (k % W > 0) level[k] = Math.min(level[k], level[k - 1] + SLOPE);
+    if (k >= W) level[k] = Math.min(level[k], level[k - W] + SLOPE);
+  }
+  for (let k = N - 1; k >= 0; k--) {
+    if (k % W < W - 1) level[k] = Math.min(level[k], level[k + 1] + SLOPE);
+    if (k + W < N) level[k] = Math.min(level[k], level[k + W] + SLOPE);
+  }
+  return { x0, y0, W, H, level, height, toTown };
+}
+
 // ---------------------------------------------------------------- world model
 
 const world = {
@@ -1118,6 +1231,8 @@ root.addChild(groundLayer, cityLayer, overlay, markers);
 app.stage.addChild(root);
 
 const plan = { districts: [], parks: [], W: 0, H: 0, roads: [], river: null, gap: 1 };
+// The land round the town (planTerrain); nothing draws it yet (#40).
+let terrain = null;
 
 // Dashes down the middle of the main roads, stopping short of junctions.
 function laneMarkings(g) {
@@ -1695,7 +1810,7 @@ function setSeed(seed) {
   document.getElementById("seed-note").textContent = worldSeed.kept
     ? `Kept in this browser for ${where}; the same seed always grows the same land.`
     : "This browser keeps no site data here, so every visit is a new world.";
-  if (changed && !planDirty && groundLayer.children.length) rebuildGround();
+  if (changed && !planDirty && groundLayer.children.length) { terrain = planTerrain(plan, seed); rebuildGround(); }
 }
 seedInput.addEventListener("change", () => {
   const seed = seedInput.value.trim();
@@ -1710,6 +1825,7 @@ document.getElementById("new-world").addEventListener("click", () => { if (world
 function replan() {
   planDirty = false;
   Object.assign(plan, planDistricts());
+  terrain = planTerrain(plan, worldSeed.seed);
   world.districts = plan.districts;
   bounds = computeBounds();
   rebuildGround();

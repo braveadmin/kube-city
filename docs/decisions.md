@@ -378,6 +378,26 @@ hills and down to the sea along the cheapest path; side rivers from water
 collecting downhill; ground cover from height, slope and moisture. About
 60–130 ms for the big recording in Node.
 
+Built (#39, 2026-10-29): `planTerrain()` in the page's terrain section, run
+outside the page by `art/terrain_sketch.mjs` (the checks below, a map of
+levels and `art/out/terrain.html`, where any seed can be tried). Nothing in
+the page draws it yet: #40 does (owner's choice 1A in the issue).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Map | The town plus 30 tiles on every side (`WORLD_MARGIN`); 110 × 108 on the big recording | The issue's figure (owner's choice); about 4× the town's tiles, as #40 expects |
+| Noise | Value noise from a 256 × 256 table per purpose, seeded by `hash(seed + purpose)`; sampled from the town's middle | Same seed and town, same terrain; a re-pack moves the hills only where the town grew |
+| Height | Hills (4 layers, slightly raised so most land is above the town) plus mountains: ridged noise to the 4th power, where a slower noise says there is a range, with finer noise along the ridge for peaks and saddles; then 13 levels, compressed at the top | Without the finer noise a range was one long flat top at level 12; without the rise most land was level 0 or 1 |
+| Town site | Level 1 under every town tile (blocks, parks, roads) and 2 tiles round it; the hills grow to full height by 15 tiles out, measured from the town's real tiles | Follows the ragged edge (#35); a bigger town pushes the hills back |
+| Behind | Mountains fade to 15 % towards the front corner of the map; in front of the town (below it on screen, its front rows per screen column) the ground stays at level 1 for 10–16 tiles (noise makes the edge ragged), then rises at most a level a tile | Nothing in front of a district; a straight 10 tiles gave a ruler-straight edge along the town |
+| Taper | No tile more than 2 levels above its lowest neighbour (two passes over the map) | Peaks become pyramids, never columns |
+| Rebuilt | On a re-pack and when the seed changes, never per frame | The issue |
+
+Big recording, 13 seeds: 9–26 ms per terrain after the first (26–46 ms
+cold) in Node; level 1 is about half the map (the town is a fifth), level
+8 and up 1–20 %, 67–100 % of it in the back half; every seed reaches level
+9, ten of them 12; within 10 tiles in front of the town always level 1.
+
 **Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
 out like SimCity or Cities: Skylines (houses, shops, towers).
 

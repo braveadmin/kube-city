@@ -28,6 +28,13 @@ counts (sizes only, no names; `2` for Metropolis's road width):
 node art/layout_sketch.mjs recordings/big-cluster.jsonl [2]
 ```
 
+The terrain round that layout for a seed: checks, a map of levels and
+`art/out/terrain.html` (try other seeds there):
+
+```bash
+node art/terrain_sketch.mjs recordings/big-cluster.jsonl [seed] [2]
+```
+
 Kenney sprites (CC0) live in `assets/kenney/`; see its README to add more.
 
 ## Layout
