@@ -90,7 +90,12 @@ Flow, one feature per GitHub issue (and per session: "work on issue #N"):
 3. **Decide** (owner): answers in one go; `needs-decision` label until then.
 4. **Build** (Claude): branch in its own worktree (below), PR with
    "Closes #N" and tests; no screenshots (owner's choice, 2026-10-29): for
-   visible changes, give the owner a command to run it instead.
+   visible changes, give the owner a command to run it instead. When there
+   is something for the owner to check, open a new Herdr pane, compile the
+   new work there (`cargo run --release -- --demo --no-open` in the
+   worktree) and open it in Firefox on the Windows side, outside WSL
+   (owner's choice, 2026-10-29):
+   `"/mnt/c/Program Files/Mozilla Firefox/firefox.exe" http://localhost:7700`
 5. **Accept** (owner): tests and merges, or comments.
 6. **Release** (Claude, on the owner's go): milestone → CHANGELOG.md → tag →
    GitHub, Homebrew, crates.io.
