@@ -349,6 +349,9 @@ const ART = {
   yard: 0xaaaba5, yardLot: 0x9b9c96, water: 0x6fa8d0, ripple: 0xb3d6ec, parapet: 0xeeeae0,
   // Sea and lakes by depth, and the sand along the sea.
   shallows: 0x8cc0e0, deep: 0x5089bd, sand: 0xe4d4a2,
+  // Ground cover: forest and woods floors, crops (wheat, green, ploughed,
+  // fallow), rock and snow.
+  forest: 0x76a75c, woods: 0x82b263, crops: [0xdcc56a, 0xa8c664, 0xa8835e, 0xc6bd86], rock: 0xa39d93, snow: 0xf1f4f6,
 };
 
 const P = (di, dj, z) => [(di - dj) * TW / 2, (di + dj) * TH / 2 - z];
@@ -538,15 +541,40 @@ function scorched(g, v) {
   return h + 4;
 }
 
-function tree(g, x, y, s, seed) {
+// `plain`: without its shadow and highlight, for the thousands in a forest.
+function tree(g, x, y, s, seed, plain = false) {
   const r = rng(seed);
   const [px, py] = P(x, y, 0);
-  g.beginFill(0x000000, 0.12); g.drawEllipse(px + 3, py + 1, 7 * s, 3.5 * s); g.endFill();
+  if (!plain) { g.beginFill(0x000000, 0.12); g.drawEllipse(px + 3, py + 1, 7 * s, 3.5 * s); g.endFill(); }
   g.beginFill(0x7a5a3c); g.drawRect(px - 1, py - 8 * s, 2, 8 * s); g.endFill();
   const green = [0x5f9e4c, 0x6fae55, 0x4f8a45][Math.floor(r() * 3)];
   g.beginFill(shade(green, 0.85)); g.drawCircle(px + 1.5, py - 12 * s, 6.5 * s); g.endFill();
   g.beginFill(green); g.drawCircle(px - 1, py - 14 * s, 5.5 * s); g.endFill();
-  g.beginFill(shade(green, 1.18)); g.drawCircle(px - 2, py - 16 * s, 2.5 * s); g.endFill();
+  if (!plain) { g.beginFill(shade(green, 1.18)); g.drawCircle(px - 2, py - 16 * s, 2.5 * s); g.endFill(); }
+}
+
+// A pine on the mountainsides: a narrow cone, lit on its left.
+function pine(g, x, y, s, seed) {
+  const [px, py] = P(x, y, 0), w = 5 * s, h = (17 + (seed % 5)) * s;
+  const green = [0x3f6f48, 0x4a7a4e, 0x365f40][(seed >>> 3) % 3];
+  g.beginFill(0x6b4f35); g.drawRect(px - 1, py - 3 * s, 2, 3 * s); g.endFill();
+  poly(g, shade(green, 1.12), [[px, py - h], [px - w, py - 2 * s], [px, py - s]]);
+  poly(g, shade(green, 0.82), [[px, py - h], [px, py - s], [px + w, py - 2 * s]]);
+}
+
+// A small farm on a field: a white house with a red roof and a red barn,
+// lower than anything in town. (x, y) is the tile's middle.
+function farm(g, x, y, seed) {
+  const flip = seed % 2 ? 1 : -1, roof = 0xb4473a, wall = 0xeeeae0;
+  // The barn behind, then the house; each a box with a roof ridge along i.
+  const shed = (cx, cy, a, b, h, ridge, walls, top) => {
+    box(g, cx, cy, a, b, h, walls, shade(walls, 0.88), shade(walls, 0.7));
+    poly(g, shade(top, 0.8), [P(cx - a, cy - b, h), P(cx + a, cy - b, h), P(cx + a, cy, h + ridge), P(cx - a, cy, h + ridge)]);
+    poly(g, shade(walls, 0.7), [P(cx + a, cy - b, h), P(cx + a, cy + b, h), P(cx + a, cy, h + ridge)]);
+    poly(g, top, [P(cx - a, cy + b, h), P(cx + a, cy + b, h), P(cx + a, cy, h + ridge), P(cx - a, cy, h + ridge)]);
+  };
+  shed(x - 0.12 * flip, y - 0.16, 0.2, 0.13, 9, 6, 0xa8443a, 0x8a8580);
+  shed(x + 0.14 * flip, y + 0.14, 0.15, 0.11, 7, 6, wall, roof);
 }
 
 // A car along i, or along j when `turned`.
@@ -1028,15 +1056,21 @@ const FRONT_LOW = 10;     // the ground this many tiles in front of the town sta
 const SLOPE = 2;          // a tile stands at most this many levels above its lowest neighbour
 const LEVEL_H = 16;       // pixels from one ground level to the next: about the Kenney tiles' slab
 const BASE = 22;          // the earth base's depth below level 0, in pixels
-const TREE = [24, 28];    // a tree's width and height in pixels, as hiddenBy sees it
 const SINK = 5;           // pixels a sea or lake lies below its shore
 const LAKE_MIN = 4;       // tiles; a smaller hollow is always filled in, a smaller bay of sea too
 // The shape of the land; #45's world styles will be presets of these. `coast`
 // is the share of worlds whose sea comes in over one of the map's front sides,
 // `sea` how deep it cuts there, `lakes` the share of hollows that hold a lake.
-const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, back: 0.85, coast: 0.5, sea: 1.2, lakes: 0.5 };
-// What covers a tile of terrain.
-const COVER = { grass: 0, sea: 1, lake: 2, beach: 3 };
+// `forest` and `woods` are the moisture above which those grow, `fields` how
+// far out fields reach at most, in tiles.
+const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, back: 0.85, coast: 0.5, sea: 1.2, lakes: 0.5, forest: 0.6, woods: 0.53, fields: 12 };
+// What covers a tile of terrain; grass is meadow.
+const COVER = { grass: 0, sea: 1, lake: 2, beach: 3, forest: 4, woods: 5, field: 6, rock: 7, snow: 8 };
+const PINES = 4;          // trees from this level up are pines (rock starts at 6 or higher)
+const ROCK_MIN = 6;       // no rock or snow below this level
+const PLOT = [4, 3];      // a field plot's size in tiles (along i, along j)
+const FARM_EVERY = 6;     // about one plot in this many has a farm
+const CROPS = 4;          // wheat, green, ploughed, fallow
 
 // Smooth noise in [0, 1] from a table of random numbers: `octaves` layers,
 // each twice as fine and half as strong as the one before. The table repeats
@@ -1061,10 +1095,11 @@ function noiseFrom(seed) {
 // The terrain round a plan: a map of WORLD_MARGIN tiles round the town, tile
 // (i, j) at index (j - y0) * W + (i - x0). `level` is the ground level of each
 // tile (of a sea or lake, the level of its surface: its shore's), `height`
-// the height before it was cut into levels (#43 reads it), `toTown` the
-// distance to the nearest town tile, in tiles, `cover` what covers each tile
-// (COVER) and `depth` how far a sea or lake tile lies from the shore, in
-// tiles, a little uneven.
+// the height before it was cut into levels, `toTown` the distance to the
+// nearest town tile, in tiles, `cover` what covers each tile (COVER), `depth`
+// how far a sea or lake tile lies from the shore, in tiles, a little uneven,
+// `crop` a field's crop (0 to CROPS - 1) and `farms` the tiles with a farm
+// (index -> the plot's hash).
 function planTerrain(plan, seed) {
   const x0 = -WORLD_MARGIN, y0 = -WORLD_MARGIN, W = plan.W + 2 * WORLD_MARGIN, H = plan.H + 2 * WORLD_MARGIN, N = W * H;
   const at = (i, j) => (j - y0) * W + (i - x0);
@@ -1189,7 +1224,64 @@ function planTerrain(plan, seed) {
   for (let k = 0; k < N; k++) if (isWater(cover[k])) depth[k] = Infinity; else shore.push(k);
   for (let n = 0; n < shore.length; n++) near(shore[n], nk => { if (depth[nk] === Infinity) { depth[nk] = depth[shore[n]] + 1; shore.push(nk); } });
   for (let k = 0; k < N; k++) if (isWater(cover[k])) depth[k] += 2 * hills(k % W / 4 + 7.7, ((k / W) | 0) / 4 - 3.1, 2) - 1;
-  return { x0, y0, W, H, level, height, toTown, cover, depth };
+
+  // Ground cover, on the land outside the town. Snow on the world's top two
+  // levels, rock on the three below and on steep mountainsides; fields in
+  // plots on the low land round the town, out to a ragged edge; forest and
+  // lighter woods where it is wet (a moisture noise, wetter near water);
+  // meadow elsewhere.
+  const toWater = new Float32Array(N).fill(Infinity), shores = [];
+  for (let k = 0; k < N; k++) {
+    const i = k % W + x0, j = ((k / W) | 0) + y0;
+    if (isWater(cover[k]) || inRiver(plan.river, i, j)) { toWater[k] = 0; shores.push(k); }
+  }
+  for (let n = 0; n < shores.length; n++) near(shores[n], nk => { if (toWater[nk] === Infinity) { toWater[nk] = toWater[shores[n]] + 1; shores.push(nk); } });
+  const moisture = noiseFrom(hash(`${seed} moisture`)), plots = noiseFrom(hash(`${seed} fields`));
+  let top = 0;
+  for (let k = 0; k < N; k++) if (toTown[k] > 0 && !isWater(cover[k])) top = Math.max(top, level[k]);
+  const snow = Math.max(ROCK_MIN + 1, top - 1), rock = Math.max(ROCK_MIN, top - 4);
+  const crop = new Uint8Array(N), farms = new Map();
+  for (let k = 0; k < N; k++) {
+    if (cover[k] || toTown[k] === 0) continue;
+    const i = k % W, j = (k / W) | 0, x = i + x0 - cx, y = j + y0 - cy;
+    let drop = 0;
+    near(k, nk => { drop = Math.max(drop, level[k] - level[nk]); });
+    const reach = 3 + (t.fields - 3) * plots(x / 11, y / 11, 2);
+    const damp = moisture(x / 16, y / 16, 3) + 0.25 * Math.max(0, 1 - toWater[k] / 10);
+    if (level[k] >= snow) cover[k] = COVER.snow;
+    else if (level[k] >= rock || (level[k] >= ROCK_MIN && drop >= SLOPE)) cover[k] = COVER.rock;
+    else if (level[k] <= 2 && toTown[k] <= reach) {
+      // A plot's crop by its place on a grid of plots; now and then a meadow.
+      const pi = Math.floor((i + x0) / PLOT[0]), pj = Math.floor((j + y0) / PLOT[1]), h = hash(`${seed} plot ${pi}/${pj}`);
+      if (h % 7 === 0) continue;
+      cover[k] = COVER.field;
+      crop[k] = (h >>> 3) % CROPS;
+      // A farm on the plot's middle tile, away from the town.
+      if ((h >>> 6) % FARM_EVERY === 0 && toTown[k] >= 3 && (i + x0) === pi * PLOT[0] + 1 && (j + y0) === pj * PLOT[1] + 1) farms.set(k, h);
+    }
+    else if (damp > t.forest) cover[k] = COVER.forest;
+    else if (damp > t.woods) cover[k] = COVER.woods;
+  }
+  return { x0, y0, W, H, level, height, toTown, cover, depth, crop, farms };
+}
+
+// The trees the ground cover grows: two or three a tile in a forest, about
+// one in woods, now and then one in a meadow, each at its own spot on the
+// tile, by position and the world's seed. Pines from PINES up. Back to front.
+// [i, j, size, seed, pine]
+function coverTrees(t, seed) {
+  const trees = [];
+  for (let k = 0; k < t.W * t.H; k++) {
+    const c = t.cover[k], i = k % t.W + t.x0, j = ((k / t.W) | 0) + t.y0, h = hash(`${seed} trees ${i}/${j}`);
+    const n = c === COVER.forest ? 2 + (h % 2) : c === COVER.woods ? (h % 5 < 3 ? 1 : h % 5 === 3 ? 2 : 0) : c === COVER.grass && t.toTown[k] > 0 && h % 14 === 0 ? 1 : 0;
+    const r = rng(h);
+    for (let m = 0; m < n; m++) {
+      // Spread over the tile, the second and third tree away from the first.
+      const u = 0.2 + 0.6 * ((r() + m / n) % 1), v = 0.2 + 0.6 * r();
+      trees.push([i + u, j + v, 0.8 + 0.45 * r(), (h + m * 7919) >>> 0, t.level[k] >= PINES]);
+    }
+  }
+  return trees.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
 }
 
 // How high a ground level stands above the town (level 1), in pixels.
@@ -1408,9 +1500,10 @@ class GroundPen {
     return this;
   }
   drawRect(x, y, w, h) { return this.drawPolygon([x, y, x + w, y, x + w, y + h, x, y + h]); }
+  // Eight points: ellipses here are tree crowns and shadows, a few pixels across.
   drawEllipse(x, y, rx, ry) {
     const pts = [];
-    for (let k = 0; k < 14; k++) pts.push(x + rx * Math.cos(k * Math.PI / 7), y + ry * Math.sin(k * Math.PI / 7));
+    for (let k = 0; k < 8; k++) pts.push(x + rx * Math.cos(k * Math.PI / 4), y + ry * Math.sin(k * Math.PI / 4));
     return this.drawPolygon(pts);
   }
   drawCircle(x, y, r) { return this.drawEllipse(x, y, r, r); }
@@ -1476,21 +1569,6 @@ function parkTrees(p) {
   return spots;
 }
 
-// Where trees stand on the grass round the town and in the strips its edge
-// gave back: about one tile in eight, by position and the world's seed, never
-// on sand or water. [i, j]
-function grassTrees() {
-  const road = roadTiles(plan), land = new Set(), spots = [];
-  for (const r of [...plan.districts.flatMap(d => d.blocks), ...plan.parks])
-    for (let j = r.y; j < r.y + r.h; j++) for (let i = r.x; i < r.x + r.w; i++) land.add(`${i}/${j}`);
-  for (let j = -MARGIN; j < plan.H + MARGIN; j++) for (let i = -MARGIN; i < plan.W + MARGIN; i++) {
-    const k = `${i}/${j}`;
-    const bare = !terrain || !terrain.cover[(j - terrain.y0) * terrain.W + i - terrain.x0];   // no sand or water
-    if (bare && !land.has(k) && !road.has(k) && !inRiver(plan.river, i, j) && hash(`${worldSeed.seed} grass ${k}`) % 8 === 0) spots.push([i, j]);
-  }
-  return spots;
-}
-
 // The river in the Metropolis look: water between stone kerbs with the far
 // bank's wall showing above it, bridges with a parapet each side, and the
 // water on the front of the base where it leaves the town.
@@ -1535,16 +1613,19 @@ function addScenery(obj, i, j) {
   cityLayer.addChild(obj); scenery.push(obj);
 }
 
-// The trees on the grass round the town, by tile ("i/j"), that higher ground
-// in front partly hides: those are drawn into the ground, in its order; the
-// rest stand in the city layer like every other tree.
-function hiddenTrees(spots) {
-  const hidden = new Map();
-  for (const spot of spots) {
-    const [i, j] = spot;
-    if (terrain && hiddenBy(terrain, Math.floor(i), Math.floor(j), TREE[1], TREE[0])) hidden.set(`${Math.floor(i)}/${Math.floor(j)}`, spot);
+// The ground cover's trees (coverTrees): those 2 or more tiles from the
+// town by tile index, drawn into the ground in its order, and those next to
+// it, which stand in the city layer and sort with the buildings.
+function coverTreesByTile() {
+  const inGround = new Map(), nearTown = [];
+  if (!terrain) return { inGround, nearTown };
+  for (const tree of coverTrees(terrain, worldSeed.seed)) {
+    const k = (Math.floor(tree[1]) - terrain.y0) * terrain.W + Math.floor(tree[0]) - terrain.x0;
+    if (terrain.toTown[k] < 2) nearTown.push(tree);
+    else if (inGround.has(k)) inGround.get(k).push(tree);
+    else inGround.set(k, [tree]);
   }
-  return hidden;
+  return { inGround, nearTown };
 }
 
 // Grass on the tops, a little lighter the higher they stand.
@@ -1567,23 +1648,51 @@ function openWater(pen, i, j, z, depth, c) {
   pen.wave = 0;
 }
 
+// What lies on a tile of ground cover standing z pixels up, after its top:
+// furrows across a field (none on fallow land), now and then a stone on
+// rock, a farm, then the tile's trees (`drawTree` draws one).
+function coverDetails(pen, t, k, i, j, z, trees, drawTree) {
+  const cover = t.cover[k];
+  pen.dy = -z;
+  if (cover === COVER.field && t.crop[k] !== 3) {
+    // Each plot's furrows run one way, its neighbours' the other.
+    const along = (Math.floor(i / PLOT[0]) + Math.floor(j / PLOT[1])) & 1;
+    for (const u of [0.2, 0.5, 0.8]) {
+      const pts = along ? [iso(i, j + u - 0.05), iso(i + 1, j + u - 0.05), iso(i + 1, j + u + 0.05), iso(i, j + u + 0.05)]
+        : [iso(i + u - 0.05, j), iso(i + u + 0.05, j), iso(i + u + 0.05, j + 1), iso(i + u - 0.05, j + 1)];
+      poly(pen, 0x000000, pts, 0.09);
+    }
+  }
+  if (cover === COVER.rock) {
+    const h = hash(`stone ${i}/${j}`);
+    if (h % 3 === 0) shadedBox(pen, i + 0.3 + ((h >>> 4) % 5) / 10, j + 0.3 + ((h >>> 8) % 5) / 10, 0.07 + ((h >>> 12) % 3) / 50, 0.06, 3 + (h >>> 14) % 4, ART.rock);
+  }
+  if (t.farms.has(k)) farm(pen, i + 0.5, j + 0.5, t.farms.get(k));
+  for (const tree of trees.get(k) || []) drawTree(tree);
+  pen.dy = 0;
+}
+
 function drawGround() {
-  // The land, with the trees on the grass it hides, then the town on top:
-  // it stands on flat ground that nothing in front of it rises above.
-  const grass = grassTrees().map(([i, j]) => [i + 0.5, j + 0.5, 1.1, hash(`${i}/${j}`)]);
-  const hidden = hiddenTrees(grass);
+  // The land with its cover and the trees away from the town, then the town
+  // on top: it stands on flat ground that nothing in front of it rises above.
+  const { inGround, nearTown } = coverTreesByTile();
   if (terrain) {
     const pen = new GroundPen(PIXI.Texture.WHITE);
     const upper = [0x6e9a58, 0x5b8248], lower = [shade(ART.earth, 0.9), shade(ART.earth, 0.7)];
     const sandSides = [shade(ART.sand, 0.85), shade(ART.sand, 0.7)], waterSides = [shade(ART.water, 0.85), shade(ART.water, 0.7)];
+    const rockSides = [shade(ART.rock, 0.85), shade(ART.rock, 0.7)], rockLower = [shade(ART.rock, 0.75), shade(ART.rock, 0.6)];
+    const snowSides = [0xdfe6ee, 0xc3ccd6];
     const water = { shallows: ART.shallows, water: ART.water, deep: ART.deep, ripple: ART.ripple };
+    const tops = { [COVER.grass]: ART.grass, [COVER.forest]: ART.forest, [COVER.woods]: ART.woods };
     eachGroundTile(terrain, (i, j, z, left, right, k) => {
-      const cover = terrain.cover[k];
-      groundFaces(pen, i, j, z, left, right, isWater(cover) ? waterSides : cover === COVER.beach ? sandSides : upper, lower);
-      if (isWater(cover)) openWater(pen, i, j, z, terrain.depth[k], water);
-      else poly(pen, cover === COVER.beach ? ART.sand : landColour(ART.grass, z), tileTop(i, j, z));
-      const t = hidden.get(`${i}/${j}`);
-      if (t) { pen.dy = -z; tree(pen, ...t); pen.dy = 0; }
+      const cover = terrain.cover[k], high = cover === COVER.rock || cover === COVER.snow;
+      const sides = isWater(cover) ? waterSides : cover === COVER.beach ? sandSides : cover === COVER.rock ? rockSides : cover === COVER.snow ? snowSides : upper;
+      groundFaces(pen, i, j, z, left, right, sides, high ? rockLower : lower);
+      if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], water); return; }
+      const top = cover === COVER.beach ? ART.sand : cover === COVER.field ? ART.crops[terrain.crop[k]] : cover === COVER.rock ? ART.rock
+        : cover === COVER.snow ? ART.snow : landColour(tops[cover], z);
+      poly(pen, top, tileTop(i, j, z));
+      coverDetails(pen, terrain, k, i, j, z, inGround, ([x, y, size, seed, conifer]) => (conifer ? pine : tree)(pen, x, y, size, seed, true));
     });
     groundLayer.addChild(pen.mesh());
   }
@@ -1632,7 +1741,7 @@ function drawGround() {
   }
   for (const p of plan.parks) for (const [i, j] of parkTrees(p)) spots.push([i + 0.5, j + 0.5, 1.1, hash(`${i}/${j}`)]);
   for (const [i, j, di, dj] of avenueSpots()) spots.push([i + 0.5 + di * 0.3, j + 0.5 + dj * 0.3, 0.75, hash(`${i}/${j}/${di}/${dj}`)]);
-  for (const t of grass) if (!hidden.has(`${t[0] - 0.5}/${t[1] - 0.5}`)) spots.push(t);
+  for (const [i, j, size, seed] of nearTown) spots.push([i, j, size, seed]);
   spots.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
   for (const [i, j, s, seed] of spots) {
     const tg = new PIXI.Graphics(); tree(tg, 0, 0, s, seed);
@@ -1715,6 +1824,14 @@ const KIT = {
   // plain lot tinted sand.
   open: { shallows: 0xb0e0ea, water: 0x9cd4e2, deep: 0x7dbcd2, ripple: 0xe2f4f8 },
   sandTint: 0xf3e2b0,
+  // Ground cover, the plain lot tinted: forest and woods floors, crops
+  // (wheat, green, ploughed, fallow), rock; snow is a code-drawn top on a
+  // pale tile. Rock and snow have rock faces ([left, right]). Forest trees
+  // are the pack's one tree in a few tints; pines are drawn in code.
+  coverTints: { [COVER.forest]: 0x88c070, [COVER.woods]: 0x94cc74, [COVER.rock]: 0xb9b4ab, [COVER.snow]: 0xe8eef4 },
+  cropTints: [0xfff090, 0xc2e08a, 0xc8a07c, 0xe8dca0],
+  snow: 0xf4f7fa, rock: [0x9a958c, 0x7c776f],
+  treeTints: [0xffffff, 0xe2eed4, 0xcadcb8],
   // Bridge decks: the straight road tiles (5 along j, 10 along i) without
   // their earth, keeping a slab edge on the long side that faces the viewer.
   decks: { 5: "deck5", 10: "deck10" },
@@ -1989,10 +2106,10 @@ const KENNEY = {
       const crossing = (n === 5 && (junction(i, j - 1) || junction(i, j + 1))) || (n === 10 && (junction(i - 1, j) || junction(i + 1, j)));
       return (crossing ? KIT.crossings[n] : KIT.roads[n]) || KIT.road;
     };
-    const hidden = hiddenTrees(grassTrees().map(([i, j]) => [i + 0.5, j + 0.5]));
+    const { inGround, nearTown } = coverTreesByTile();
     // All of the map's ground in one mesh, back to front: a tile's earth
     // faces where the ground in front is lower (its own slab covers the first
-    // level), the pack's tile, then a tree the ground in front partly hides.
+    // level), the pack's tile, then what stands on it away from the town.
     // The river's water sinks below the banks, with a wall where a bank lies
     // behind it (1: towards -i, 2: towards -j).
     const pen = new GroundPen(TEX.white), water = (i, j) => inRiver(plan.river, i, j), bridges = [];
@@ -2000,15 +2117,24 @@ const KENNEY = {
     const drawn = (draw, x, y) => { pen.dx = x; pen.dy = y; draw(); pen.dx = pen.dy = 0; };
     if (terrain) eachGroundTile(terrain, (i, j, z, left, right, k) => {
       const cover = terrain.cover[k];
-      groundFaces(pen, i, j, z, left, right, isWater(cover) ? KIT.water.side : KIT.earth, KIT.earth);
+      const high = cover === COVER.rock || cover === COVER.snow;
+      groundFaces(pen, i, j, z, left, right, isWater(cover) ? KIT.water.side : high ? KIT.rock : KIT.earth, high ? KIT.rock : KIT.earth);
       const name = nameAt(i, j), [x, y] = iso(i + 0.5, j + 0.5);
       if (isWater(cover)) openWater(pen, i, j, z, terrain.depth[k], KIT.open);
       else if (cover === COVER.beach) tile(KIT.grass, x, y - z, KIT.sandTint);
       else if (name === WATER) {
         drawn(() => kenneyWater(pen, (water(i - 1, j) ? 0 : 1) | (water(i, j - 1) ? 0 : 2), hash(`ripple ${i}/${j}`) % 4), x, y - z);
         if (isRoad(i, j)) bridges.push([i, j]);
-      } else tile(name || KIT.grass, x, y - z, name ? tints.get(`${i}/${j}`) ?? 0xffffff : landColour(KIT.grassTint, z));
-      if (hidden.has(`${i}/${j}`)) pen.sprite(TEX[KIT.tree], x, y - z, 0.5, 43 / 45, KS);
+      } else if (name) tile(name, x, y - z, tints.get(`${i}/${j}`) ?? 0xffffff);
+      else {
+        const tint = cover === COVER.field ? KIT.cropTints[terrain.crop[k]] : KIT.coverTints[cover] ?? landColour(KIT.grassTint, z);
+        tile(KIT.grass, x, y - z, cover === COVER.forest || cover === COVER.woods ? landColour(tint, z) : tint);
+        if (cover === COVER.snow) poly(pen, KIT.snow, tileTop(i, j, z));
+        coverDetails(pen, terrain, k, i, j, z, inGround, ([u, v, size, seed, conifer]) => {
+          if (conifer) pine(pen, u, v, size, seed);
+          else pen.sprite(TEX[KIT.tree], ...iso(u, v), 0.5, 43 / 45, KS * (0.6 + 0.3 * size), pick(KIT.treeTints, seed, 0));
+        });
+      }
     });
     // Bridges on top, once the water in front of them is down: the deck's
     // shadow on the water, the deck, railings along both sides. They stand
@@ -2025,11 +2151,15 @@ const KENNEY = {
       for (const [i, j] of [[d.x, d.y], [d.x + d.w - 1, d.y], [d.x, d.y + d.h - 1], [d.x + d.w - 1, d.y + d.h - 1]])
         addScenery(ksprite(KIT.lamp, 0.5, 0.95), i + 0.5, j + 0.5);
     }
-    const trees = new Set([...avenueSpots(), ...plan.parks.flatMap(parkTrees), ...grassTrees()].map(([i, j]) => `${i}/${j}`));
-    for (const k of hidden.keys()) trees.delete(k);
+    const trees = new Set([...avenueSpots(), ...plan.parks.flatMap(parkTrees)].map(([i, j]) => `${i}/${j}`));
     for (const k of trees) {
       const [i, j] = k.split("/").map(Number);
       addScenery(ksprite(KIT.tree, 0.5, 43 / 45), i + 0.5, j + 0.5);
+    }
+    for (const [i, j, size, seed] of nearTown) {
+      const t = ksprite(KIT.tree, 0.5, 43 / 45, KS * (0.6 + 0.3 * size));
+      t.tint = pick(KIT.treeTints, seed, 0);
+      addScenery(t, i, j);
     }
   },
   chimney: look => [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - KENNEY.stackOf(kenneyParts(look.p.seed)).h - 4],
