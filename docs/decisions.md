@@ -330,8 +330,25 @@ ends did not help (160).
 
 Found while sketching: today's layout already has mostly T-junctions (54
 against 3 crossroads), so the straight lines, not crossroads, are what
-reads as a grid. Water tiles in the Kenney City pack are not checked yet
-(#37 decides: download the full pack, or draw water in code).
+reads as a grid.
+
+Built (#37, 2026-10-29): the river in `planCity()`, `bridges()` after
+`raggedEdge()`, `drawRiver()` (Metropolis) and `kenneyWater()` (Kenney).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Water | Drawn in code in both looks; Kenney's in the colours of the pack's canal tiles, sunk below the banks with a wall where a bank lies behind | Owner's choice (1A). The full City pack (checked 2026-10-29, not added) has 10 water tiles, all straight one-tile canals, ends and pools: no bends, open water, coast or bridges, so it could not serve #41 and #42 |
+| Where | The city's first cut: in a town with zones, the road between one half of the suburbs and the middle strip; otherwise the first road. A town of one namespace has none | Owner's choice (2A): it crosses the whole town and divides old town from new |
+| Width | Road, 2 tiles of water, road (`RIVER`); the bank roads are main roads and, with the water, run on across the margin | The issue's plan; #42 continues it outside town |
+| Bridges | One per 15 tiles of river (`BRIDGE_EVERY`), one to three, spread along it; each joins the two bank roads where no road ends within a road's width on either bank | Owner's choice (3A). Planned as carrying a road on across, but that makes a crossroads at its bank (sketch: 3 → 6 on the big recording) |
+| Kenney bridges | The pack's straight road tile without its earth, a slab edge on the side facing the viewer, its shadow on the water and code-drawn railings, drawn after the ground tiles | The pack has no bridge; the deck keeps the pack's road and kerbs |
+| Metropolis bridges | Asphalt deck with a white parapet each side and its shadow on the water | Flat asphalt over the water read as a square, not a bridge |
+
+Big recording, land per building (Kenney): 3.09 → 3.41 (+10 %), rectangle
+3.28 → 3.63; Metropolis 3.76 → 4.17; live 3.65 (Kenney). Crossroads stay at
+3, river 59 tiles long with 3 bridges. 600 random clusters: always one road
+network, 1–3 bridges (10 towns of one namespace have no river), crossroads
+187 → 108 (the river leaves no road to cross), about 14 % more land.
 
 **Terrain** (#38–#46): a world generated once from a seed: hills,
 mountains, sea, lakes, rivers, forests, fields and roads out of town.
