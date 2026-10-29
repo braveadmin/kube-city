@@ -84,6 +84,14 @@ between Kenney (sprites) and Metropolis (drawn in code). When the city shows
 a cluster, the **Context** dropdown switches to any other context in your
 kubeconfig without restarting (not while `--record` is saving).
 
+Every cluster gets a world of its own: the land round the town grows from
+a seed, which the page picks the first time it shows a context and keeps in
+your browser for that context (the demo and replays have one each). The
+**World** section of the details panel shows the seed; type another one, or
+press **New world** for a random one. The seed stays in the browser and
+never reaches kube-city or a recording, so another browser, or clearing the
+site's data, gives a new world.
+
 `--record city.jsonl` saves everything that happens and `--replay
 city.jsonl` plays it back later (`--replay-speed 10` for ten times faster):
 handy for showing a cluster without access to it. Recordings contain your
@@ -100,6 +108,8 @@ namespaces the part that marks them (`gitlab-…`, `…-system`), so the city
 keeps its industrial quarter. The made-up names
 are new every run; `--anonymise-salt SECRET` keeps them the same between
 runs (keep the salt secret, or names could be matched by guessing).
+The page keeps its world under the made-up context name, so without
+`--anonymise-salt` the world is new every run too.
 
 ### What it needs
 

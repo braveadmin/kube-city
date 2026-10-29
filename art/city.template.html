@@ -80,6 +80,11 @@ button, input { font: inherit; color: inherit; }
   font: inherit; cursor: pointer; max-width: 16rem; text-overflow: ellipsis;
 }
 .pick select:disabled { cursor: progress; opacity: 0.6; }
+.seed { display: flex; gap: 8px; }
+.seed input {
+  flex: 1; min-width: 0; padding: 6px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2);
+  color: var(--ink); font: 500 0.86rem var(--mono);
+}
 kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; opacity: 0.6; }
 
 /* stage */
@@ -265,6 +270,14 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
         <section>
           <h2>Legend</h2>
           <div class="legend" id="legend"></div>
+        </section>
+        <section>
+          <h2><label for="seed">World</label></h2>
+          <div class="seed">
+            <input id="seed" type="text" maxlength="40" autocomplete="off" spellcheck="false" title="The seed the land round the town grows from; type one and press Enter">
+            <button class="btn" id="new-world" title="Roll a new seed">New world</button>
+          </div>
+          <p class="note" id="seed-note"></p>
         </section>
         <p class="note" id="about">An anonymised recording of a real cluster: every namespace and workload name is a pseudonym. One building is one workload; zoom to street level to see its pods. Keys: arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>c</kbd> fit, <kbd>/</kbd> find, <kbd>i</kbd> details, <kbd>b</kbd> banners, <kbd>Esc</kbd> clear.</p>
         <p class="note" id="credit" hidden>Kenney look: sprites from Kenney's Isometric Buildings and Isometric City packs (kenney.nl, CC0).</p>
@@ -1095,14 +1108,14 @@ function parkTrees(p) {
 }
 
 // Where trees stand on the grass round the town and in the strips its edge
-// gave back: about one tile in eight, by position. [i, j]
+// gave back: about one tile in eight, by position and the world's seed. [i, j]
 function grassTrees() {
   const road = roadTiles(plan), land = new Set(), spots = [];
   for (const r of [...plan.districts.flatMap(d => d.blocks), ...plan.parks])
     for (let j = r.y; j < r.y + r.h; j++) for (let i = r.x; i < r.x + r.w; i++) land.add(`${i}/${j}`);
   for (let j = -MARGIN; j < plan.H + MARGIN; j++) for (let i = -MARGIN; i < plan.W + MARGIN; i++) {
     const k = `${i}/${j}`;
-    if (!land.has(k) && !road.has(k) && hash(`grass ${k}`) % 8 === 0) spots.push([i, j]);
+    if (!land.has(k) && !road.has(k) && hash(`${worldSeed.seed} grass ${k}`) % 8 === 0) spots.push([i, j]);
   }
   return spots;
 }
@@ -1489,6 +1502,44 @@ function rebuildGround() {
   for (const c of groundLayer.removeChildren()) c.destroy({ children: true });
   theme.ground();
 }
+
+// ---------------------------------------------------------------- world seed
+// The land round the town grows from a seed. The page picks one the first
+// time it shows a context (or the demo, or a replay) and keeps it in this
+// browser under that name; the server never sees it. Without storage every
+// visit is a new world.
+
+const worldSeed = { key: null, seed: "", kept: true };
+const seedInput = document.getElementById("seed");
+const randomSeed = () => String(1 + Math.floor(Math.random() * 999999));
+
+// Shows the world kept for `key`, or a new one; the ground is drawn again
+// unless a new plan is on its way anyway.
+function useWorld(key) {
+  if (key === worldSeed.key) return;
+  let seed = null;
+  try { seed = localStorage.getItem(key); worldSeed.kept = true; } catch { worldSeed.kept = false; }
+  worldSeed.key = key;
+  setSeed(seed || randomSeed());
+}
+function setSeed(seed) {
+  const changed = seed !== worldSeed.seed;
+  worldSeed.seed = seed;
+  seedInput.value = seed;
+  try { localStorage.setItem(worldSeed.key, seed); } catch { worldSeed.kept = false; }
+  const where = worldSeed.key.startsWith("kube-city-world:context:") ? "this context" : worldSeed.key.endsWith(":demo") ? "the demo" : "replays";
+  document.getElementById("seed-note").textContent = worldSeed.kept
+    ? `Kept in this browser for ${where}; the same seed always grows the same land.`
+    : "This browser keeps no site data here, so every visit is a new world.";
+  if (changed && !planDirty && groundLayer.children.length) rebuildGround();
+}
+seedInput.addEventListener("change", () => {
+  const seed = seedInput.value.trim();
+  if (seed && worldSeed.key) setSeed(seed);
+  else seedInput.value = worldSeed.seed;
+});
+seedInput.addEventListener("keydown", (e) => { if (e.key === "Enter") seedInput.blur(); });
+document.getElementById("new-world").addEventListener("click", () => { if (worldSeed.key) setSeed(randomSeed()); });
 
 // Lays the districts out again (a namespace appeared or one ran out of lots)
 // and moves everything onto the new plan.
@@ -2520,6 +2571,7 @@ function showContexts({ current, all }) {
   contextSelect.disabled = false;
   if (live.context !== null && live.context !== current) newCity();
   live.context = current;
+  if (current !== null) useWorld(`kube-city-world:context:${current}`);
 }
 contextSelect.addEventListener("change", () => {
   if (!live || !live.ws || live.ws.readyState !== WebSocket.OPEN) { contextSelect.value = live && live.context; return; }
@@ -2577,6 +2629,8 @@ registerBatch(DATA.events);
 // The first plan waits for the look, whose roads set the space between
 // districts; a live city connects meanwhile and holds what arrives.
 if (live) connectLive();
+// A cluster's world waits for the server to say which context it shows.
+if (DATA.shows !== "cluster") useWorld(`kube-city-world:${DATA.shows || "replay"}`);
 const firstLook = initialLook === "kenney" ? kenneyReady().then(() => "kenney", () => "metropolis") : Promise.resolve("metropolis");
 firstLook.then(name => { theme = THEMES[name]; replan(); return setLook(name); })
   .then(() => {
