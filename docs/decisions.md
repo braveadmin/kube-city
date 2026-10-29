@@ -3,7 +3,7 @@
 What was decided while building kube-city, and why. Read this before
 changing direction; update it when a decision changes.
 
-Last updated: 2026-10-27.
+Last updated: 2026-10-29.
 
 ## The idea
 
@@ -288,6 +288,24 @@ Big recording, ring road included: land per building Kenney 2.96 → 3.70
 their landmark spots: 4 of 5 sizes (master 2 of 5 Kenney, 1 of 5
 Metropolis); the two 101-workload namespaces still get slots of different
 shapes, which only a block shape by size alone (and more parks) would fix.
+
+Built (#35, 2026-10-29): `raggedEdge()` at the end of `planCity()`.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Ring road | Gone; the town stops where its blocks do | The issue: a town should thin out, not end in a rectangle |
+| Edge blocks | A block on the town's edge gives back the rows on that side that hold none of its lots (courtyard kept); a seed from the namespace name, block and side keeps one of them now and then; pocket parks on the edge become grass | The issue's "rows they do not need", seeded so the same cluster always looks the same |
+| Roads | Main roads run on straight across the margin; other roads stop where the land beside them (or the last road ending on them) ends, as dead ends | Owner's choice in the issue: lanes may end at the edge of town; roads sticking out into the grass looked unfinished |
+| Pieces | No country roads needed: every cut but the first ends on an earlier one, and the first is either a main road or carries the rest. 600 random clusters (1–40 namespaces, both road widths, live and not) always gave one piece | The issue's "pieces that fall apart"; checked rather than assumed |
+| One block | A town without roads (one namespace, one block) gets a country road along the longer of its two front sides, across the margin | Owner's choice (2026-10-29): still reads as a town, cars have somewhere to drive |
+| Margin | 4 tiles of grass round the town, a tree on about one tile in eight; Metropolis is a grass slab with asphalt only under the roads (it was all asphalt, which was its ring road) | Owner's choice (2026-10-29); #39 and #43 replace it with terrain |
+| Kenney grass | The plain lot tile (`c066`) tinted green; dead ends use the straight road tile | Owner's choice: the shipped sprites have neither, and no download. The plaza tile (`c072`) is no longer used and was removed |
+| Fit | Frames the town as before (2 tiles round it), not the margin | The issue: a big cluster no harder to see than today |
+
+Big recording, land per building (the town's own tiles, master: ring road
+included): Kenney 3.70 → 3.22 (rectangle 3.42), Metropolis 4.68 → 3.94;
+live 3.92 → 3.45 and 5.26 → 4.35. About 4 % of the town's rectangle goes
+back to grass on random clusters; 21 dead ends on the big recording.
 
 Found while sketching: today's layout already has mostly T-junctions (54
 against 3 crossroads), so the straight lines, not crossroads, are what
