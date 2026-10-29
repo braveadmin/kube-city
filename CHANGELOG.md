@@ -32,6 +32,9 @@
 - No more ring road: the town thins out into grass with a few trees, edge
   blocks give back the rows they do not need, main roads run on out of town
   and lanes may end at its edge (#35).
+- A river runs through town, between the suburbs and the middle of town,
+  with a road on each bank and one to three bridges that the cars cross;
+  both looks draw it (#37).
 
 ### Removed
 

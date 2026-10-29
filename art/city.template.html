@@ -346,7 +346,7 @@ const ART = {
   tank: [0xdfe3e6, 0xb7c7d3, 0xe8dcc4, 0xc9d6c2, 0xd6c3c0],
   concrete: 0xcfcac0, asphalt: 0x878e91, sidewalk: 0xd8d2c4, lawn: 0x9ec77d, plaza: 0xcdc7b6, grass: 0x8cba6c,
   lot: 0xbcb7a8, earth: 0x8a6f52, crane: 0xf0b431, fire: [0xffd34d, 0xff8a2a, 0xe8452c],
-  yard: 0xaaaba5, yardLot: 0x9b9c96,
+  yard: 0xaaaba5, yardLot: 0x9b9c96, water: 0x6fa8d0, ripple: 0xb3d6ec, parapet: 0xeeeae0,
 };
 
 const P = (di, dj, z) => [(di - dj) * TW / 2, (di + dj) * TH / 2 - z];
@@ -583,7 +583,8 @@ function geometry(key, draw) {
 // into a quarter of blocks, with lanes between them. Zones come first: the
 // city is suburbs | industry over the town centre | suburbs, the roads
 // between zones are the main roads, and the two between the three strips both
-// cross the city. Plain functions of the districts' sizes and zones:
+// cross the city. The first cut is a river, with a road on each bank and
+// bridges across. Plain functions of the districts' sizes and zones:
 // art/layout_sketch.mjs runs them outside the page.
 
 const MAIN_DEPTH = 2;     // in a city of one zone, cuts this close to the first are main roads
@@ -594,6 +595,8 @@ const SLACK = 2;          // how many tiles wider or longer the city may grow to
 const YARD = 1.25;        // a district has lots for this many times its workloads; the ones left over are its courtyard
 const QUARTER = 64;       // a district with more lots than this (about 50 workloads) is a quarter of several blocks
 const MARGIN = 4;         // tiles of grass round the town, which the main roads run on across
+const RIVER = 2;          // tiles of water across the river, the city's first cut
+const BRIDGE_EVERY = 15;  // tiles of river per bridge, one to three of them
 
 // Well-known infrastructure, as a namespace's name or the start of it
 // ("cert-manager-webhooks"). The same list is in src/anonymise.rs and
@@ -636,10 +639,12 @@ function blockArea(n, gap) {
 // a road. Returns per district its blocks ({ x, y, w, h }, in tiles, sidewalk
 // included), the rectangle around them and its lots in the order they are
 // handed out ([i, j], see lotOrder); the pocket parks; the roads as centre
-// lines ({ i0, j0, i1, j1, main }, the lanes included) and the size of the
-// town (W × H tiles, from 0; the margin lies round it).
+// lines ({ i0, j0, i1, j1, main }, the lanes and bridges included, a bridge
+// with bridge: true); the river's water ({ x, y, w, h }, across the margin
+// too, or null) and the size of the town (W × H tiles, from 0; the margin
+// lies round it).
 function planCity(needs, gap) {
-  if (!needs.length) return { districts: [], parks: [], roads: [], W: 0, H: 0 };
+  if (!needs.length) return { districts: [], parks: [], roads: [], river: null, W: 0, H: 0 };
   // Each group of districts splits into two halves of about equal weight,
   // biggest district first into the lighter half, so big and small districts
   // mix instead of the small ones making a grid of their own.
@@ -703,6 +708,10 @@ function planCity(needs, gap) {
   const [a, b, c] = strips.filter(Boolean);
   const city = c ? pair([a, pair([b, c], ["turn", "turn"])], ["turn", "same"]) : b ? pair([a, b], ["turn", "turn"]) : a;
   const zoned = !!city.zone;
+  // The city's first cut is the river: a road on each bank, the water
+  // between them. A town of one namespace has none.
+  const river = city.district === undefined;
+  const wide = g => river && g === city ? 2 * gap + RIVER : gap;
   const fitsBlock = (n, w, h) => w >= 4 && h >= 4 && (w - 2) * (h - 2) >= n;
   const ways = (only, w, h) => only !== undefined ? [only] : w >= h ? [true, false] : [false, true];
   // The slots either side of a cut, and the direction their own cuts must
@@ -717,7 +726,7 @@ function planCity(needs, gap) {
   function cuts(g, w, h, only, share) {
     const options = [];
     for (const across of ways(only, w, h)) {
-      const len = (across ? w : h) - gap, at = Math.round(len * share);
+      const len = (across ? w : h) - wide(g), at = Math.round(len * share);
       for (let k = 0; k <= 2 * NUDGE; k++) {
         const p = at + (k % 2 ? (k + 1) / 2 : -k / 2);
         if (p >= 4 && len - p >= 4) options.push({ across, len, p });
@@ -789,23 +798,29 @@ function planCity(needs, gap) {
         const c = cut(g, w, h, only);
         options = [];
         for (const across of only !== undefined ? [only] : [c.across, !c.across]) {
-          const len = (across ? w : h) - gap, at = across === c.across ? c.p : Math.round(len * g1.weight / g.weight);
+          const len = (across ? w : h) - wide(g), at = across === c.across ? c.p : Math.round(len * g1.weight / g.weight);
           for (let k = 0; k <= 4; k++) options.push({ across, len, p: at + (k % 2 ? (k + 1) / 2 : -k / 2) });
         }
         fits = t => t.p >= 4 && t.len - t.p >= 4 && (([a, b]) => cut(g1, ...a) && cut(g2, ...b))(halvesOf(g, w, h, t));
       }
-      const roadAt = t => t.across
-        ? { i0: x + t.p + gap / 2, j0: y - gap / 2, i1: x + t.p + gap / 2, j1: y + h + gap / 2 }
-        : { i0: x - gap / 2, j0: y + t.p + gap / 2, i1: x + w + gap / 2, j1: y + t.p + gap / 2 };
+      const roadAt = (t, off = 0) => t.across
+        ? { i0: x + t.p + off + gap / 2, j0: y - gap / 2, i1: x + t.p + off + gap / 2, j1: y + h + gap / 2 }
+        : { i0: x - gap / 2, j0: y + t.p + off + gap / 2, i1: x + w + gap / 2, j1: y + t.p + off + gap / 2 };
       const clear = t => {
         const r = roadAt(t), [di, dj] = t.across ? [1, 0] : [0, 1];
         return !nearEnd(r.i0, r.j0, di, dj) && !nearEnd(r.i1, r.j1, di, dj);
       };
       let t = options.find(t => fits(t) && clear(t));
       if (!t) { t = options.find(fits); crossroads++; }
-      const road = { ...roadAt(t), main: inside === undefined && (zoned ? !!g.zone : depth < MAIN_DEPTH) };
-      roads.push(road);
-      ends.add(`${road.i0},${road.j0}`); ends.add(`${road.i1},${road.j1}`);
+      const main = inside === undefined && (zoned ? !!g.zone : depth < MAIN_DEPTH);
+      // The river's banks are main roads; the water runs on to the margin's edge.
+      const bank = wide(g) > gap;
+      for (const off of bank ? [0, gap + RIVER] : [0]) {
+        const road = { ...roadAt(t, off), main: main || bank };
+        roads.push(road);
+        ends.add(`${road.i0},${road.j0}`); ends.add(`${road.i1},${road.j1}`);
+      }
+      if (bank) water = t.across ? { x: x + t.p + gap, y: -MARGIN, w: RIVER, h: H + 2 * MARGIN } : { x: -MARGIN, y: y + t.p + gap, w: W + 2 * MARGIN, h: RIVER };
       // A quarter's lots go to its halves by the room they have.
       const [a, b] = halvesOf(g, w, h, t);
       let n1, n2;
@@ -815,14 +830,15 @@ function planCity(needs, gap) {
       }
       if (t.across) {
         place(g1, x, y, t.p, h, depth + 1, a[2], inside, n1);
-        place(g2, x + t.p + gap, y, t.len - t.p, h, depth + 1, b[2], inside, n2);
+        place(g2, x + t.p + wide(g), y, t.len - t.p, h, depth + 1, b[2], inside, n2);
       } else {
         place(g1, x, y, w, t.p, depth + 1, a[2], inside, n1);
-        place(g2, x, y + t.p + gap, w, t.len - t.p, depth + 1, b[2], inside, n2);
+        place(g2, x, y + t.p + wide(g), w, t.len - t.p, depth + 1, b[2], inside, n2);
       }
     }
+    let water = null;
     place(city, 0, 0, W, H, 0);
-    return { districts, parks, roads, W, H, crossroads };
+    return { districts, parks, roads, river: water, W, H, crossroads };
   }
 
   // The smallest city, square at first, that every district fits into; a
@@ -838,6 +854,7 @@ function planCity(needs, gap) {
   }
   delete best.crossroads;
   raggedEdge(best, needs, gap);
+  if (best.river) bridges(best, gap);
   for (const d of best.districts) {
     const x = Math.min(...d.blocks.map(b => b.x)), y = Math.min(...d.blocks.map(b => b.y));
     const w = Math.max(...d.blocks.map(b => b.x + b.w)) - x, h = Math.max(...d.blocks.map(b => b.y + b.h)) - y;
@@ -907,6 +924,37 @@ function raggedEdge(city, needs, gap) {
   }
 }
 
+// Bridges across the river, one per BRIDGE_EVERY tiles of it (one to three),
+// spread along it. A bridge joins the two bank roads where no road ends
+// close by on either bank, so both ends are T-junctions: carrying a road on
+// across would make a crossroads where it meets the bank road.
+function bridges(city, gap) {
+  const r = city.river, down = r.h > r.w, half = gap / 2;
+  const banks = down ? [r.x - half, r.x + r.w + half] : [r.y - half, r.y + r.h + half];
+  const far = down ? city.H : city.W;
+  // Where roads end on the banks, along them.
+  const ends = [];
+  for (const s of city.roads) {
+    if (down ? s.i0 === s.i1 : s.j0 === s.j1) continue;
+    for (const [i, j] of [[s.i0, s.j0], [s.i1, s.j1]]) if (banks.includes(down ? i : j)) ends.push(down ? j : i);
+  }
+  const near = (list, v, d) => list.some(e => Math.abs(e - v) <= d);
+  const n = Math.max(1, Math.min(3, Math.round(far / BRIDGE_EVERY))), chosen = [];
+  for (let k = 0; k < n; k++) {
+    // The free spot closest to this bridge's share of the river; the first
+    // bridge takes the closest free spot anywhere.
+    const aim = Math.floor((k + 0.5) * far / n - half) + half, reach = chosen.length ? far / n / 2 : far;
+    for (let d = 0; d <= reach; d++) {
+      const v = [aim - d, aim + d].find(v => v > 1 && v < far - 1 && !near(ends, v, gap) && !near(chosen, v, 4));
+      if (v !== undefined) { chosen.push(v); break; }
+    }
+  }
+  if (!chosen.length) chosen.push(Math.floor(far / 2 - half) + half);
+  for (const v of chosen) {
+    city.roads.push(down ? { i0: banks[0], j0: v, i1: banks[1], j1: v, main: true, bridge: true } : { i0: v, j0: banks[0], i1: v, j1: banks[1], main: true, bridge: true });
+  }
+}
+
 // A district's block in its slot: the whole slot, unless that would make the
 // block a strip or leave most of its lots empty; then the block keeps a
 // sensible length and the far end of the slot becomes a pocket park.
@@ -957,6 +1005,9 @@ function roadTiles(plan) {
   return tiles;
 }
 
+// Whether a tile is the river's water (bridges stand on it too).
+const inRiver = (river, i, j) => !!river && i >= river.x && i < river.x + river.w && j >= river.y && j < river.y + river.h;
+
 // ---------------------------------------------------------------- world model
 
 const world = {
@@ -997,7 +1048,7 @@ function planDistricts() {
   const needs = DATA.ns.map((name, idx) => ({ name, n: lotsFor((registry[idx] || new Map()).size, SPARE), zone: zoneOf(name, daemons.has(idx)) }));
   const city = planCity(needs, theme.gap);
   const districts = DATA.ns.map((name, idx) => ({ idx, name, zone: needs[idx].zone, ...city.districts[idx], lots: registry[idx] || new Map(), stats: null, health: "ok" }));
-  return { districts, parks: city.parks, roads: city.roads, W: city.W, H: city.H, gap: theme.gap };
+  return { districts, parks: city.parks, roads: city.roads, river: city.river, W: city.W, H: city.H, gap: theme.gap };
 }
 
 
@@ -1066,7 +1117,7 @@ const markers = new PIXI.Graphics();
 root.addChild(groundLayer, cityLayer, overlay, markers);
 app.stage.addChild(root);
 
-const plan = { districts: [], parks: [], W: 0, H: 0, roads: [], gap: 1 };
+const plan = { districts: [], parks: [], W: 0, H: 0, roads: [], river: null, gap: 1 };
 
 // Dashes down the middle of the main roads, stopping short of junctions.
 function laneMarkings(g) {
@@ -1115,9 +1166,45 @@ function grassTrees() {
     for (let j = r.y; j < r.y + r.h; j++) for (let i = r.x; i < r.x + r.w; i++) land.add(`${i}/${j}`);
   for (let j = -MARGIN; j < plan.H + MARGIN; j++) for (let i = -MARGIN; i < plan.W + MARGIN; i++) {
     const k = `${i}/${j}`;
-    if (!land.has(k) && !road.has(k) && hash(`${worldSeed.seed} grass ${k}`) % 8 === 0) spots.push([i, j]);
+    if (!land.has(k) && !road.has(k) && !inRiver(plan.river, i, j) && hash(`${worldSeed.seed} grass ${k}`) % 8 === 0) spots.push([i, j]);
   }
   return spots;
+}
+
+// The river in the Metropolis look: water between stone kerbs with the far
+// bank's wall showing above it, bridges with a parapet each side, and the
+// water on the front of the base where it leaves the town.
+function drawRiver(g) {
+  const r = plan.river, down = r.h > r.w, half = plan.gap / 2, kerb = 0.12;
+  // Along the river (u) and across it (v), in tiles; z in pixels up.
+  const pt = (u, v, z = 0) => { const [x, y] = down ? iso(v, u) : iso(u, v); return [x, y - z]; };
+  const area = (u, v, du, dv, z = 0) => [pt(u, v, z), pt(u + du, v, z), pt(u + du, v + dv, z), pt(u, v + dv, z)];
+  // A face standing on the line from (u0, v0) to (u1, v1), from z0 to z1.
+  const face = (u0, v0, u1, v1, z0, z1) => [pt(u0, v0, z0), pt(u1, v1, z0), pt(u1, v1, z1), pt(u0, v0, z1)];
+  const u0 = down ? r.y : r.x, len = down ? r.h : r.w, v0 = down ? r.x : r.y;
+  // Faces towards +u and +v, lit as a block's left side (towards +j) or right side (towards +i).
+  const [uFace, vFace] = down ? [0.72, 0.6] : [0.6, 0.72];
+  poly(g, ART.water, area(u0, v0, len, RIVER));
+  for (let u = u0; u < u0 + len; u++) for (let v = v0; v < v0 + RIVER; v++) {
+    const h = hash(`ripple ${u}/${v}`);
+    if (h % 3 === 0) poly(g, ART.ripple, area(u + 0.15 + ((h >>> 4) % 5) / 10, v + 0.25 + ((h >>> 8) % 5) / 10, 0.35, 0.05));
+  }
+  poly(g, ART.sidewalk, area(u0, v0, len, kerb));
+  poly(g, ART.sidewalk, area(u0, v0 + RIVER - kerb, len, kerb));
+  poly(g, shade(ART.sidewalk, vFace), face(u0, v0 + kerb, u0 + len, v0 + kerb, 0, -3));
+  poly(g, shade(ART.water, uFace + 0.15), face(u0 + len, v0, u0 + len, v0 + RIVER, 0, -4));
+  for (const b of plan.roads) {
+    if (!b.bridge) continue;
+    // Its shadow on the water, the deck's edge, the deck, then the parapets.
+    const c = down ? b.j0 : b.i0, lo = c - half, hi = c + half;
+    poly(g, shade(ART.water, 0.8), area(hi, v0 + kerb, 0.3, RIVER - 2 * kerb));
+    poly(g, shade(ART.concrete, uFace), face(hi, v0, hi, v0 + RIVER, 0, -3));
+    poly(g, ART.asphalt, area(lo, v0, plan.gap, RIVER));
+    for (const p of [lo, hi - 0.14]) {
+      poly(g, shade(ART.parapet, uFace), face(p + 0.14, v0 - 0.1, p + 0.14, v0 + RIVER + 0.1, 0, 5));
+      poly(g, ART.parapet, area(p, v0 - 0.1, 0.14, RIVER + 0.2, 5));
+    }
+  }
 }
 
 // Static things a theme puts in the city layer (trees, lamps); removed when the look changes.
@@ -1142,6 +1229,7 @@ function drawGround() {
   poly(g, ART.grass, base);
   const half = plan.gap / 2;
   for (const r of plan.roads) poly(g, ART.asphalt, rect(r.i0 - half, r.j0 - half, r.i1 - r.i0 + plan.gap, r.j1 - r.j0 + plan.gap));
+  if (plan.river) drawRiver(g);
   laneMarkings(g);
   // The ground of a zone, a lot's pad on it and the courtyard: a plaza with
   // a lawn in the town centre, a concrete yard in the industrial quarter, a
@@ -1254,6 +1342,12 @@ const KIT = {
   // too), pale green in the suburbs.
   zoneTints: { centre: 0xffffff, industry: 0xb4b8bc, suburb: 0xc8e6a8 },
   pit: "c040", tree: "d010", lamp: "d005",
+  // The river is drawn in code, in the colours of the pack's canal tiles
+  // (which have no bends, coast or bridges). Sides are [left, right].
+  water: { top: 0x9cd4e2, shade: 0x89b2bc, deck: 0x696969, ripple: 0xc6e8f0, side: [0x8cbfcc, 0x77a9b6], wall: [0xc2beac, 0x979385], earth: [0xa77d53, 0x81603e] },
+  // Bridge decks: the straight road tiles (5 along j, 10 along i) without
+  // their earth, keeping a slab edge on the long side that faces the viewer.
+  decks: { 5: "deck5", 10: "deck10" },
 };
 const TEX = {};
 let kenneyLoad = null;
@@ -1267,6 +1361,7 @@ async function loadKenney() {
   const images = await Promise.all(names.map(n => new Promise((ok, fail) => {
     const im = new Image(); im.onload = () => ok([n, im]); im.onerror = () => fail(new Error(`sprite ${n}`)); im.src = KENNEY_SPRITES[n];
   })));
+  for (const n of [5, 10]) images.push([KIT.decks[n], images.find(([m]) => m === KIT.roads[n])[1]]);
   const SIZE = 2048, frames = [];
   let x = 1, y = 1, rowH = 0;
   for (const [n, im] of images) {
@@ -1285,6 +1380,16 @@ async function loadKenney() {
       ctx.save(); ctx.globalCompositeOperation = "destination-out"; ctx.beginPath();
       ctx.moveTo(f.x - 1, f.y + cy); ctx.lineTo(f.x + w / 2, f.y + cy + 33.5); ctx.lineTo(f.x + w + 1, f.y + cy);
       ctx.lineTo(f.x + w + 1, f.y + h + 1); ctx.lineTo(f.x - 1, f.y + h + 1); ctx.closePath(); ctx.fill(); ctx.restore();
+    }
+    if (f.n === KIT.decks[5] || f.n === KIT.decks[10]) {
+      // Below the top: all of one side, and the other below its slab edge.
+      const cy = 33, mid = f.x + w / 2, slab = 8, keepRight = f.n === KIT.decks[5];
+      const cut = (x0, x1, y0, y1) => { ctx.moveTo(x0, f.y + y0); ctx.lineTo(x1, f.y + y1); ctx.lineTo(x1, f.y + h + 1); ctx.lineTo(x0, f.y + h + 1); ctx.closePath(); };
+      ctx.save(); ctx.globalCompositeOperation = "destination-out"; ctx.beginPath();
+      const [left, right] = keepRight ? [0.5, slab] : [slab, 0.5];
+      cut(f.x - 1, mid, cy + left, cy + 33 + left);
+      cut(mid, f.x + w + 1, cy + 33 + right, cy + right);
+      ctx.fill(); ctx.restore();
     }
   }
   const base = PIXI.BaseTexture.from(canvas, { mipmap: PIXI.MIPMAP_MODES.ON });
@@ -1380,6 +1485,47 @@ function roofTank(g, v) {
   return 23;
 }
 
+// A tile of river in the Kenney look, as deep as the pack's tiles: the
+// water a little below the banks, walls on the back edges a bank lies behind
+// (walls: 1 the -i edge, 2 the -j edge), a glint or two, and water then earth
+// on its front sides where nothing stands in front of it.
+const WATER = "water";
+function kenneyWater(g, walls, ripple) {
+  const c = KIT.water, sink = 5, deep = 34 * KS, band = 3;
+  const top = [0, -TH / 2], right = [TW / 2, 0], bottom = [0, TH / 2], left = [-TW / 2, 0];
+  const at = (p, d) => [p[0], p[1] + d];
+  const side = (a, b, d0, d1, color) => poly(g, color, [at(a, d0), at(b, d0), at(b, d1), at(a, d1)]);
+  side(left, bottom, sink, deep, c.earth[0]); side(bottom, right, sink, deep, c.earth[1]);
+  side(left, bottom, sink, sink + band, c.side[0]); side(bottom, right, sink, sink + band, c.side[1]);
+  poly(g, c.top, [at(top, sink), at(right, sink), at(bottom, sink), at(left, sink)]);
+  if (walls & 1) { side(top, left, 0, sink, c.wall[1]); side(top, left, sink, sink + 1.5, c.shade); }
+  if (walls & 2) { side(top, right, 0, sink, c.wall[0]); side(top, right, sink, sink + 1.5, c.shade); }
+  for (let k = 0; k < 2 - (ripple >> 1); k++) {
+    const x = [-12, 9, -4, 14][(ripple + k) % 4], y = sink + [-3, 2, 6, -6][(ripple + 2 * k) % 4];
+    poly(g, c.ripple, [[x - 4, y], [x + 4, y], [x + 4, y + 1], [x - 4, y + 1]]);
+  }
+  return 0;
+}
+// Under a bridge deck: its shadow on the water in front of its long side,
+// and road under the deck so the water does not show through the soft edges
+// of the tiles. Then its railings. For a deck along j (5) or along i (10);
+// s runs along the deck, t across it.
+function deckShadow(g, n) {
+  const at = (s, t, z) => n === 10 ? P(s, t, z) : P(t, s, z);
+  poly(g, KIT.water.shade, [at(-0.5, 0.5, -5), at(0.5, 0.5, -5), at(0.5, 0.85, -5), at(-0.5, 0.85, -5)]);
+  poly(g, KIT.water.deck, [at(-0.5, -0.4, 0), at(0.5, -0.4, 0), at(0.5, 0.4, 0), at(-0.5, 0.4, 0)]);
+  poly(g, KIT.water.deck, [at(-0.58, -0.28, 0), at(0.58, -0.28, 0), at(0.58, 0.28, 0), at(-0.58, 0.28, 0)]);
+  return 0;
+}
+function deckRails(g, n) {
+  const at = (s, t, z) => n === 10 ? P(s, t, z) : P(t, s, z);
+  for (const t of [-0.42, 0.42]) {
+    for (const s of [-0.38, 0.12]) poly(g, 0x9b978c, [at(s, t, 0), at(s + 0.06, t, 0), at(s + 0.06, t, 5), at(s, t, 5)]);
+    poly(g, 0xe8e5dc, [at(-0.5, t, 4.5), at(0.5, t, 4.5), at(0.5, t, 6), at(-0.5, t, 6)]);
+  }
+  return 0;
+}
+
 const KENNEY = {
   name: "kenney",
   gap: 1, lane: 0.12,
@@ -1460,7 +1606,8 @@ const KENNEY = {
     const tiles = [];
     for (let j = -m; j < H + m; j++) for (let i = -m; i < W + m; i++) {
       let name = land.get(`${i}/${j}`);
-      if (!name && isRoad(i, j)) {
+      if (!name && inRiver(plan.river, i, j)) name = WATER;
+      else if (!name && isRoad(i, j)) {
         // A zebra crossing on the straight next to every junction.
         const n = joins(i, j);
         const crossing = (n === 5 && (junction(i, j - 1) || junction(i, j + 1))) || (n === 10 && (junction(i - 1, j) || junction(i + 1, j)));
@@ -1469,10 +1616,27 @@ const KENNEY = {
       tiles.push([i, j, name]);
     }
     tiles.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]) || a[0] - b[0]);
+    // The river's water sinks below the banks, with a wall where a bank lies
+    // behind it (1: towards -i, 2: towards -j).
+    const water = (i, j) => inRiver(plan.river, i, j);
     for (const [i, j, name] of tiles) {
-      const t = tileSprite(name || KIT.grass); t.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(t);
+      let t;
+      if (name === WATER) {
+        const walls = (water(i - 1, j) ? 0 : 1) | (water(i, j - 1) ? 0 : 2), ripple = hash(`ripple ${i}/${j}`) % 4;
+        t = new PIXI.Graphics(geometry(`k:water:${walls}:${ripple}`, g => kenneyWater(g, walls, ripple)).geometry);
+      } else t = tileSprite(name || KIT.grass);
+      t.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(t);
       if (!name) t.tint = KIT.grassTint;
       else if (tints.has(`${i}/${j}`)) t.tint = tints.get(`${i}/${j}`);
+    }
+    // Bridges on top, once the water in front of them is down: the deck's
+    // shadow on the water, the deck, railings along both sides.
+    for (const [i, j, name] of tiles) {
+      if (name !== WATER || !isRoad(i, j)) continue;
+      const n = joins(i, j) & 5 ? 5 : 10;
+      const parts = [new PIXI.Graphics(geometry(`k:deckShadow:${n}`, g => deckShadow(g, n)).geometry), tileSprite(KIT.decks[n]),
+        new PIXI.Graphics(geometry(`k:rails:${n}`, g => deckRails(g, n)).geometry)];
+      for (const o of parts) { o.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(o); }
     }
     // Lamps on the corners of every block, trees along the main roads, in the parks and on the grass.
     for (const d of plan.districts.flatMap(d => d.blocks)) {

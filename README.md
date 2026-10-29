@@ -14,7 +14,8 @@ grow, burn and rebuild, live.
 - **Big clusters stay readable.** Zoom out to one district per namespace,
   coloured by health; zoom in for buildings, then names and individual pods.
   Infrastructure namespaces form an industrial quarter, branch namespaces
-  (`feature-`, `bugfix-`) the suburbs, everything else the town centre.
+  (`feature-`, `bugfix-`) the suburbs, everything else the town centre. A
+  river with bridges runs between the suburbs and the middle of town.
 - **Problems stand out.** Crashing workloads burn, pending ones are
   construction sites, failed ones are burnt-out shells; `f` fades everything
   that is healthy.

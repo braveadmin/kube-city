@@ -8,7 +8,7 @@
 // gap is the road width: 1 for the Kenney look (the default), 2 for Metropolis.
 // --live keeps spare lots for new workloads, as a live city does.
 //
-// Map: R main road, r road, + crossroads, s sidewalk, a lot in the town
+// Map: R main road, r road, + crossroads, ~ river, = bridge, s sidewalk, a lot in the town
 // centre (l), the industrial quarter (i) or a suburb (u), p courtyard (a lot
 // left over), g pocket park, . grass (the margin and the strips the edge gave
 // back).
@@ -25,7 +25,7 @@ const page = readFileSync(new URL("city.template.html", import.meta.url), "utf8"
 const MARK = "// ---------------------------------------------------------------- ";
 const from = page.indexOf(`${MARK}layout\n`), to = page.indexOf(MARK, from + MARK.length);
 const hashFn = page.slice(page.indexOf("function hash("), page.indexOf("function rng("));
-const { planCity, roadTiles, lotsFor, zoneOf, MARGIN } = new Function(`${hashFn}${page.slice(from, to)}\nreturn { planCity, roadTiles, lotsFor, zoneOf, MARGIN };`)();
+const { planCity, roadTiles, inRiver, lotsFor, zoneOf, MARGIN } = new Function(`${hashFn}${page.slice(from, to)}\nreturn { planCity, roadTiles, inRiver, lotsFor, zoneOf, MARGIN };`)();
 
 // Workloads per namespace, as the page counts them: one building per workload.
 const workloads = new Map(), daemons = new Set();
@@ -50,6 +50,8 @@ const plan = { ...city, gap };
 const road = roadTiles(plan);
 const at = new Map();
 for (const [k, main] of road) at.set(k, main ? "R" : "r");
+for (let j = -MARGIN; j < city.H + MARGIN; j++) for (let i = -MARGIN; i < city.W + MARGIN; i++)
+  if (inRiver(city.river, i, j)) at.set(`${i}/${j}`, road.has(`${i}/${j}`) ? "=" : "~");
 city.districts.forEach((d, k) => {
   for (const b of d.blocks) for (let j = b.y; j < b.y + b.h; j++) for (let i = b.x; i < b.x + b.w; i++) at.set(`${i}/${j}`, "s");
   d.cells.forEach(([i, j], lot) => at.set(`${i}/${j}`, lot < sizes[k] ? { centre: "l", industry: "i", suburb: "u" }[zones[k]] : "p"));
@@ -99,6 +101,8 @@ const zoneCount = z => `${zones.filter(x => x === z).length} (${sizes.filter((n,
 console.log(`zones: centre ${zoneCount("centre")}, industry ${zoneCount("industry")}, suburbs ${zoneCount("suburb")}`);
 console.log(`tiles per building: town ${(town / buildings).toFixed(2)}, its rectangle ${(city.W * city.H / buildings).toFixed(2)}`);
 const blocks = city.districts.reduce((s, d) => s + d.blocks.length, 0), lots = city.districts.reduce((s, d) => s + d.cells.length, 0);
-console.log(`roads: ${inner.length} cuts (${inner.filter(r => r.main).length} main), longest ${longest} tiles, ${pieces} piece${pieces === 1 ? "" : "s"}; pocket parks: ${city.parks.length}`);
+const bridges = inner.filter(r => r.bridge).length;
+console.log(`roads: ${inner.length - bridges} cuts (${inner.filter(r => r.main && !r.bridge).length} main), longest ${longest} tiles, ${pieces} piece${pieces === 1 ? "" : "s"}; pocket parks: ${city.parks.length}`);
+console.log(`river: ${city.river ? `${Math.max(city.river.w, city.river.h)} tiles long, ${bridges} bridge${bridges === 1 ? "" : "s"}` : "none"}`);
 console.log(`blocks: ${blocks} (${city.districts.filter(d => d.blocks.length > 1).length} quarters); lots: ${lots}, ${(100 * buildings / lots).toFixed(0)} % built on`);
 if (gap === 1) console.log(`junctions: ${count.t} T, ${count.cross} crossroads, ${count.dead} dead ends`);
