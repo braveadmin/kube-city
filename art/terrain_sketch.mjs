@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Lays out a recorded cluster with the page's own layout code, grows the
 // terrain round it with the page's own terrain code and prints the checks
-// from issue #39, a map of levels and `art/out/terrain.html`: the town and its
-// terrain, in which the seed can be changed. Only the sizes and zones of
+// from issues #39 to #41, a map of levels and `art/out/terrain.html`: the town
+// and its terrain, in which the seed can be changed. Only the sizes and zones of
 // namespaces are used, so neither output holds names.
 //
 //   node art/terrain_sketch.mjs recordings/big-cluster.jsonl [seed] [gap]
@@ -10,7 +10,7 @@
 // gap is the road width: 1 for the Kenney look (the default), 2 for Metropolis.
 //
 // Map: # the town (its river too), 0–9 and a–c the ground level (the town
-// stands on 1).
+// stands on 1), ~ sea, = lake, . beach.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -27,8 +27,8 @@ const polyCode = page.match(/^function poly\(.*$/m)[0];
 const code = `${helpers}${polyCode}\n${section("layout")}${section("terrain")}`;
 // The ground's mesh builder, without the mesh (that needs PIXI).
 const pen = page.slice(page.indexOf("class GroundPen {"), page.indexOf("\n}\n", page.indexOf("class GroundPen {")) + 2);
-const { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, MARGIN, TREE, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen } =
-  new Function(`${code}\n${pen}\nreturn { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, MARGIN, TREE, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen };`)();
+const { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, MARGIN, TREE, LEVELS, LAKE_MIN, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen } =
+  new Function(`${code}\n${pen}\nreturn { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, MARGIN, TREE, LEVELS, LAKE_MIN, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen };`)();
 
 // Workloads per namespace, as the page counts them: one building per workload.
 const workloads = new Map(), daemons = new Set();
@@ -50,7 +50,7 @@ const times = [];
 let t;
 for (let n = 0; n < 6; n++) { const t0 = performance.now(); t = planTerrain(plan, seed); times.push(performance.now() - t0); }
 const again = planTerrain(plan, seed);
-const same = t.level.every((v, k) => v === again.level[k]) && t.height.every((v, k) => v === again.height[k]);
+const same = t.level.every((v, k) => v === again.level[k]) && t.height.every((v, k) => v === again.height[k]) && t.cover.every((v, k) => v === again.cover[k]);
 const other = planTerrain(plan, `${seed}x`);
 const differs = t.level.some((v, k) => v !== other.level[k]);
 
@@ -74,6 +74,44 @@ for (let k = 0; k < W * H; k++) {
   const i = k % W, j = (k / W) | 0, low = Math.min(...[[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([di, dj]) => i + di >= 0 && j + dj >= 0 && i + di < W && j + dj < H).map(([di, dj]) => level[k + dj * W + di]));
   if (level[k] > low + 2) slopeOk = false;
 }
+
+// Water (#41): no water or beach on the town or the flat ground round it;
+// every sea and lake at least LAKE_MIN tiles, all at one level; and no
+// hollow left: flooded again from the edges and the town, no land lies below
+// the water's level round it and every lake stands at its lowest rim.
+const { cover } = t, sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+let dryTown = true, smallest = Infinity, flatWater = true, lakes = 0, hollows = 0;
+const part = new Int32Array(W * H).fill(-1);
+for (let k0 = 0; k0 < W * H; k0++) {
+  if (toTown[k0] <= FLAT && cover[k0]) dryTown = false;
+  if (!isWater(cover[k0]) || part[k0] >= 0) continue;
+  const tiles = [k0];
+  part[k0] = k0;
+  for (let n = 0; n < tiles.length; n++) {
+    const k = tiles[n], i = k % W, j = (k / W) | 0;
+    for (const [di, dj] of sides) {
+      const nk = (j + dj) * W + i + di;
+      if (i + di >= 0 && j + dj >= 0 && i + di < W && j + dj < H && part[nk] < 0 && cover[nk] === cover[k0]) { part[nk] = k0; tiles.push(nk); }
+    }
+  }
+  smallest = Math.min(smallest, tiles.length);
+  if (tiles.some(k => level[k] !== level[k0])) flatWater = false;
+  if (cover[k0] === COVER.lake) lakes++;
+}
+const fill = new Int8Array(W * H).fill(-1), buckets = Array.from({ length: LEVELS }, () => []);
+for (let k = 0; k < W * H; k++) {
+  const i = k % W, j = (k / W) | 0;
+  if (i === 0 || j === 0 || i === W - 1 || j === H - 1 || isTown(k)) { fill[k] = level[k]; buckets[level[k]].push(k); }
+}
+for (let l = 0; l < LEVELS; l++) for (let n = 0; n < buckets[l].length; n++) {
+  const k = buckets[l][n], i = k % W, j = (k / W) | 0;
+  for (const [di, dj] of sides) {
+    const nk = (j + dj) * W + i + di;
+    if (i + di >= 0 && j + dj >= 0 && i + di < W && j + dj < H && fill[nk] < 0) { fill[nk] = Math.max(level[nk], l); buckets[fill[nk]].push(nk); }
+  }
+}
+for (let k = 0; k < W * H; k++) if (fill[k] > level[k]) hollows++;
+const share = c => (100 * cover.filter(v => v === c).length / (W * H)).toFixed(1);
 
 // Drawing (#40): the town's ground is drawn over the terrain and buildings
 // and trees stand in the city layer, which is only right where no higher
@@ -103,16 +141,17 @@ let built;
 for (let n = 0; n < 6; n++) {
   const t0 = performance.now();
   built = new GroundPen(white);
-  eachGroundTile(t, (i, j, z, left, right) => {
+  eachGroundTile(t, (i, j, z, left, right, k) => {
     groundFaces(built, i, j, z, left, right, [0x6e9a58, 0x5b8248], [0x8a6a4a, 0x6b523a]);
     poly(built, 0x8cba6c, [iso(i, j), iso(i + 1, j), iso(i + 1, j + 1), iso(i, j + 1)].map(([x, y]) => [x, y - z]));
+    if (isWater(t.cover[k])) poly(built, 0xb3d6ec, [iso(i + 0.3, j + 0.4), iso(i + 0.7, j + 0.4), iso(i + 0.7, j + 0.45), iso(i + 0.3, j + 0.45)].map(([x, y]) => [x, y - z]));
   });
   groundTimes.push(performance.now() - t0);
 }
 
 for (let j = 0; j < H; j++) {
   let row = "";
-  for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : level[k].toString(13); }
+  for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : ["", "~", "=", "."][cover[k]] || level[k].toString(13); }
   console.log(row);
 }
 console.log();
@@ -122,6 +161,7 @@ console.log(`levels: ${hist.map((n, l) => `${l.toString(13)} ${(100 * n / (W * H
 console.log(`mountains (level 8 and up): ${high} tiles, ${high ? (100 * highBack / high).toFixed(0) : "–"} % in the back half of the map; highest level within ${FRONT_LOW} tiles in front of the town: ${front}`);
 console.log(`town and ${FLAT} tiles round it flat: ${flatOk ? "yes" : "NO"}; peaks taper: ${slopeOk ? "yes" : "NO"}`);
 console.log(`same terrain twice: ${same ? "yes" : "NO"}; another seed, other terrain: ${differs ? "yes" : "NO"}`);
+console.log(`sea ${share(COVER.sea)} %, ${lakes} lakes (${share(COVER.lake)} %), beach ${share(COVER.beach)} %; smallest sea or lake ${smallest === Infinity ? "–" : smallest} tiles (at least ${LAKE_MIN}: ${smallest >= LAKE_MIN ? "yes" : "NO"}); each one flat: ${flatWater ? "yes" : "NO"}; hollows left: ${hollows ? hollows + " tiles, NO" : "none"}; town and its flat ground dry: ${dryTown ? "yes" : "NO"}`);
 console.log(`hidden by higher ground in front: town tiles ${townHidden}, buildings ${buildingsHidden}; tree spots round the town ${treesHidden} (drawn into the ground), ${treesNearTown} of them next to it`);
 console.log(`ground mesh in ${groundTimes[0].toFixed(1)} ms the first time, then ${Math.min(...groundTimes.slice(1)).toFixed(1)}–${Math.max(...groundTimes.slice(1)).toFixed(1)} ms: ${built.xy.length / 2} vertices, ${built.index.length / 3} triangles`);
 
@@ -148,7 +188,7 @@ ${code}
 const plan = ${JSON.stringify(plan)};
 // Grass in the valleys, olive on the hills, rock higher up, snow on top.
 const COLOURS = ["#7fae5a", "#9cc865", "#93bf5c", "#8ab456", "#a3ad5c", "#b3a462", "#a99266", "#9a8a72", "#8f877e", "#a19c95", "#c3c0bb", "#e2e1de", "#f6f7f8"];
-const TOWN = "#b9b5ae", WATER = "#4f9fd8", T = 16;
+const TOWN = "#b9b5ae", WATER = "#4f9fd8", SHALLOW = "#6fb4e0", DEEP = "#2f77b5", BEACH = "#e8d9a2", T = 16;
 const shade = (hex, f) => "#" + [1, 3, 5].map(n => Math.round(parseInt(hex.slice(n, n + 2), 16) * f).toString(16).padStart(2, "0")).join("");
 function draw() {
   const seed = document.getElementById("seed").value, lift = Number(document.getElementById("relief").value);
@@ -159,8 +199,9 @@ function draw() {
   const at = (i, j, z) => [(i - j + H) * T, (i + j) * T / 2 + top - z];
   const poly = (fill, pts) => { g.fillStyle = fill; g.beginPath(); pts.forEach(([x, y], n) => (n ? g.lineTo(x, y) : g.moveTo(x, y))); g.fill(); };
   for (let s = 0; s < W + H - 1; s++) for (let i = Math.max(0, s - H + 1); i <= Math.min(W - 1, s); i++) {
-    const j = s - i, k = j * W + i, z = level[k] * lift;
-    const colour = inRiver(plan.river, i + t.x0, j + t.y0) ? WATER : toTown[k] === 0 ? TOWN : COLOURS[level[k]];
+    const j = s - i, k = j * W + i, wet = isWater(t.cover[k]), z = level[k] * lift - (wet ? 2 : 0);
+    const sea = t.depth[k] < 2 ? SHALLOW : t.depth[k] < 6 ? WATER : DEEP;
+    const colour = inRiver(plan.river, i + t.x0, j + t.y0) ? WATER : toTown[k] === 0 ? TOWN : wet ? sea : t.cover[k] === COVER.beach ? BEACH : COLOURS[level[k]];
     poly(shade(colour, 0.78), [at(i, j + 1, z), at(i + 1, j + 1, z), at(i + 1, j + 1, 0), at(i, j + 1, 0)]);
     poly(shade(colour, 0.62), [at(i + 1, j, z), at(i + 1, j + 1, z), at(i + 1, j + 1, 0), at(i + 1, j, 0)]);
     poly(colour, [at(i, j, z), at(i + 1, j, z), at(i + 1, j + 1, z), at(i, j + 1, z)]);
