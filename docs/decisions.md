@@ -436,6 +436,27 @@ every sea and lake flat and at least 4 tiles, the town and its flat ring
 dry, no town tile or building hidden). The terrain takes 11–15 ms, best of
 25 runs (11 ms before); the ground mesh has 60 000–81 000 vertices.
 
+Built (#43, 2026-10-29): ground cover, in `planTerrain()` (`cover`, `crop`,
+`farms`) and `coverTrees()`, drawn by `coverDetails()` in both looks.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Order | Per land tile outside town: snow, rock, fields, forest, woods, meadow | Height and slope come first; fields only where the land is low |
+| Snow and rock | Snow on the world's top two levels, rock on the three below, never under level 6 (`ROCK_MIN`); rock also on mountainsides that drop 2 levels | Owner's choice (3A): every world with mountains gets snow caps |
+| Fields | Level 1–2 land from the town out to 3–12 tiles (`TERRAIN.fields`, a noise makes the edge ragged), in plots of 4 × 3 tiles (`PLOT`), each with its crop (wheat, green, ploughed, fallow) or, one in seven, meadow; furrows run one way or the other by plot | The issue's "plots around the town, with an irregular edge" |
+| Farms | A code-drawn farm (white house, red roof, red barn) on about one plot in six (`FARM_EVERY`), 3 tiles or more from the town | Owner's choice (2A): the pack's house is the DaemonSet building and would read as a workload |
+| Forest | Moisture noise plus up to 0.25 within 10 tiles of the sea, a lake or the river: forest above 0.6, woods above 0.53 | Forests follow the water; #42's rivers will add to it on their own |
+| Trees | Forest 2–3 per tile, woods about 1, meadow one tile in 14; pines from level 4 (`PINES`) | Owner's choice (1A) was pines from level 6, but rock starts at 6 on most worlds, so no pine was ever drawn |
+| Kenney | The plain lot tinted per cover (snow a code-drawn top on it), the pack's one tree in three tints, rock faces grey; pines, farms, furrows and stones in code | The full City pack has one tree and no rock, snow or field tiles |
+| Where trees go | 2 or more tiles from the town into the ground mesh (no work per frame, hills in front hide them); nearer ones in the city layer, sorting with the buildings | Thousands of trees; the #35 margin trees and `hiddenTrees()` are gone |
+| Mesh | Forest trees in Metropolis without the town trees' shadow and highlight; the ground pen's ellipses have 8 points (were 14) | 290 000 vertices and up to 230 ms became 160 000–215 000 and 70–115 ms (busy machine; the ground without cover takes 27–37 ms there) |
+
+Big recording, 13 seeds: of the land outside town, meadow 24–42 %, forest
+15–33 %, woods 8–14 %, fields 14–23 % (10–19 farms), rock 2–18 %, snow 0–7 %;
+4 300–8 700 trees. Every check passes (no cover on the town, fields only on
+level 1–2, snow above rock, farms away from the town, no tree next to the
+town hidden). The terrain takes about 6 ms more (best of 40: 15 → 21 ms).
+
 **Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
 out like SimCity or Cities: Skylines (houses, shops, towers).
 
