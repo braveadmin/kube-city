@@ -13,6 +13,8 @@ grow, burn and rebuild, live.
   does, and never changes anything in the cluster.
 - **Big clusters stay readable.** Zoom out to one district per namespace,
   coloured by health; zoom in for buildings, then names and individual pods.
+  Infrastructure namespaces form an industrial quarter, branch namespaces
+  (`feature-`, `bugfix-`) the suburbs, everything else the town centre.
 - **Problems stand out.** Crashing workloads burn, pending ones are
   construction sites, failed ones are burnt-out shells; `f` fades everything
   that is healthy.
@@ -91,7 +93,11 @@ namespace and workload names.
 images, contexts) with a made-up one before it leaves kube-city: in the
 page, in the status line, in the **Context** dropdown and in `--record`
 files. Use it for screenshots, talks and recordings you want to share; it
-also anonymises an old recording played with `--replay`. The made-up names
+also anonymises an old recording played with `--replay`. Namespaces every
+cluster has (`kube-system`, `default`) and well-known infrastructure
+(`cert-manager`, `argocd`, …) keep their names, and other infrastructure
+namespaces the part that marks them (`gitlab-…`, `…-system`), so the city
+keeps its industrial quarter. The made-up names
 are new every run; `--anonymise-salt SECRET` keeps them the same between
 runs (keep the salt secret, or names could be matched by guessing).
 

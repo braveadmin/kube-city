@@ -182,6 +182,8 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 .legend div { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .legend img { width: 30px; height: 30px; object-fit: contain; flex: none; }
 .legend small { color: var(--muted); display: block; font-size: 0.7rem; }
+.legend .zone { grid-column: 1 / -1; }
+.legend .zone i { width: 30px; height: 16px; flex: none; border-radius: 3px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.18); }
 .panel-toggle {
   display: flex; justify-content: space-between; align-items: center; gap: 14px; width: 100%; border: 0;
   border-bottom: 1px solid var(--line); background: var(--panel-2); color: var(--ink); padding: 8px 14px; cursor: pointer;
@@ -281,6 +283,12 @@ const STATES = ["Pending", "Running", "CrashLoop", "Terminating", "Succeeded", "
 const [PENDING, RUNNING, CRASH, TERMINATING, SUCCEEDED, FAILED] = [0, 1, 2, 3, 4, 5];
 const KIND_ORDER = { Deployment: 0, StatefulSet: 1, Job: 2, DaemonSet: 3, Standalone: 4 };
 const STATE_WORDS = ["pending", "running", "crashing", "terminating", "finished", "failed"];
+const ZONE_WORDS = { centre: "Town centre", industry: "Industrial quarter", suburb: "Suburb" };
+const ZONE_RULES = {
+  centre: "plaza: every other namespace",
+  industry: "concrete: kube-*, *-system, *-operator, well-known tools, or runs a DaemonSet",
+  suburb: "lawn: feature-* and bugfix-* namespaces",
+};
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // ---------------------------------------------------------------- helpers
@@ -325,6 +333,7 @@ const ART = {
   tank: [0xdfe3e6, 0xb7c7d3, 0xe8dcc4, 0xc9d6c2, 0xd6c3c0],
   concrete: 0xcfcac0, asphalt: 0x878e91, sidewalk: 0xd8d2c4, lawn: 0x9ec77d, plaza: 0xcdc7b6, grass: 0x8cba6c,
   lot: 0xbcb7a8, earth: 0x8a6f52, crane: 0xf0b431, fire: [0xffd34d, 0xff8a2a, 0xe8452c],
+  yard: 0xaaaba5, yardLot: 0x9b9c96,
 };
 
 const P = (di, dj, z) => [(di - dj) * TW / 2, (di + dj) * TH / 2 - z];
@@ -558,10 +567,13 @@ function geometry(key, draw) {
 // sizes, until every district has a slot of its own. Every cut is a road that
 // ends where it meets an earlier one, so only the first crosses the whole
 // city; the first cuts are main roads. A big district is cut the same way
-// into a quarter of blocks, with lanes between them. Plain functions of the
-// districts' sizes: art/layout_sketch.mjs runs them outside the page.
+// into a quarter of blocks, with lanes between them. Zones come first: the
+// city is suburbs | industry over the town centre | suburbs, the roads
+// between zones are the main roads, and the two between the three strips both
+// cross the city. Plain functions of the districts' sizes and zones:
+// art/layout_sketch.mjs runs them outside the page.
 
-const MAIN_DEPTH = 2;     // cuts this close to the first are main roads
+const MAIN_DEPTH = 2;     // in a city of one zone, cuts this close to the first are main roads
 const LONG_BLOCK = 2.2;   // a block at most this many times as long as it is wide; the rest of a longer slot is a park
 const ROOM = 1.5;         // a block keeps this many times the lots it needs before the rest of its slot is a park
 const NUDGE = 4;          // how far a cut may move from its share before it tries the other direction
@@ -569,6 +581,23 @@ const SLACK = 2;          // how many tiles wider or longer the city may grow to
 const YARD = 1.25;        // a district has lots for this many times its workloads; the ones left over are its courtyard
 const QUARTER = 64;       // a district with more lots than this (about 50 workloads) is a quarter of several blocks
 const MARGIN = 4;         // tiles of grass round the town, which the main roads run on across
+
+// Well-known infrastructure, as a namespace's name or the start of it
+// ("cert-manager-webhooks"). The same list is in src/anonymise.rs and
+// art/web_prototype.py, which keep these names.
+const INFRA = "argo argocd calico cert-manager cilium crossplane external-dns external-secrets flux forgejo gatekeeper gitea gitlab grafana ingress istio jaeger keda kyverno linkerd logging loki longhorn metallb minio monitoring observability openbao prometheus rook tekton tigera traefik vault velero".split(" ");
+
+// A namespace's zone: branch namespaces are suburbs; infrastructure (by its
+// name, or because it runs a DaemonSet: node agents) is the industrial
+// quarter; the rest is the town centre, however small.
+function zoneOf(name, daemons) {
+  if (/^(feature|bugfix)-/.test(name)) return "suburb";
+  if (daemons || infraName(name)) return "industry";
+  return "centre";
+}
+function infraName(name) {
+  return /^kube-|.-(system|operators?)$/.test(name) || INFRA.some(p => name === p || name.startsWith(`${p}-`));
+}
 
 // The lots a district of n workloads keeps: room for a courtyard and, in a
 // live city, spare lots for new workloads (they make the courtyard too).
@@ -611,16 +640,25 @@ function planCity(needs, gap) {
       return Object.assign(g, { district: k, n, least: g.kids ? n + 12 * g.m + 4 * gap * (g.m - 1) : leastBlock(n) });
     }
     const g = { id: ids++, weight: items.reduce((s, k) => s + weightOf(k), 0) };
-    const halves = [[], []], weight = [0, 0];
-    for (const k of items) {
-      const h = weight[0] <= weight[1] ? 0 : 1;
-      halves[h].push(k); weight[h] += weightOf(k);
-    }
+    const halves = halve(items);
     // The heavier half goes first or second by turns, so the big
     // districts do not all end up in one corner.
     g.kids = (g.id % 2 ? halves.reverse() : halves).map(group);
     g.least = g.kids[0].least + g.kids[1].least + 4 * gap;
     return g;
+  }
+  function halve(items) {
+    const halves = [[], []], weight = [0, 0];
+    for (const k of items) {
+      const h = weight[0] <= weight[1] ? 0 : 1;
+      halves[h].push(k); weight[h] += weightOf(k);
+    }
+    return halves;
+  }
+  // Two groups side by side, as zones are. next says which way each of
+  // them is cut first: "turn" across this cut, "same" along it.
+  function pair(kids, next) {
+    return { id: ids++, kids, next, zone: true, weight: kids[0].weight + kids[1].weight, least: kids[0].least + kids[1].least + 4 * gap };
   }
   // A district's blocks split in halves the same way; a leaf is one block.
   // m is the number of blocks.
@@ -637,15 +675,29 @@ function planCity(needs, gap) {
     return least;
   }
   const byWeight = needs.map((d, k) => k).sort((a, b) => needs[b].n - needs[a].n || needs[a].name.localeCompare(needs[b].name));
-  const city = group(byWeight);
+  // The zones: the suburbs in two halves either side of a middle strip,
+  // which is the industrial quarter at one end and the town centre at the
+  // other. A zone without districts drops out; a city of one zone is cut as
+  // if there were none. A middle strip of one block has no road of its own
+  // to join the roads either side of it, so then the suburbs keep to one
+  // side.
+  const inZone = z => byWeight.filter(k => (needs[k].zone || "centre") === z);
+  const [industry, centre] = [inZone("industry"), inZone("centre")].map(items => items.length ? group(items) : null);
+  const middle = industry && centre ? pair([industry, centre]) : industry || centre;
+  const suburbs = inZone("suburb");
+  const strips = (middle && !middle.kids ? [suburbs, []] : halve(suburbs)).map(items => items.length ? group(items) : null);
+  strips.splice(1, 0, middle);
+  const [a, b, c] = strips.filter(Boolean);
+  const city = c ? pair([a, pair([b, c], ["turn", "turn"])], ["turn", "same"]) : b ? pair([a, b], ["turn", "turn"]) : a;
+  const zoned = !!city.zone;
   const fitsBlock = (n, w, h) => w >= 4 && h >= 4 && (w - 2) * (h - 2) >= n;
   const ways = (only, w, h) => only !== undefined ? [only] : w >= h ? [true, false] : [false, true];
   // The slots either side of a cut, and the direction their own cuts must
   // take: the halves of the city are cut across the first road, so that only
-  // it crosses the whole city.
+  // it crosses the whole city; zones say for themselves.
   const halvesOf = (g, w, h, t) => {
-    const next = g === city ? !t.across : undefined;
-    return t.across ? [[t.p, h, next], [t.len - t.p, h, next]] : [[w, t.p, next], [w, t.len - t.p, next]];
+    const [n1, n2] = (g.next || (g === city ? ["turn", "turn"] : [])).map(r => r === "turn" ? !t.across : t.across);
+    return t.across ? [[t.p, h, n1], [t.len - t.p, h, n2]] : [[w, t.p, n1], [w, t.len - t.p, n2]];
   };
   // Where a group may be cut: across the slot's longer side at the first
   // half's share, then a little off it, then the same the other way.
@@ -738,7 +790,7 @@ function planCity(needs, gap) {
       };
       let t = options.find(t => fits(t) && clear(t));
       if (!t) { t = options.find(fits); crossroads++; }
-      const road = { ...roadAt(t), main: inside === undefined && depth < MAIN_DEPTH };
+      const road = { ...roadAt(t), main: inside === undefined && (zoned ? !!g.zone : depth < MAIN_DEPTH) };
       roads.push(road);
       ends.add(`${road.i0},${road.j0}`); ends.add(`${road.i1},${road.j1}`);
       // A quarter's lots go to its halves by the room they have.
@@ -907,6 +959,7 @@ const world = {
 // that has it. Live districts keep spare lots, so a new workload rarely
 // makes the city re-pack.
 const registry = [];   // namespace index -> Map(workload index -> lot number)
+const daemons = new Set();   // namespace indexes that run a DaemonSet (see zoneOf)
 const SPARE = DATA.live ? 0.3 : 0;
 let planDirty = false;
 function registerBatch(events) {
@@ -916,7 +969,8 @@ function registerBatch(events) {
     fresh.set(`${e[2]}/${e[3]}`, [e[2], e[3], KINDS[e[4]]]);
   }
   const order = [...fresh.values()].sort((a, b) => KIND_ORDER[a[2]] - KIND_ORDER[b[2]] || DATA.wl[a[1]].localeCompare(DATA.wl[b[1]]));
-  for (const [ns, wl] of order) {
+  for (const [ns, wl, kind] of order) {
+    if (kind === "DaemonSet") daemons.add(ns);
     const lots = registry[ns] ||= new Map();
     lots.set(wl, lots.size);
     const d = world.districts[ns];
@@ -924,13 +978,12 @@ function registerBatch(events) {
   }
 }
 
+// A namespace's zone is looked at again only when the city re-packs, so a
+// DaemonSet coming along does not move a district on its own.
 function planDistricts() {
-  const needs = DATA.ns.map((name, idx) => ({ name, n: lotsFor((registry[idx] || new Map()).size, SPARE) }));
+  const needs = DATA.ns.map((name, idx) => ({ name, n: lotsFor((registry[idx] || new Map()).size, SPARE), zone: zoneOf(name, daemons.has(idx)) }));
   const city = planCity(needs, theme.gap);
-  const districts = DATA.ns.map((name, idx) => {
-    const branch = /^(feature|bugfix)-/.test(name);
-    return { idx, name, branch, ...city.districts[idx], lots: registry[idx] || new Map(), stats: null, health: "ok" };
-  });
+  const districts = DATA.ns.map((name, idx) => ({ idx, name, zone: needs[idx].zone, ...city.districts[idx], lots: registry[idx] || new Map(), stats: null, health: "ok" }));
   return { districts, parks: city.parks, roads: city.roads, W: city.W, H: city.H, gap: theme.gap };
 }
 
@@ -1077,19 +1130,27 @@ function drawGround() {
   const half = plan.gap / 2;
   for (const r of plan.roads) poly(g, ART.asphalt, rect(r.i0 - half, r.j0 - half, r.i1 - r.i0 + plan.gap, r.j1 - r.j0 + plan.gap));
   laneMarkings(g);
+  // The ground of a zone, a lot's pad on it and the courtyard: a plaza with
+  // a lawn in the town centre, a concrete yard in the industrial quarter, a
+  // lawn in the suburbs.
+  const zones = {
+    centre: [ART.plaza, ART.lot, ART.lawn],
+    industry: [ART.yard, ART.yardLot, null],
+    suburb: [ART.lawn, shade(ART.lawn, 0.9), null],
+  };
   for (const d of plan.districts) {
-    // Kerb, sidewalk, then lawn or plaza with a pad on every lot; the
-    // courtyard is lawn.
+    // Kerb, sidewalk, then the zone's ground with a pad on every lot.
+    const [ground, pad, yard] = zones[d.zone];
     for (const b of d.blocks) {
       const s = rect(b.x, b.y, b.w, b.h);
       poly(g, shade(ART.sidewalk, 0.72), [s[3], s[2], [s[2][0], s[2][1] + 3], [s[3][0], s[3][1] + 3]]);
       poly(g, shade(ART.sidewalk, 0.6), [s[2], s[1], [s[1][0], s[1][1] + 3], [s[2][0], s[2][1] + 3]]);
       poly(g, ART.sidewalk, s);
-      poly(g, d.branch ? ART.lawn : ART.plaza, rect(b.x + 0.4, b.y + 0.4, b.w - 0.8, b.h - 0.8));
+      poly(g, ground, rect(b.x + 0.4, b.y + 0.4, b.w - 0.8, b.h - 0.8));
     }
     d.cells.forEach(([i, j], k) => {
-      if (k < d.lots.size) poly(g, d.branch ? shade(ART.lawn, 0.9) : ART.lot, rect(i + 0.06, j + 0.06, 0.88, 0.88));
-      else if (!d.branch) poly(g, ART.lawn, rect(i, j, 1, 1));
+      if (k < d.lots.size) poly(g, pad, rect(i + 0.06, j + 0.06, 0.88, 0.88));
+      else if (yard) poly(g, yard, rect(i, j, 1, 1));
     });
   }
   for (const p of plan.parks) {
@@ -1136,6 +1197,7 @@ const METROPOLIS = {
     tower: "tower, floors grow with replicas", tank: "tank, twin tanks or silo", house: "a house per node, up to four",
     factory: "factory, smoking while it runs", build: "construction site", scorched: "scorched shell", kiosk: "kiosk",
   },
+  zones: { centre: ART.plaza, industry: ART.yard, suburb: ART.lawn },
 };
 
 // Sprites from Kenney's Isometric Buildings and Isometric City packs (CC0,
@@ -1175,6 +1237,9 @@ const KIT = {
   road: "c080", sidewalk: "c074", lot: "c066", parks: ["c059", "c069", "c067", "c076"],
   // The plain lot tinted green: the pack has no plain grass.
   grass: "c066", grassTint: 0x9fd77a,
+  // Lots tinted by zone: concrete in the industrial quarter (its courtyard
+  // too), pale green in the suburbs.
+  zoneTints: { centre: 0xffffff, industry: 0xb4b8bc, suburb: 0xc8e6a8 },
   pit: "c040", tree: "d010", lamp: "d005",
 };
 const TEX = {};
@@ -1367,11 +1432,16 @@ const KENNEY = {
     const joins = (i, j) => (isRoad(i, j - 1) ? 1 : 0) | (isRoad(i + 1, j) ? 2 : 0) | (isRoad(i, j + 1) ? 4 : 0) | (isRoad(i - 1, j) ? 8 : 0);
     const junction = (i, j) => isRoad(i, j) && [1, 2, 4, 8].filter(b => joins(i, j) & b).length > 2;
     // Blocks are sidewalk with lots inside, courtyards and pocket parks green.
-    const land = new Map();
+    const land = new Map(), tints = new Map();
     const green = (i, j) => land.set(`${i}/${j}`, pick(KIT.parks, hash(`${i}/${j}`), 0));
     for (const d of plan.districts) {
+      const tint = KIT.zoneTints[d.zone];
       for (const b of d.blocks) for (let j = b.y; j < b.y + b.h; j++) for (let i = b.x; i < b.x + b.w; i++) land.set(`${i}/${j}`, KIT.sidewalk);
-      d.cells.forEach(([i, j], k) => (k < d.lots.size ? land.set(`${i}/${j}`, KIT.lot) : green(i, j)));
+      d.cells.forEach(([i, j], k) => {
+        if (k >= d.lots.size && d.zone !== "industry") { green(i, j); return; }
+        land.set(`${i}/${j}`, KIT.lot);
+        if (tint !== 0xffffff) tints.set(`${i}/${j}`, tint);
+      });
     }
     for (const p of plan.parks) for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) green(i, j);
     const tiles = [];
@@ -1389,6 +1459,7 @@ const KENNEY = {
     for (const [i, j, name] of tiles) {
       const t = tileSprite(name || KIT.grass); t.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(t);
       if (!name) t.tint = KIT.grassTint;
+      else if (tints.has(`${i}/${j}`)) t.tint = tints.get(`${i}/${j}`);
     }
     // Lamps on the corners of every block, trees along the main roads, in the parks and on the grass.
     for (const d of plan.districts.flatMap(d => d.blocks)) {
@@ -1406,6 +1477,7 @@ const KENNEY = {
     tower: "office block, a storey per replica", tank: "brick hall with a tank on the roof", house: "house with a pitched roof",
     factory: "works with a chimney, smoking while it runs", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
   },
+  zones: { centre: 0xd0cbb8, industry: 0x929287, suburb: 0xa2b684 },
 };
 
 const THEMES = { metropolis: METROPOLIS, kenney: KENNEY };
@@ -1851,7 +1923,7 @@ function buildingTip(b) {
 }
 function districtTip(d) {
   const s = d.stats;
-  return `<div class="t">${esc(d.name)}</div><div class="s">${d.branch ? "Branch namespace" : "Platform namespace"}</div><div>${s.workloads} workloads, ${s.pods} pods</div><div class="s">${summary(s.counts) || "empty"}</div>`;
+  return `<div class="t">${esc(d.name)}</div><div class="s">${ZONE_WORDS[d.zone]}${d.zone === "industry" ? (infraName(d.name) ? ": infrastructure" : ": runs a DaemonSet") : ""}</div><div>${s.workloads} workloads, ${s.pods} pods</div><div class="s">${summary(s.counts) || "empty"}</div>`;
 }
 
 const ICONS = new Map();
@@ -1978,6 +2050,11 @@ async function renderLegend() {
   for (const [title, sub, l, fire] of items) {
     const url = await icon(l, !!fire);
     html.push(`<div><img src="${url}" alt=""><span>${title}<small>${sub}</small></span></div>`);
+  }
+  // Zones: where a district stands and its ground, never its buildings.
+  for (const [zone, rule] of Object.entries(ZONE_RULES)) {
+    const color = `#${theme.zones[zone].toString(16).padStart(6, "0")}`;
+    html.push(`<div class="zone"><i style="background:${color}"></i><span>${ZONE_WORDS[zone]}<small>${rule}</small></span></div>`);
   }
   document.getElementById("legend").innerHTML = html.join("");
 }
@@ -2379,7 +2456,7 @@ if (KENNEY_SPRITES) document.getElementById("credit").hidden = false;
 else lookSelect.querySelector('[value="kenney"]').remove();
 document.getElementById("look-pick").hidden = lookSelect.options.length < 2;
 
-// #district and #street open the biggest branch namespace at that zoom;
+// #district and #street open the biggest suburb namespace at that zoom;
 // a namespace name opens that namespace at street zoom; #tour plays the
 // camera tour below. A "kenney." prefix picks the Kenney look.
 let deep = decodeURIComponent(location.hash.slice(1));
@@ -2397,7 +2474,8 @@ function applyDeepLink() {
   }
   const named = world.districts.find(d => d.name === deep);
   if (!named && deep !== "district" && deep !== "street") return false;
-  const d = named || [...world.districts].sort((a, b) => (b.branch - a.branch) || (b.lots.size - a.lots.size))[0];
+  const suburb = d => (d.zone === "suburb" ? 1 : 0);
+  const d = named || [...world.districts].sort((a, b) => (suburb(b) - suburb(a)) || (b.lots.size - a.lots.size))[0];
   if (!d) return false;
   const [x, y] = iso(d.x + d.w / 2, d.y + d.h / 2);
   const s = deep !== "district" ? STREET * 1.6 : (clusterLimit() + STREET) / 2;
@@ -2422,7 +2500,7 @@ const contextSelect = document.getElementById("context");
 
 // Another cluster: forget the old one's namespaces, lots and labels too.
 function newCity() {
-  registry.length = 0; DATA.ns.length = 0; DATA.wl.length = 0;
+  registry.length = 0; daemons.clear(); DATA.ns.length = 0; DATA.wl.length = 0;
   live.ns.clear(); live.wl.clear(); live.pods.clear(); live.next = 0;
   for (const el of signs) if (el) el.remove();
   signs.length = 0;
