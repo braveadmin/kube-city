@@ -97,11 +97,10 @@ fn main() -> Result<()> {
     let (sender, from_source) = mpsc::unbounded_channel();
     // In the browser a page may switch to another context; not while
     // recording, which holds a single cluster.
-    let mut clusters = None;
-    let source = if args.demo {
+    let (source, shows) = if args.demo {
         let seed = args.seed.unwrap_or_else(seed_from_clock);
         runtime.spawn(demo::run(seed, args.demo_rate, sender));
-        watch::channel(format!("demo seed {seed}")).1
+        (watch::channel(format!("demo seed {seed}")).1, web::Shows::Demo)
     } else if let Some(path) = &args.replay {
         let recording = recording::load(path)?;
         runtime.spawn(recording::replay(recording, args.replay_speed, sender));
@@ -111,18 +110,16 @@ fn main() -> Result<()> {
         } else {
             path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
         };
-        watch::channel(format!("replay {name}")).1
+        (watch::channel(format!("replay {name}")).1, web::Shows::Replay)
     } else {
         // Connect before anything else, so login prompts and errors show
         // up as plain text.
         let (client, context) = runtime.block_on(cluster::connect(args.context.as_deref(), &args.namespaces))?;
-        if args.record.is_none() {
-            let contexts = cluster::contexts()?;
-            clusters = Some(web::Clusters { contexts, current: context.clone(), namespaces: args.namespaces.clone() });
-        }
+        let contexts = if args.record.is_none() { cluster::contexts()? } else { Vec::new() };
+        let clusters = web::Clusters { contexts, current: context.clone(), namespaces: args.namespaces.clone() };
         let (status, source) = watch::channel(format!("{context} · connecting"));
         runtime.spawn(cluster::watch(client, context, args.namespaces.clone(), sender, status));
-        source
+        (source, web::Shows::Cluster(clusters))
     };
 
     // Before recording, so that recordings hold no real names either.
@@ -141,7 +138,7 @@ fn main() -> Result<()> {
         }
     };
 
-    runtime.block_on(web::serve(receiver, source, args.port, !args.no_open, clusters, anonymiser))
+    runtime.block_on(web::serve(receiver, source, args.port, !args.no_open, shows, anonymiser))
 }
 
 fn seed_from_clock() -> u64 {

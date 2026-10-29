@@ -13,6 +13,10 @@
 //!
 //! With `--anonymise` the pages only ever see pseudonyms, context names
 //! included; a page asks for a context by its pseudonym.
+//!
+//! The page keeps a world (the seed of its landscape) in the browser for
+//! each context, one for the demo and one for replays; the seed never comes
+//! back to the server.
 
 use std::{
     collections::HashMap,
@@ -67,9 +71,27 @@ const BACKLOG: usize = 1024;
 const BATCH: usize = 2000;
 const STATUS_ERROR_MAX: usize = 120;
 
+/// What the city shows; the page names the world it keeps after it.
+pub enum Shows {
+    Demo,
+    Replay,
+    Cluster(Clusters),
+}
+
+impl Shows {
+    fn name(&self) -> &'static str {
+        match self {
+            Shows::Demo => "demo",
+            Shows::Replay => "replay",
+            Shows::Cluster(_) => "cluster",
+        }
+    }
+}
+
 /// The clusters a page may switch between, when the city shows a cluster.
 pub struct Clusters {
-    /// Every context in the kubeconfig.
+    /// Every context in the kubeconfig; none while recording, which holds a
+    /// single cluster.
     pub contexts: Vec<String>,
     /// The context shown at start.
     pub current: String,
@@ -111,7 +133,7 @@ pub async fn serve(
     status: watch::Receiver<String>,
     port: u16,
     open: bool,
-    clusters: Option<Clusters>,
+    shows: Shows,
     anonymiser: Option<anonymise::Shared>,
 ) -> Result<()> {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
@@ -122,6 +144,11 @@ pub async fn serve(
     let (input, inputs) = mpsc::unbounded_channel();
     let first = tokio::spawn(forward(0, events, status, input.clone()));
     let (status_tx, status) = watch::channel(String::new());
+    let page = page(shows.name());
+    let clusters = match shows {
+        Shows::Cluster(clusters) => Some(clusters),
+        Shows::Demo | Shows::Replay => None,
+    };
     let city = City { pods: HashMap::new(), context: clusters.as_ref().map(|c| c.current.clone()) };
     let (contexts, switcher) = match clusters {
         Some(clusters) => {
@@ -140,7 +167,7 @@ pub async fn serve(
         city: Arc::new(Mutex::new(city)),
         batches: broadcast::channel(BACKLOG).0,
         status,
-        page: page().into(),
+        page: page.into(),
         port,
         contexts: Arc::new(contexts),
         switcher,
@@ -166,9 +193,12 @@ pub async fn serve(
     Ok(())
 }
 
-/// The page with an empty live city and the sprites in it, and the fonts served next to it.
-fn page() -> String {
-    let data = json!({ "ns": [], "wl": [], "events": [], "live": true, "version": env!("CARGO_PKG_VERSION") });
+/// The page with an empty live city and the sprites in it, and the fonts
+/// served next to it; `shows` is what the city shows (see [`Shows`]).
+fn page(shows: &str) -> String {
+    let data = json!({
+        "ns": [], "wl": [], "events": [], "live": true, "shows": shows, "version": env!("CARGO_PKG_VERSION"),
+    });
     let sprites: serde_json::Map<String, Value> =
         SPRITES.iter().map(|(name, uri)| (name.to_string(), Value::from(*uri))).collect();
     let body = TEMPLATE
@@ -536,9 +566,9 @@ mod tests {
 
     #[test]
     fn page_has_live_data_and_every_sprite_and_font_it_names() {
-        let page = page();
+        let page = page(Shows::Demo.name());
         assert!(!page.contains("/*CITY_DATA*/") && !page.contains("/*KENNEY_SPRITES*/"));
-        assert!(page.contains(r#""live":true"#));
+        assert!(page.contains(r#""live":true"#) && page.contains(r#""shows":"demo""#));
         assert!(page.contains(&format!(r#""version":"{}""#, env!("CARGO_PKG_VERSION"))));
         // The built-in PixiJS must be the version the template asks for.
         assert!(TEMPLATE.contains(PIXI_CDN) && PIXI.contains(" * pixi.js - v7.4.2"));
@@ -618,6 +648,17 @@ mod tests {
         let city = shared.city.lock().await;
         assert_eq!(city.pods.keys().collect::<Vec<_>>(), ["new"]);
         assert_eq!(*status.borrow_and_update(), "two · connecting");
+    }
+
+    #[tokio::test]
+    async fn a_recorded_cluster_still_names_its_context() {
+        // While recording there is nothing to switch to, but the page keeps
+        // its world under the context's name.
+        let (shared, _status_tx) = shared(&[]);
+        let mut city = shared.city.lock().await;
+        city.context = Some("rec".into());
+        let snapshot: Value = serde_json::from_str(&snapshot(&city, &shared, "rec · live")).unwrap();
+        assert_eq!(snapshot[1], json!({ "Contexts": { "current": "rec", "all": [] } }));
     }
 
     #[test]

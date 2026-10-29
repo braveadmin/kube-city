@@ -7,6 +7,12 @@
 - The fonts (Barlow, Barlow Condensed, IBM Plex Mono) are built into the
   binary, so the page makes no request to Google Fonts and looks the same
   without internet (#21).
+- A world per cluster: the land round the town grows from a seed the page
+  picks the first time it shows a context and keeps in the browser for it
+  (one for the demo and one for replays); the **World** section of the
+  details panel shows it, takes a typed one and rolls a new one with
+  **New world**. For now the seed places the trees on the grass; the
+  terrain will grow from it (#38).
 
 ### Changed
 

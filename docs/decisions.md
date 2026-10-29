@@ -346,6 +346,14 @@ mountains, sea, lakes, rivers, forests, fields and roads out of town.
 | #35 and #37 | Kept, narrowed: #35 the edge (grass until #43), #37 the river in town (#42 continues it) | Owner's choice: they can ship before the terrain |
 | Readability | Calmer terrain at cluster zoom; "fit" frames the town (#46) | Terrain must not hide problems |
 
+The seed (#38) is any text up to 40 characters (a random one is a number
+up to 999999), kept in `localStorage` as `kube-city-world:context:<name>`
+(the pseudonym with `--anonymise`), `kube-city-world:demo` or
+`kube-city-world:replay`. The server only tells the page what it shows
+(`DATA.shows`: `demo`, `replay` or `cluster`) and, for a cluster, the
+context, also while recording. Until #39 the seed places the trees on the
+grass round the town.
+
 Generator, as sketched: layered and ridged noise from seeded tables;
 height in 13 levels with tapering peaks; a priority flood turns each hollow
 into a whole lake or fills it; the town river runs from its cut into the
