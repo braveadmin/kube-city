@@ -347,6 +347,8 @@ const ART = {
   concrete: 0xcfcac0, asphalt: 0x878e91, sidewalk: 0xd8d2c4, lawn: 0x9ec77d, plaza: 0xcdc7b6, grass: 0x8cba6c,
   lot: 0xbcb7a8, earth: 0x8a6f52, crane: 0xf0b431, fire: [0xffd34d, 0xff8a2a, 0xe8452c],
   yard: 0xaaaba5, yardLot: 0x9b9c96, water: 0x6fa8d0, ripple: 0xb3d6ec, parapet: 0xeeeae0,
+  // Sea and lakes by depth, and the sand along the sea.
+  shallows: 0x8cc0e0, deep: 0x5089bd, sand: 0xe4d4a2,
 };
 
 const P = (di, dj, z) => [(di - dj) * TW / 2, (di + dj) * TH / 2 - z];
@@ -1027,8 +1029,14 @@ const SLOPE = 2;          // a tile stands at most this many levels above its lo
 const LEVEL_H = 16;       // pixels from one ground level to the next: about the Kenney tiles' slab
 const BASE = 22;          // the earth base's depth below level 0, in pixels
 const TREE = [24, 28];    // a tree's width and height in pixels, as hiddenBy sees it
-// The shape of the land; #45's world styles will be presets of these.
-const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, back: 0.85 };
+const SINK = 5;           // pixels a sea or lake lies below its shore
+const LAKE_MIN = 4;       // tiles; a smaller hollow is always filled in, a smaller bay of sea too
+// The shape of the land; #45's world styles will be presets of these. `coast`
+// is the share of worlds whose sea comes in over one of the map's front sides,
+// `sea` how deep it cuts there, `lakes` the share of hollows that hold a lake.
+const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, back: 0.85, coast: 0.5, sea: 1.2, lakes: 0.5 };
+// What covers a tile of terrain.
+const COVER = { grass: 0, sea: 1, lake: 2, beach: 3 };
 
 // Smooth noise in [0, 1] from a table of random numbers: `octaves` layers,
 // each twice as fine and half as strong as the one before. The table repeats
@@ -1052,8 +1060,11 @@ function noiseFrom(seed) {
 
 // The terrain round a plan: a map of WORLD_MARGIN tiles round the town, tile
 // (i, j) at index (j - y0) * W + (i - x0). `level` is the ground level of each
-// tile, `height` the height before it was cut into levels (#41 and #43 read
-// it), `toTown` the distance to the nearest town tile, in tiles.
+// tile (of a sea or lake, the level of its surface: its shore's), `height`
+// the height before it was cut into levels (#43 reads it), `toTown` the
+// distance to the nearest town tile, in tiles, `cover` what covers each tile
+// (COVER) and `depth` how far a sea or lake tile lies from the shore, in
+// tiles, a little uneven.
 function planTerrain(plan, seed) {
   const x0 = -WORLD_MARGIN, y0 = -WORLD_MARGIN, W = plan.W + 2 * WORLD_MARGIN, H = plan.H + 2 * WORLD_MARGIN, N = W * H;
   const at = (i, j) => (j - y0) * W + (i - x0);
@@ -1086,6 +1097,11 @@ function planTerrain(plan, seed) {
   const hills = noiseFrom(hash(`${seed} hills`)), ridges = noiseFrom(hash(`${seed} ridges`)), ranges = noiseFrom(hash(`${seed} ranges`));
   const t = TERRAIN, cx = Math.floor(plan.W / 2), cy = Math.floor(plan.H / 2);
   const smooth = (a, b, x) => { const s = Math.min(1, Math.max(0, (x - a) / (b - a))); return s * s * (3 - 2 * s); };
+  // The coast, on some worlds: the land sinks under the sea towards the map's
+  // front-right side (+i), its front-left one (+j) or its front corner, low
+  // in front of the town where it hides nothing.
+  const coastRng = rng(hash(`${seed} coast`));
+  const coast = coastRng() < t.coast ? [[1, 0], [0, 1], [Math.SQRT1_2, Math.SQRT1_2]][Math.floor(coastRng() * 3)] : null;
   const height = new Float32Array(N), level = new Int8Array(N);
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
     const k = j * W + i, x = i + x0 - cx, y = j + y0 - cy;
@@ -1095,7 +1111,10 @@ function planTerrain(plan, seed) {
     const range = smooth(0.35, 0.6, ranges(x / (2 * t.rangeSize), y / (2 * t.rangeSize), 2));
     const peaks = 0.45 + 0.55 * ridges(x / 7 + 91.7, y / 7 - 33.1, 2);
     const mountain = t.mountains * Math.pow(ridge, 4) * peaks * range * (1 - t.back * smooth(-0.3, 0.5, forward));
-    const h = away * (t.hills * (2 * hills(x / t.hillSize, y / t.hillSize, 4) - 1) + t.rise + mountain);
+    // 0 in the town's middle, 1 at the coast's side of the map; a wobble makes bays and headlands.
+    const out = coast ? (x * coast[0] + y * coast[1]) / (coast[0] * W / 2 + coast[1] * H / 2) + 0.4 * (hills(x / 9 - 61.3, y / 9 + 23.9, 3) - 0.5) : 0;
+    const sea = coast ? t.sea * smooth(0.5, 0.9, out) : 0;
+    const h = away * (t.hills * (2 * hills(x / t.hillSize, y / t.hillSize, 4) - 1) + t.rise + mountain - sea);
     height[k] = h;
     level[k] = h < -0.06 ? 0 : Math.min(LEVELS - 1, 1 + Math.floor((LEVELS - 1) * (1 - Math.exp(-1.4 * Math.max(0, h)))));
   }
@@ -1121,22 +1140,74 @@ function planTerrain(plan, seed) {
     if (k % W < W - 1) level[k] = Math.min(level[k], level[k + 1] + SLOPE);
     if (k + W < N) level[k] = Math.min(level[k], level[k + W] + SLOPE);
   }
-  return { x0, y0, W, H, level, height, toTown };
+
+  // Water. A priority flood from the map's edges and the town finds the level
+  // water would stand at on every tile before it ran off (`fill`): its
+  // hollow's lowest rim, or its own level. The town drains (its river carries
+  // the water away), so it never floods. Levels are few, so the queue is a
+  // bucket per level.
+  const near = (k, visit) => { const i = k % W; if (i > 0) visit(k - 1); if (i < W - 1) visit(k + 1); if (k >= W) visit(k - W); if (k + W < N) visit(k + W); };
+  const fill = new Int8Array(N).fill(-1), buckets = Array.from({ length: LEVELS }, () => []);
+  for (let k = 0; k < N; k++) {
+    const i = k % W, j = (k / W) | 0;
+    if (i === 0 || j === 0 || i === W - 1 || j === H - 1 || toTown[k] === 0) { fill[k] = level[k]; buckets[level[k]].push(k); }
+  }
+  for (let l = 0; l < LEVELS; l++) for (let n = 0; n < buckets[l].length; n++) {   // the bucket grows as it is walked
+    near(buckets[l][n], nk => { if (fill[nk] < 0) { fill[nk] = Math.max(level[nk], l); buckets[fill[nk]].push(nk); } });
+  }
+  // Below sea level and open to the map's edge is sea (1); a tile below its
+  // fill lies in a hollow (2). Each hollow, its tiles joined side to side
+  // (they share one fill), becomes a whole lake or is filled in, as the seed
+  // says; a bay too small to read is filled in. A sea or lake stands at its
+  // shore's level, SINK pixels below it.
+  const wet = k => fill[k] > level[k] ? 2 : level[k] === 0 ? 1 : 0;
+  const cover = new Uint8Array(N), seen = new Uint8Array(N);
+  for (let k0 = 0; k0 < N; k0++) {
+    const kind = wet(k0);
+    if (!kind || seen[k0]) continue;
+    const part = [k0];
+    seen[k0] = 1;
+    for (let n = 0; n < part.length; n++) near(part[n], nk => { if (!seen[nk] && wet(nk) === kind) { seen[nk] = 1; part.push(nk); } });
+    const lake = kind === 2 && hash(`${seed} lake ${k0 % W + x0}/${((k0 / W) | 0) + y0}`) % 1000 < 1000 * t.lakes;
+    const water = part.length >= LAKE_MIN && (kind === 1 || lake);
+    for (const k of part) {
+      if (water) cover[k] = kind === 1 ? COVER.sea : COVER.lake;
+      level[k] = Math.max(1, fill[k]);
+    }
+  }
+  // Beaches on the low land along the sea.
+  for (let k = 0; k < N; k++) {
+    if (cover[k] || level[k] !== 1 || toTown[k] === 0) continue;
+    const i = k % W, j = (k / W) | 0;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const ni = i + di, nj = j + dj;
+      if (ni >= 0 && nj >= 0 && ni < W && nj < H && cover[nj * W + ni] === COVER.sea) cover[k] = COVER.beach;
+    }
+  }
+  // How far each sea or lake tile lies from its shore, give or take a tile.
+  const depth = new Float32Array(N), shore = [];
+  for (let k = 0; k < N; k++) if (isWater(cover[k])) depth[k] = Infinity; else shore.push(k);
+  for (let n = 0; n < shore.length; n++) near(shore[n], nk => { if (depth[nk] === Infinity) { depth[nk] = depth[shore[n]] + 1; shore.push(nk); } });
+  for (let k = 0; k < N; k++) if (isWater(cover[k])) depth[k] += 2 * hills(k % W / 4 + 7.7, ((k / W) | 0) / 4 - 3.1, 2) - 1;
+  return { x0, y0, W, H, level, height, toTown, cover, depth };
 }
 
 // How high a ground level stands above the town (level 1), in pixels.
 const zOfLevel = l => (l - 1) * LEVEL_H;
+const isWater = cover => cover === COVER.sea || cover === COVER.lake;
+// How high tile k of a terrain stands, its ground or its water, in pixels.
+const zOfTile = (t, k) => zOfLevel(t.level[k]) - (isWater(t.cover[k]) ? SINK : 0);
 
 // Walks the terrain back to front, a diagonal (i + j) at a time, and hands
-// every tile to draw(i, j, z, left, right): its height and how far its two
-// front faces drop, towards +j (left on screen) and +i (right). At the map's
-// front edges they drop to the base.
+// every tile to draw(i, j, z, left, right, k): its height, how far its two
+// front faces drop, towards +j (left on screen) and +i (right), and its index
+// in the terrain's maps. At the map's front edges they drop to the base.
 function eachGroundTile(t, draw) {
-  const { x0, y0, W, H, level } = t, bottom = zOfLevel(0) - BASE;
+  const { x0, y0, W, H } = t, bottom = zOfLevel(0) - BASE;
   for (let s = 0; s < W + H - 1; s++) for (let i = Math.max(0, s - H + 1); i <= Math.min(W - 1, s); i++) {
-    const j = s - i, k = j * W + i, z = zOfLevel(level[k]);
-    const left = j + 1 < H ? zOfLevel(level[k + W]) : bottom, right = i + 1 < W ? zOfLevel(level[k + 1]) : bottom;
-    draw(i + x0, j + y0, z, Math.max(0, z - left), Math.max(0, z - right));
+    const j = s - i, k = j * W + i, z = zOfTile(t, k);
+    const left = j + 1 < H ? zOfTile(t, k + W) : bottom, right = i + 1 < W ? zOfTile(t, k + 1) : bottom;
+    draw(i + x0, j + y0, z, Math.max(0, z - left), Math.max(0, z - right), k);
   }
 }
 
@@ -1297,14 +1368,18 @@ function groundZ(i, j) {
 // call and no work per frame: sprites from one texture (the Kenney atlas, or
 // plain white) as textured quads, and flat-coloured polygons from the calls
 // poly(), tree() and the water helpers make on a PIXI.Graphics; all in the
-// order they are added. (dx, dy) moves what is added next.
+// order they are added. (dx, dy) moves what is added next; a `wave` above 0
+// makes it a glint on the water, with that phase (see GLINT).
+const GLINT = 7;   // seconds a glint takes to drift to and fro and fade out and in
 const GROUND_VERTEX = `
-attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; attribute vec4 aColor;
-uniform mat3 projectionMatrix; uniform mat3 translationMatrix;
+attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; attribute vec4 aColor; attribute float aWave;
+uniform mat3 projectionMatrix; uniform mat3 translationMatrix; uniform float uTime;
 varying vec2 vTextureCoord; varying vec4 vColor;
 void main() {
-  gl_Position = vec4((projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0)).xy, 0.0, 1.0);
-  vTextureCoord = aTextureCoord; vColor = aColor;
+  float glint = step(0.001, aWave), a = 6.2832 * (aWave + uTime / ${GLINT}.0);
+  vec2 p = aVertexPosition + glint * vec2(3.0 * sin(a), 0.0);
+  gl_Position = vec4((projectionMatrix * translationMatrix * vec3(p, 1.0)).xy, 0.0, 1.0);
+  vTextureCoord = aTextureCoord; vColor = aColor * mix(1.0, 0.5 + 0.5 * cos(a), glint);
 }`;
 const GROUND_FRAGMENT = `
 precision mediump float;
@@ -1316,10 +1391,10 @@ class GroundPen {
   constructor(white) {
     const base = white.baseTexture, f = white.frame;
     this.base = base; this.white = [(f.x + f.width / 2) / base.width, (f.y + f.height / 2) / base.height];
-    this.xy = []; this.uv = []; this.rgba = []; this.index = []; this.color = 0; this.alpha = 1; this.dx = 0; this.dy = 0;
+    this.xy = []; this.uv = []; this.rgba = []; this.waves = []; this.index = []; this.color = 0; this.alpha = 1; this.dx = 0; this.dy = 0; this.wave = 0;
   }
   vertex(x, y, u, v, color, alpha) {
-    this.xy.push(x + this.dx, y + this.dy); this.uv.push(u, v);
+    this.xy.push(x + this.dx, y + this.dy); this.uv.push(u, v); this.waves.push(this.wave);
     // Premultiplied, as the textures are.
     this.rgba.push(((color >> 16) & 255) * alpha, ((color >> 8) & 255) * alpha, (color & 255) * alpha, 255 * alpha);
   }
@@ -1353,8 +1428,9 @@ class GroundPen {
       .addAttribute("aVertexPosition", new Float32Array(this.xy), 2)
       .addAttribute("aTextureCoord", new Float32Array(this.uv), 2)
       .addAttribute("aColor", new PIXI.Buffer(new Uint8Array(this.rgba), true), 4, true, PIXI.TYPES.UNSIGNED_BYTE)
+      .addAttribute("aWave", new Float32Array(this.waves), 1)
       .addIndex(new Uint32Array(this.index));
-    if (!groundShaders.has(this.base)) groundShaders.set(this.base, PIXI.Shader.from(GROUND_VERTEX, GROUND_FRAGMENT, { uSampler: new PIXI.Texture(this.base) }));
+    if (!groundShaders.has(this.base)) groundShaders.set(this.base, PIXI.Shader.from(GROUND_VERTEX, GROUND_FRAGMENT, { uSampler: new PIXI.Texture(this.base), uTime: 0 }));
     const mesh = new PIXI.Mesh(geometry, groundShaders.get(this.base));
     mesh.eventMode = "none";
     return mesh;
@@ -1401,14 +1477,16 @@ function parkTrees(p) {
 }
 
 // Where trees stand on the grass round the town and in the strips its edge
-// gave back: about one tile in eight, by position and the world's seed. [i, j]
+// gave back: about one tile in eight, by position and the world's seed, never
+// on sand or water. [i, j]
 function grassTrees() {
   const road = roadTiles(plan), land = new Set(), spots = [];
   for (const r of [...plan.districts.flatMap(d => d.blocks), ...plan.parks])
     for (let j = r.y; j < r.y + r.h; j++) for (let i = r.x; i < r.x + r.w; i++) land.add(`${i}/${j}`);
   for (let j = -MARGIN; j < plan.H + MARGIN; j++) for (let i = -MARGIN; i < plan.W + MARGIN; i++) {
     const k = `${i}/${j}`;
-    if (!land.has(k) && !road.has(k) && !inRiver(plan.river, i, j) && hash(`${worldSeed.seed} grass ${k}`) % 8 === 0) spots.push([i, j]);
+    const bare = !terrain || !terrain.cover[(j - terrain.y0) * terrain.W + i - terrain.x0];   // no sand or water
+    if (bare && !land.has(k) && !road.has(k) && !inRiver(plan.river, i, j) && hash(`${worldSeed.seed} grass ${k}`) % 8 === 0) spots.push([i, j]);
   }
   return spots;
 }
@@ -1472,6 +1550,23 @@ function hiddenTrees(spots) {
 // Grass on the tops, a little lighter the higher they stand.
 const landColour = (color, z) => shade(color, 1 + 0.012 * z / LEVEL_H);
 
+// A tile's top, standing z pixels up.
+const tileTop = (i, j, z) => [iso(i, j), iso(i + 1, j), iso(i + 1, j + 1), iso(i, j + 1)].map(([x, y]) => [x, y - z]);
+
+// A tile of sea or lake standing z pixels up: the water shallow along the
+// shore, deep far out (`c`: shallows, water, deep and the glint's colour),
+// and on about one tile in two a glint that drifts and fades with a phase of
+// its own (in the ground's shader).
+function openWater(pen, i, j, z, depth, c) {
+  poly(pen, depth < 2 ? c.shallows : depth < 6 ? c.water : c.deep, tileTop(i, j, z));
+  const h = hash(`glint ${i}/${j}`);
+  if (h % 2) return;
+  const u = i + 0.15 + ((h >>> 4) % 5) / 10, v = j + 0.25 + ((h >>> 8) % 5) / 10;
+  pen.wave = 0.01 + ((h >>> 12) % 99) / 100;
+  poly(pen, c.ripple, [iso(u, v), iso(u + 0.35, v), iso(u + 0.35, v + 0.05), iso(u, v + 0.05)].map(([x, y]) => [x, y - z]));
+  pen.wave = 0;
+}
+
 function drawGround() {
   // The land, with the trees on the grass it hides, then the town on top:
   // it stands on flat ground that nothing in front of it rises above.
@@ -1480,9 +1575,13 @@ function drawGround() {
   if (terrain) {
     const pen = new GroundPen(PIXI.Texture.WHITE);
     const upper = [0x6e9a58, 0x5b8248], lower = [shade(ART.earth, 0.9), shade(ART.earth, 0.7)];
-    eachGroundTile(terrain, (i, j, z, left, right) => {
-      groundFaces(pen, i, j, z, left, right, upper, lower);
-      poly(pen, landColour(ART.grass, z), [iso(i, j), iso(i + 1, j), iso(i + 1, j + 1), iso(i, j + 1)].map(([x, y]) => [x, y - z]));
+    const sandSides = [shade(ART.sand, 0.85), shade(ART.sand, 0.7)], waterSides = [shade(ART.water, 0.85), shade(ART.water, 0.7)];
+    const water = { shallows: ART.shallows, water: ART.water, deep: ART.deep, ripple: ART.ripple };
+    eachGroundTile(terrain, (i, j, z, left, right, k) => {
+      const cover = terrain.cover[k];
+      groundFaces(pen, i, j, z, left, right, isWater(cover) ? waterSides : cover === COVER.beach ? sandSides : upper, lower);
+      if (isWater(cover)) openWater(pen, i, j, z, terrain.depth[k], water);
+      else poly(pen, cover === COVER.beach ? ART.sand : landColour(ART.grass, z), tileTop(i, j, z));
       const t = hidden.get(`${i}/${j}`);
       if (t) { pen.dy = -z; tree(pen, ...t); pen.dy = 0; }
     });
@@ -1612,6 +1711,10 @@ const KIT = {
   // The river is drawn in code, in the colours of the pack's canal tiles
   // (which have no bends, coast or bridges). Sides are [left, right].
   water: { top: 0x9cd4e2, shade: 0x89b2bc, deck: 0x696969, ripple: 0xc6e8f0, side: [0x8cbfcc, 0x77a9b6], wall: [0xc2beac, 0x979385], earth: [0xa77d53, 0x81603e] },
+  // Sea and lakes in the same colours, darker further out; beaches are the
+  // plain lot tinted sand.
+  open: { shallows: 0xb0e0ea, water: 0x9cd4e2, deep: 0x7dbcd2, ripple: 0xe2f4f8 },
+  sandTint: 0xf3e2b0,
   // Bridge decks: the straight road tiles (5 along j, 10 along i) without
   // their earth, keeping a slab edge on the long side that faces the viewer.
   decks: { 5: "deck5", 10: "deck10" },
@@ -1895,10 +1998,13 @@ const KENNEY = {
     const pen = new GroundPen(TEX.white), water = (i, j) => inRiver(plan.river, i, j), bridges = [];
     const tile = (name, x, y, tint) => pen.sprite(TEX[name], x, y, 0.5, tileAnchor(name), KS, tint);
     const drawn = (draw, x, y) => { pen.dx = x; pen.dy = y; draw(); pen.dx = pen.dy = 0; };
-    if (terrain) eachGroundTile(terrain, (i, j, z, left, right) => {
-      groundFaces(pen, i, j, z, left, right, KIT.earth, KIT.earth);
+    if (terrain) eachGroundTile(terrain, (i, j, z, left, right, k) => {
+      const cover = terrain.cover[k];
+      groundFaces(pen, i, j, z, left, right, isWater(cover) ? KIT.water.side : KIT.earth, KIT.earth);
       const name = nameAt(i, j), [x, y] = iso(i + 0.5, j + 0.5);
-      if (name === WATER) {
+      if (isWater(cover)) openWater(pen, i, j, z, terrain.depth[k], KIT.open);
+      else if (cover === COVER.beach) tile(KIT.grass, x, y - z, KIT.sandTint);
+      else if (name === WATER) {
         drawn(() => kenneyWater(pen, (water(i - 1, j) ? 0 : 1) | (water(i, j - 1) ? 0 : 2), hash(`ripple ${i}/${j}`) % 4), x, y - z);
         if (isRoad(i, j)) bridges.push([i, j]);
       } else tile(name || KIT.grass, x, y - z, name ? tints.get(`${i}/${j}`) ?? 0xffffff : landColour(KIT.grassTint, z));
@@ -2746,6 +2852,8 @@ app.ticker.add(() => {
     if (k >= 1) { f.view.destroy({ children: true }); falling.delete(f); }
   }
   if (!reducedMotion) {
+    // The glints on the water; the clock wraps after a whole number of glints.
+    for (const s of groundShaders.values()) s.uniforms.uTime = (now / 1000) % (100 * GLINT);
     for (const b of burning) {
       if (!b.fx) continue;
       b.fx.children.forEach((f, k) => {

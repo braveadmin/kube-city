@@ -417,6 +417,25 @@ hidden; 0–40 trees go into the ground, none next to the town; the ground
 mesh has 58 000–71 000 vertices and takes 30–100 ms to build in Node on a
 busy machine (the terrain took 18–60 ms there, against 9–26 ms quiet).
 
+Built (#41, 2026-10-29): sea, coast and lakes, in `planTerrain()` (the
+map's `cover` and `depth`), drawn in both looks.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Coast | On about half the worlds (`TERRAIN.coast`) the land sinks under the sea towards one of the map's front sides (front-right, front-left or the front corner, by seed), with noise for bays and headlands; the other worlds keep only what the hills give | Owner's choice (1A). Without it the sea was 0–7 % of the map, in patches along the edge; in front of the town it is low and hides nothing |
+| Sea | Level 0 open to the map's edge. It stands at level 1, `SINK` (5 px) below its shore, so beaches meet it almost flush; shallows, sea and deep by the distance to the shore, give or take a tile | "Deeper further out" without rings |
+| Lakes | A priority flood (a bucket per level) from the map's edges and the town gives each tile its hollow's lowest rim. Each hollow (tiles joined side to side) becomes a whole lake, `SINK` below its rim, or is filled in to the rim: a lake on about half of them by seed (`TERRAIN.lakes`), never under 4 tiles (`LAKE_MIN`); a bay of sea under 4 tiles is filled in too | Owner's choice (2A); no scattered water tiles |
+| Town | Drains: its tiles start the flood, so hills round it never make it a lake. Water and sand keep off the town and its flat ring, trees off sand and water | The issue |
+| Beaches | Sand on level-1 land next to the sea (diagonals too); higher land keeps its bank | |
+| Drawing | In the ground mesh, in its order: Metropolis in its own blues, Kenney in the river's canal colours with the plain lot tinted for sand | Hills in front still cover a lake behind them |
+| Movement | On about one water tile in two a glint drifts 3 px to and fro and fades out and in every 7 s (`GLINT`), each with its own phase: the ground shader's `uTime`, set each frame, stays 0 under reduced motion | Owner's choice (3A); nothing rebuilt per frame, no extra draw call |
+
+Big recording, 13 seeds, both road widths: sea 0–24 % of the map, 1–9
+lakes (up to 4 %), beach up to 3 %; every check passes (no hollow left,
+every sea and lake flat and at least 4 tiles, the town and its flat ring
+dry, no town tile or building hidden). The terrain takes 11–15 ms, best of
+25 runs (11 ms before); the ground mesh has 60 000–81 000 vertices.
+
 **Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
 out like SimCity or Cities: Skylines (houses, shops, towers).
 
