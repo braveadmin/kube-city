@@ -46,22 +46,14 @@ SUFFIXES = {
     "Standalone": ["debug", "toolbox", "probe"],
 }
 
-# Well-known platform namespaces get a generic role instead of a random word.
-PLATFORM_ROLES = [
-    ("kube-system", "kube-system"),
-    ("monitoring", "monitoring"),
-    ("argocd", "gitops"),
-    ("traefik", "ingress"),
-    ("cert", "certificates"),
-    ("gatekeeper", "policy"),
-    ("kyverno", "admission"),
-    ("minio", "object-store"),
-    ("openbao", "secrets"),
-    ("forgejo", "git"),
-    ("gitlab", "ci-runners"),
-    ("artemis", "broker-operator"),
-    ("external", "external"),
-]
+# Namespaces every cluster has, and well-known infrastructure as a namespace's
+# name or the start of it ("cert-manager-webhooks"): public product names, kept as
+# `kube-city --anonymise` keeps them, so the page still puts them in the
+# industrial quarter. The same list is in src/anonymise.rs and
+# city.template.html.
+KEPT_NAMESPACES = ["default", "kube-system", "kube-public", "kube-node-lease"]
+INFRA = "argo argocd calico cert-manager cilium crossplane external-dns external-secrets flux forgejo gatekeeper gitea gitlab grafana ingress istio jaeger keda kyverno linkerd logging loki longhorn metallb minio monitoring observability openbao prometheus rook tekton tigera traefik vault velero".split()
+INFRA_SUFFIXES = ["-system", "-operator", "-operators"]
 
 
 def digest(text):
@@ -94,9 +86,14 @@ def namespace_name(real, names):
             h = digest(real)
             words = [f"{prefix}-{w}-{100 + (h // 7 + i * 37) % 900}" for i, w in enumerate(WORDS)]
             return names.pick(real, words[h % len(words):] + words[:h % len(words)])
-    for prefix, role in PLATFORM_ROLES:
-        if real.startswith(prefix):
-            return names.pick(real, [role] + [f"{role}-{n}" for n in range(2, 9)], ordered=True)
+    if real in KEPT_NAMESPACES or real in INFRA:
+        return names.pick(real, [real], ordered=True)
+    for prefix in INFRA + ["kube"]:
+        if real.startswith(prefix + "-"):
+            return names.pick(real, [f"{prefix}-{w}" for w in WORDS])
+    for suffix in INFRA_SUFFIXES:
+        if real.endswith(suffix) and len(real) > len(suffix):
+            return names.pick(real, [f"{w}{suffix}" for w in WORDS])
     return names.pick(real, [f"platform-{w}" for w in WORDS])
 
 
@@ -143,7 +140,7 @@ def anonymise(lines):
 
 def leaks(page, real, data):
     """Real names that would end up in the page, ignoring generic ones."""
-    allowed = set(data["ns"]) | set(data["wl"]) | set(WORDS)
+    allowed = set(data["ns"]) | set(data["wl"]) | set(WORDS) | set(INFRA)
     found = []
     for name in sorted(real):
         if len(name) < 5 or name in allowed:

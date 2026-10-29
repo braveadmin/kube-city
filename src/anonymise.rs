@@ -37,6 +37,31 @@ const KEPT_NAMESPACES: &[&str] = &["default", "kube-system", "kube-public", "kub
 /// Branch namespaces keep their prefix, so they still read as branches.
 const BRANCH_PREFIXES: &[&str] = &["feature-", "bugfix-"];
 
+/// Well-known infrastructure, as a namespace's name or the start of it
+/// ("cert-manager-webhooks"). These are public product names, so they are kept, and
+/// the page still puts them in the industrial quarter. The same list is in
+/// `art/city.template.html` and `art/web_prototype.py`.
+const INFRA_NAMES: &str = "argo argocd calico cert-manager cilium crossplane external-dns external-secrets flux forgejo gatekeeper gitea gitlab grafana ingress istio jaeger keda kyverno linkerd logging loki longhorn metallb minio monitoring observability openbao prometheus rook tekton tigera traefik vault velero";
+
+/// Other infrastructure namespaces keep the part that marks them as such.
+const INFRA_SUFFIXES: &[&str] = &["-system", "-operator", "-operators"];
+
+/// What an infrastructure namespace keeps of its name: the part before the
+/// pseudonym and the part after it. `None` for any other namespace.
+fn infrastructure(real: &str) -> Option<(&str, &str)> {
+    let prefix = INFRA_NAMES
+        .split(' ')
+        .chain(["kube"])
+        .find(|name| real.strip_prefix(name).is_some_and(|rest| rest.starts_with('-')));
+    if let Some(name) = prefix {
+        return Some((&real[..=name.len()], ""));
+    }
+    INFRA_SUFFIXES
+        .iter()
+        .find(|suffix| real.len() > suffix.len() && real.ends_with(*suffix))
+        .map(|suffix| ("", *suffix))
+}
+
 /// What the status line may say after the context; anything else is error
 /// text and is dropped.
 const PLAIN_STATUSES: &[&str] = &["live", "connecting"];
@@ -107,14 +132,16 @@ impl Anonymiser {
     }
 
     fn namespace(&mut self, real: &str) -> String {
-        if KEPT_NAMESPACES.contains(&real) {
+        if KEPT_NAMESPACES.contains(&real) || INFRA_NAMES.split(' ').any(|name| name == real) {
             return real.to_owned();
         }
         let hash = self.hash("namespace", real);
         let prefix = BRANCH_PREFIXES.iter().find(|prefix| real.starts_with(*prefix)).copied();
-        self.namespaces.pick(real, |i| match prefix {
-            Some(prefix) => format!("{prefix}{}-{}", word(hash, i), 100 + (hash / 7 + i as u64 * 37) % 900),
-            None => word(hash, i).to_owned(),
+        let infra = infrastructure(real);
+        self.namespaces.pick(real, |i| match (prefix, infra) {
+            (Some(prefix), _) => format!("{prefix}{}-{}", word(hash, i), 100 + (hash / 7 + i as u64 * 37) % 900),
+            (None, Some((before, after))) => format!("{before}{}{after}", word(hash, i)),
+            (None, None) => word(hash, i).to_owned(),
         })
     }
 
@@ -355,8 +382,43 @@ mod tests {
         assert_eq!(b.details.name, format!("{}-1", b.workload));
         assert_eq!(anonymiser.namespace("acme-payments"), a.namespace);
         assert_eq!(anonymiser.namespace("kube-system"), "kube-system");
+        assert_eq!(anonymiser.namespace("cert-manager"), "cert-manager");
         // Another kind of workload with the same name is another building.
         assert_ne!(anonymiser.workload("ledger-writer", WorkloadKind::Job), a.workload);
+    }
+
+    #[test]
+    fn infrastructure_keeps_what_marks_it() {
+        let mut anonymiser = Anonymiser::new(None);
+        let gitlab = anonymiser.namespace("gitlab-acme-runners");
+        assert!(gitlab.starts_with("gitlab-") && !gitlab.contains("acme"), "{gitlab}");
+        let system = anonymiser.namespace("acme-system");
+        assert!(system.ends_with("-system") && !system.contains("acme"), "{system}");
+        let operator = anonymiser.namespace("acme-operator");
+        assert!(operator.ends_with("-operator") && !operator.contains("acme"), "{operator}");
+        let kube = anonymiser.namespace("kube-acme");
+        assert!(kube.starts_with("kube-") && !kube.contains("acme"), "{kube}");
+        // "argocd-…" is not "argo-…", and a plain name is a plain word.
+        assert!(anonymiser.namespace("argocd-acme").starts_with("argocd-"));
+        assert!(!anonymiser.namespace("acme-payments").contains('-'));
+    }
+
+    #[test]
+    fn pseudonyms_never_read_as_infrastructure() {
+        // A plain namespace's pseudonym is a word; none may be a kept name.
+        for name in INFRA_NAMES.split(' ') {
+            assert!(!WORDS.contains(&name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_page_and_the_prototype_know_the_same_infrastructure() {
+        for (file, text) in [
+            ("art/city.template.html", include_str!("../art/city.template.html")),
+            ("art/web_prototype.py", include_str!("../art/web_prototype.py")),
+        ] {
+            assert!(text.contains(&format!("\"{INFRA_NAMES}\"")), "{file} has another list of infrastructure names");
+        }
     }
 
     #[test]

@@ -252,7 +252,7 @@ and the cluster overlay keep working.
 | Blocks | Buildings along the streets, courtyards inside; namespaces over ~40 workloads become several blocks with lanes (#34) | Real blocks instead of lot grids; about 1.2× today's land |
 | Edge | No ring road; edge blocks give back the rows they do not need (#35) | A town should thin out, not end in a rectangle |
 | River | A river cut through town with bridges (#37) | Owner's pick among the ingredients |
-| Zones | Centre, industry, suburbs by namespace (#36); with #47 this decides where quarters sit | Open: by name, by content, or both |
+| Zones | Centre, industry, suburbs by namespace (#36); with #47 this decides where quarters sit | Decided and built, see below |
 
 Built (#33, 2026-10-28): `planCity()` in the page's layout section, run
 outside the page by `art/layout_sketch.mjs` (a map of tiles and the numbers
@@ -306,6 +306,27 @@ Big recording, land per building (the town's own tiles, master: ring road
 included): Kenney 3.70 → 3.22 (rectangle 3.42), Metropolis 4.68 → 3.94;
 live 3.92 → 3.45 and 5.26 → 4.35. About 4 % of the town's rectangle goes
 back to grass on random clusters; 21 dead ends on the big recording.
+
+Built (#36, 2026-10-29): `zoneOf()` and the zone strips at the top of
+`planCity()`.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Industry | `kube-*`, `*-system`, `*-operator(s)`, a well-known name or its start (`cert-manager`, `gitlab-…`; list in `INFRA`), or a namespace that runs a DaemonSet | Owner's choice (1A). Content as "mostly DaemonSets, StatefulSets and Jobs" fails: every branch namespace in the big recording is 73–94 % StatefulSets and Jobs, and infrastructure is mostly operators (Deployments); only DaemonSets mark infrastructure |
+| Suburbs | `feature-`, `bugfix-` | As the page's branch namespaces before |
+| Centre | Everything else, however small | Owner's choice (3A). The big recording has none: all 14 non-branch namespaces are infrastructure, so its middle strip is all industry |
+| `--anonymise` | Well-known names kept; other infrastructure keeps its marking part (`gitlab-<word>`, `<word>-system`); same in `art/web_prototype.py`, a test keeps the three lists equal | Owner's choice (2A): public product names, and the city looks the same with and without it. No pseudonym word is an infrastructure name |
+| Layout | Suburbs in two halves either side of a middle strip, industry at the strip's start, centre after it; the two roads between the strips both cross the city and, with the one between industry and centre, are the main roads; each zone is cut by weight as before | The issue's plan. A middle strip of one block has no road to join the two, so then the suburbs keep to one side; one zone is laid out exactly as before |
+| Ground | Centre plaza with lawn courtyards, industry a concrete yard (courtyard too), suburbs lawn; Kenney tints the lot tile (grey, pale green) | Zones change where a district sits and its ground, never its buildings |
+| Live | A namespace's zone is worked out when the city re-packs | A DaemonSet coming along does not move a district on its own |
+
+Big recording, land per building: Kenney 3.22 → 3.09, Metropolis 3.94 →
+3.76; live 3.45 → 3.47 and 4.35 → 4.35. Crossroads 1 → 3 (live 1 → 2), all
+in the middle strip, where the small namespaces of one zone now sit
+together (the little grid #33 had broken up). 600 random clusters with
+random zones: always one road network, 1 % more land, crossroads 95 → 163,
+half of them on the roads between zones; moving cuts further to dodge road
+ends did not help (160).
 
 Found while sketching: today's layout already has mostly T-junctions (54
 against 3 crossroads), so the straight lines, not crossroads, are what
