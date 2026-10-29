@@ -11,7 +11,7 @@
 //
 // Map: # the town (its river too), 0–9 and a–c the ground level (the town
 // stands on 1), ~ sea, = lake, . beach, F forest, f woods, : field, h farm,
-// ^ rock, * snow; meadow shows its level.
+// ^ rock, * snow, % river (the town's river and side rivers); meadow shows its level.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -32,8 +32,8 @@ const block = start => page.slice(page.indexOf(start), page.indexOf("\n}", page.
 const art = [page.slice(page.indexOf("function shade("), page.indexOf("const cssColor")), block("const ART = {"), page.match(/^const P = .*$/m)[0],
   page.match(/^function shadedBox\(.*$/m)[0],
   ...["class GroundPen {", "function box(", "function tree(", "function pine(", "function farm(", "function coverDetails("].map(block)].join("\n");
-const { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, tree, pine } =
-  new Function(`${code}\n${art}\nreturn { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, tree, pine };`)();
+const { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, tree, pine } =
+  new Function(`${code}\n${art}\nreturn { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, tree, pine };`)();
 
 // Workloads per namespace, as the page counts them: one building per workload.
 const workloads = new Map(), daemons = new Set();
@@ -88,8 +88,8 @@ const { cover } = t, sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 let dryTown = true, smallest = Infinity, flatWater = true, lakes = 0, hollows = 0;
 const part = new Int32Array(W * H).fill(-1);
 for (let k0 = 0; k0 < W * H; k0++) {
-  if (toTown[k0] <= FLAT && (isWater(cover[k0]) || cover[k0] === COVER.beach)) dryTown = false;
-  if (!isWater(cover[k0]) || part[k0] >= 0) continue;
+  if (toTown[k0] <= FLAT && (isWater(cover[k0]) || cover[k0] === COVER.beach) && !t.main[k0]) dryTown = false;
+  if (!isWater(cover[k0]) || cover[k0] === COVER.river || part[k0] >= 0) continue;
   const tiles = [k0];
   part[k0] = k0;
   for (let n = 0; n < tiles.length; n++) {
@@ -117,6 +117,38 @@ for (let l = 0; l < LEVELS; l++) for (let n = 0; n < buckets[l].length; n++) {
 }
 for (let k = 0; k < W * H; k++) if (fill[k] > level[k]) hollows++;
 const share = c => (100 * cover.filter(v => v === c).length / (W * H)).toFixed(1);
+
+// Rivers (#42). The town river: from where it meets the sea or leaves the
+// map, every tile of it is reached going upstream without going down, so it
+// never runs uphill; it reaches the hills. Side rivers: each tile drains to
+// one no higher, and into a river, a lake, the sea or off the map. The town
+// drains: level-1 ground (or lower) joins it to the sea or the map's edge.
+const { main, down } = t, N = W * H, edgeTile = k => { const i = k % W, j = (k / W) | 0; return i === 0 || j === 0 || i === W - 1 || j === H - 1; };
+const nearOf = k => sides.map(([di, dj]) => [k % W + di, ((k / W) | 0) + dj]).filter(([i, j]) => i >= 0 && j >= 0 && i < W && j < H).map(([i, j]) => j * W + i);
+const mouths = [];
+for (let k = 0; k < N; k++) if (main[k] && (edgeTile(k) || nearOf(k).some(n => cover[n] === COVER.sea))) mouths.push(k);
+const upstream = new Uint8Array(N);
+for (const k of mouths) upstream[k] = 1;
+for (let n = 0; n < mouths.length; n++) for (const nk of nearOf(mouths[n])) if (main[nk] && !upstream[nk] && level[nk] >= level[mouths[n]]) { upstream[nk] = 1; mouths.push(nk); }
+let mainTiles = 0, mainUphill = 0, mainTop = 0, sideTiles = 0, sideUphill = 0, sideLost = 0, sources = 0, forks = 0;
+for (let k = 0; k < N; k++) {
+  if (main[k]) { mainTiles++; if (!upstream[k]) mainUphill++; mainTop = Math.max(mainTop, level[k]); continue; }
+  if (cover[k] !== COVER.river) continue;
+  sideTiles++;
+  const d = down[k];
+  if (d >= 0 && level[d] > level[k]) sideUphill++;
+  if (d >= 0 && !main[d] && !isWater(cover[d])) sideLost++;
+  if (!nearOf(k).some(n => cover[n] === COVER.river && !main[n] && down[n] === k)) { sources++; if (nearOf(k).some(n => main[n])) forks++; }
+}
+const drains = [];
+const reached = new Uint8Array(N);
+for (let k = 0; k < N; k++) if (isTown(k)) { reached[k] = 1; drains.push(k); }
+let townDrains = false;
+for (let n = 0; n < drains.length && !townDrains; n++) for (const nk of nearOf(drains[n])) {
+  if (reached[nk] || level[nk] > 1) continue;
+  if (edgeTile(nk) || cover[nk] === COVER.sea) { townDrains = true; break; }
+  reached[nk] = 1; drains.push(nk);
+}
 
 // Drawing (#40): the town's ground is drawn over the terrain and buildings
 // stand in the city layer, which is only right where no higher ground in
@@ -183,7 +215,7 @@ for (let n = 0; n < 6; n++) {
 
 for (let j = 0; j < H; j++) {
   let row = "";
-  for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : farms.has(k) ? "h" : ["", "~", "=", ".", "F", "f", ":", "^", "*"][cover[k]] || level[k].toString(13); }
+  for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : farms.has(k) ? "h" : ["", "~", "=", ".", "F", "f", ":", "^", "*", "%"][cover[k]] || level[k].toString(13); }
   console.log(row);
 }
 console.log();
@@ -194,6 +226,7 @@ console.log(`mountains (level 8 and up): ${high} tiles, ${high ? (100 * highBack
 console.log(`town and ${FLAT} tiles round it flat: ${flatOk ? "yes" : "NO"}; peaks taper: ${slopeOk ? "yes" : "NO"}`);
 console.log(`same terrain twice: ${same ? "yes" : "NO"}; another seed, other terrain: ${differs ? "yes" : "NO"}`);
 console.log(`sea ${share(COVER.sea)} %, ${lakes} lakes (${share(COVER.lake)} %), beach ${share(COVER.beach)} %; smallest sea or lake ${smallest === Infinity ? "–" : smallest} tiles (at least ${LAKE_MIN}: ${smallest >= LAKE_MIN ? "yes" : "NO"}); each one flat: ${flatWater ? "yes" : "NO"}; hollows left: ${hollows ? hollows + " tiles, NO" : "none"}; town and its flat ground dry: ${dryTown ? "yes" : "NO"}`);
+console.log(`town river: ${!plan.river ? "none (no cut)" : `${mainTiles} tiles, ${mouths.length ? "reaches the sea or the map's edge" : "NO mouth"}, uphill tiles ${mainUphill}${mainUphill ? " NO" : ""}, rises at level ${mainTop} (hills ${HILLS}+: ${mainTop >= HILLS ? "yes" : "NO"})`}; side rivers: ${sideTiles} tiles from ${sources} sources (${forks} next to the town river), uphill ${sideUphill}${sideUphill ? " NO" : ""}, ending on dry land ${sideLost}${sideLost ? " NO" : ""}; town drains: ${townDrains ? "yes" : "NO"}`);
 console.log(`hidden by higher ground in front: town tiles ${townHidden}, buildings ${buildingsHidden}, trees next to the town ${treesHidden} of ${treesNear}`);
 console.log(`land outside town ${land} tiles: meadow ${ofLand(COVER.grass)} %, forest ${ofLand(COVER.forest)} %, woods ${ofLand(COVER.woods)} %, fields ${ofLand(COVER.field)} % (${farms.size} farms), rock ${ofLand(COVER.rock)} %, snow ${ofLand(COVER.snow)} % (from level ${snowLow === Infinity ? "–" : snowLow}, rock up to ${rockHigh}); ${trees.length} trees, ${pines} pines`);
 console.log(`cover where it belongs: ${coverOk && (snowLow === Infinity || snowLow > rockHigh) ? "yes" : "NO"}`);
