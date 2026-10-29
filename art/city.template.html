@@ -1024,6 +1024,9 @@ const FLAT = 2;           // tiles of flat ground round the town
 const BLEND = 15;         // the hills reach their full height this many tiles from the town
 const FRONT_LOW = 10;     // the ground this many tiles in front of the town stays at level 1
 const SLOPE = 2;          // a tile stands at most this many levels above its lowest neighbour
+const LEVEL_H = 16;       // pixels from one ground level to the next: about the Kenney tiles' slab
+const BASE = 22;          // the earth base's depth below level 0, in pixels
+const TREE = [24, 28];    // a tree's width and height in pixels, as hiddenBy sees it
 // The shape of the land; #45's world styles will be presets of these.
 const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, back: 0.85 };
 
@@ -1119,6 +1122,56 @@ function planTerrain(plan, seed) {
     if (k + W < N) level[k] = Math.min(level[k], level[k + W] + SLOPE);
   }
   return { x0, y0, W, H, level, height, toTown };
+}
+
+// How high a ground level stands above the town (level 1), in pixels.
+const zOfLevel = l => (l - 1) * LEVEL_H;
+
+// Walks the terrain back to front, a diagonal (i + j) at a time, and hands
+// every tile to draw(i, j, z, left, right): its height and how far its two
+// front faces drop, towards +j (left on screen) and +i (right). At the map's
+// front edges they drop to the base.
+function eachGroundTile(t, draw) {
+  const { x0, y0, W, H, level } = t, bottom = zOfLevel(0) - BASE;
+  for (let s = 0; s < W + H - 1; s++) for (let i = Math.max(0, s - H + 1); i <= Math.min(W - 1, s); i++) {
+    const j = s - i, k = j * W + i, z = zOfLevel(level[k]);
+    const left = j + 1 < H ? zOfLevel(level[k + W]) : bottom, right = i + 1 < W ? zOfLevel(level[k + 1]) : bottom;
+    draw(i + x0, j + y0, z, Math.max(0, z - left), Math.max(0, z - right));
+  }
+}
+
+// A tile's two front faces, standing at z and dropping `left` and `right`
+// pixels: the first level in the `upper` colours ([left, right]), the rest
+// in the `lower` ones.
+function groundFaces(g, i, j, z, left, right, upper, lower) {
+  const face = (a, b, d0, d1, color) => {
+    if (d1 > d0) poly(g, color, [[a[0], a[1] - z + d0], [b[0], b[1] - z + d0], [b[0], b[1] - z + d1], [a[0], a[1] - z + d1]]);
+  };
+  const L = iso(i, j + 1), B = iso(i + 1, j + 1), R = iso(i + 1, j);
+  face(L, B, 0, Math.min(left, LEVEL_H), upper[0]); face(L, B, LEVEL_H, left, lower[0]);
+  face(B, R, 0, Math.min(right, LEVEL_H), upper[1]); face(B, R, LEVEL_H, right, lower[1]);
+}
+
+// Whether higher ground in front hides part of what stands on tile (i, j):
+// the tile's own top when h is 0, else something h pixels tall and w wide on
+// its middle. A tile hides everything below its top's upper edges, its faces
+// and what stands on it included.
+function hiddenBy(t, i, j, h = 0, w = TW) {
+  const at = (a, b) => (b - t.y0) * t.W + (a - t.x0);
+  const inside = (a, b) => a >= t.x0 && b >= t.y0 && a < t.x0 + t.W && b < t.y0 + t.H;
+  const za = zOfLevel(t.level[at(i, j)]), xa = (i - j) * TW / 2, ya = (i + j + 1) * TH / 2 - za;
+  const low = x => (h ? ya : ya + TH / 2 - Math.abs(x - xa) * TH / TW);
+  const reach = 2 + Math.ceil((zOfLevel(LEVELS - 1) - za + h) / (TH / 2));
+  for (let s = 1; s <= reach; s++) for (const c of s % 2 ? [-1, 1] : [0]) {
+    const bi = i + (s + c) / 2, bj = j + (s - c) / 2;
+    if (!inside(bi, bj)) continue;
+    const xb = xa + c * TW / 2, yb = ya + s * TH / 2 - (zOfLevel(t.level[at(bi, bj)]) - za);
+    const edge = x => yb - TH / 2 + Math.abs(x - xb) * TH / TW;
+    const lo = Math.max(xa - w / 2, xb - TW / 2), hi = Math.min(xa + w / 2, xb + TW / 2);
+    if (hi - lo < 0.5) continue;
+    for (const x of [lo, hi, xa, xb]) if (x >= lo && x <= hi && low(x) - edge(x) > 0.5) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------- world model
@@ -1231,8 +1284,82 @@ root.addChild(groundLayer, cityLayer, overlay, markers);
 app.stage.addChild(root);
 
 const plan = { districts: [], parks: [], W: 0, H: 0, roads: [], river: null, gap: 1 };
-// The land round the town (planTerrain); nothing draws it yet (#40).
+// The land round the town (planTerrain).
 let terrain = null;
+
+// How high the ground stands under (i, j), in pixels above the town.
+function groundZ(i, j) {
+  const t = terrain, a = Math.floor(i) - (t?.x0 ?? 0), b = Math.floor(j) - (t?.y0 ?? 0);
+  return t && a >= 0 && b >= 0 && a < t.W && b < t.H ? zOfLevel(t.level[b * t.W + a]) : 0;
+}
+
+// The ground is built once into one mesh, so the whole map costs one draw
+// call and no work per frame: sprites from one texture (the Kenney atlas, or
+// plain white) as textured quads, and flat-coloured polygons from the calls
+// poly(), tree() and the water helpers make on a PIXI.Graphics; all in the
+// order they are added. (dx, dy) moves what is added next.
+const GROUND_VERTEX = `
+attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; attribute vec4 aColor;
+uniform mat3 projectionMatrix; uniform mat3 translationMatrix;
+varying vec2 vTextureCoord; varying vec4 vColor;
+void main() {
+  gl_Position = vec4((projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0)).xy, 0.0, 1.0);
+  vTextureCoord = aTextureCoord; vColor = aColor;
+}`;
+const GROUND_FRAGMENT = `
+precision mediump float;
+varying vec2 vTextureCoord; varying vec4 vColor; uniform sampler2D uSampler;
+void main() { gl_FragColor = texture2D(uSampler, vTextureCoord) * vColor; }`;
+const groundShaders = new Map();
+class GroundPen {
+  // `white`: a texture of plain white in the same base texture, for the polygons.
+  constructor(white) {
+    const base = white.baseTexture, f = white.frame;
+    this.base = base; this.white = [(f.x + f.width / 2) / base.width, (f.y + f.height / 2) / base.height];
+    this.xy = []; this.uv = []; this.rgba = []; this.index = []; this.color = 0; this.alpha = 1; this.dx = 0; this.dy = 0;
+  }
+  vertex(x, y, u, v, color, alpha) {
+    this.xy.push(x + this.dx, y + this.dy); this.uv.push(u, v);
+    // Premultiplied, as the textures are.
+    this.rgba.push(((color >> 16) & 255) * alpha, ((color >> 8) & 255) * alpha, (color & 255) * alpha, 255 * alpha);
+  }
+  beginFill(color, alpha = 1) { this.color = color; this.alpha = alpha; return this; }
+  endFill() { return this; }
+  // A convex polygon, as a fan.
+  drawPolygon(flat) {
+    const v0 = this.xy.length / 2, n = flat.length / 2, [u, v] = this.white;
+    for (let k = 0; k < n; k++) this.vertex(flat[2 * k], flat[2 * k + 1], u, v, this.color, this.alpha);
+    for (let k = 1; k < n - 1; k++) this.index.push(v0, v0 + k, v0 + k + 1);
+    return this;
+  }
+  drawRect(x, y, w, h) { return this.drawPolygon([x, y, x + w, y, x + w, y + h, x, y + h]); }
+  drawEllipse(x, y, rx, ry) {
+    const pts = [];
+    for (let k = 0; k < 14; k++) pts.push(x + rx * Math.cos(k * Math.PI / 7), y + ry * Math.sin(k * Math.PI / 7));
+    return this.drawPolygon(pts);
+  }
+  drawCircle(x, y, r) { return this.drawEllipse(x, y, r, r); }
+  // A texture of the same base texture, anchored at (ax, ay) on (x, y).
+  sprite(tex, x, y, ax, ay, scale, tint = 0xffffff) {
+    const f = tex.frame, w = f.width * scale, h = f.height * scale, left = x - ax * w, top = y - ay * h;
+    const u0 = f.x / this.base.width, v0 = f.y / this.base.height, u1 = (f.x + f.width) / this.base.width, v1 = (f.y + f.height) / this.base.height;
+    const n = this.xy.length / 2;
+    this.vertex(left, top, u0, v0, tint, 1); this.vertex(left + w, top, u1, v0, tint, 1);
+    this.vertex(left + w, top + h, u1, v1, tint, 1); this.vertex(left, top + h, u0, v1, tint, 1);
+    this.index.push(n, n + 1, n + 2, n, n + 2, n + 3);
+  }
+  mesh() {
+    const geometry = new PIXI.Geometry()
+      .addAttribute("aVertexPosition", new Float32Array(this.xy), 2)
+      .addAttribute("aTextureCoord", new Float32Array(this.uv), 2)
+      .addAttribute("aColor", new PIXI.Buffer(new Uint8Array(this.rgba), true), 4, true, PIXI.TYPES.UNSIGNED_BYTE)
+      .addIndex(new Uint32Array(this.index));
+    if (!groundShaders.has(this.base)) groundShaders.set(this.base, PIXI.Shader.from(GROUND_VERTEX, GROUND_FRAGMENT, { uSampler: new PIXI.Texture(this.base) }));
+    const mesh = new PIXI.Mesh(geometry, groundShaders.get(this.base));
+    mesh.eventMode = "none";
+    return mesh;
+  }
+}
 
 // Dashes down the middle of the main roads, stopping short of junctions.
 function laneMarkings(g) {
@@ -1322,26 +1449,48 @@ function drawRiver(g) {
   }
 }
 
-// Static things a theme puts in the city layer (trees, lamps); removed when the look changes.
+// Static things a theme puts in the city layer (trees, lamps), on the
+// ground's height; removed when the look changes.
 const scenery = [];
 function addScenery(obj, i, j) {
-  const [x, y] = iso(i, j); obj.position.set(x, y); obj.zIndex = (i + j) * 10 - 1;
+  const [x, y] = iso(i, j); obj.position.set(x, y - groundZ(i, j)); obj.zIndex = (i + j) * 10 - 1;
   cityLayer.addChild(obj); scenery.push(obj);
 }
 
+// The trees on the grass round the town, by tile ("i/j"), that higher ground
+// in front partly hides: those are drawn into the ground, in its order; the
+// rest stand in the city layer like every other tree.
+function hiddenTrees(spots) {
+  const hidden = new Map();
+  for (const spot of spots) {
+    const [i, j] = spot;
+    if (terrain && hiddenBy(terrain, Math.floor(i), Math.floor(j), TREE[1], TREE[0])) hidden.set(`${Math.floor(i)}/${Math.floor(j)}`, spot);
+  }
+  return hidden;
+}
+
+// Grass on the tops, a little lighter the higher they stand.
+const landColour = (color, z) => shade(color, 1 + 0.012 * z / LEVEL_H);
+
 function drawGround() {
+  // The land, with the trees on the grass it hides, then the town on top:
+  // it stands on flat ground that nothing in front of it rises above.
+  const grass = grassTrees().map(([i, j]) => [i + 0.5, j + 0.5, 1.1, hash(`${i}/${j}`)]);
+  const hidden = hiddenTrees(grass);
+  if (terrain) {
+    const pen = new GroundPen(PIXI.Texture.WHITE);
+    const upper = [0x6e9a58, 0x5b8248], lower = [shade(ART.earth, 0.9), shade(ART.earth, 0.7)];
+    eachGroundTile(terrain, (i, j, z, left, right) => {
+      groundFaces(pen, i, j, z, left, right, upper, lower);
+      poly(pen, landColour(ART.grass, z), [iso(i, j), iso(i + 1, j), iso(i + 1, j + 1), iso(i, j + 1)].map(([x, y]) => [x, y - z]));
+      const t = hidden.get(`${i}/${j}`);
+      if (t) { pen.dy = -z; tree(pen, ...t); pen.dy = 0; }
+    });
+    groundLayer.addChild(pen.mesh());
+  }
   const g = new PIXI.Graphics();
-  const { W, H } = plan;
   const corner = (i, j) => iso(i, j);
   const rect = (x, y, w, h, z = 0) => [corner(x, y), corner(x + w, y), corner(x + w, y + h), corner(x, y + h)].map(([px, py]) => [px, py - z]);
-  // Diorama base: earth under the town and the grass round it, then the roads.
-  const m = MARGIN, slab = 22;
-  const base = rect(-m, -m, W + 2 * m, H + 2 * m);
-  poly(g, shade(ART.earth, 0.9), [base[3], base[2], [base[2][0], base[2][1] + slab], [base[3][0], base[3][1] + slab]]);
-  poly(g, shade(ART.earth, 0.7), [base[2], base[1], [base[1][0], base[1][1] + slab], [base[2][0], base[2][1] + slab]]);
-  poly(g, 0x6e9a58, [base[3], base[2], [base[2][0], base[2][1] + 4], [base[3][0], base[3][1] + 4]]);
-  poly(g, 0x5b8248, [base[2], base[1], [base[1][0], base[1][1] + 4], [base[2][0], base[2][1] + 4]]);
-  poly(g, ART.grass, base);
   const half = plan.gap / 2;
   for (const r of plan.roads) poly(g, ART.asphalt, rect(r.i0 - half, r.j0 - half, r.i1 - r.i0 + plan.gap, r.j1 - r.j0 + plan.gap));
   if (plan.river) drawRiver(g);
@@ -1384,7 +1533,7 @@ function drawGround() {
   }
   for (const p of plan.parks) for (const [i, j] of parkTrees(p)) spots.push([i + 0.5, j + 0.5, 1.1, hash(`${i}/${j}`)]);
   for (const [i, j, di, dj] of avenueSpots()) spots.push([i + 0.5 + di * 0.3, j + 0.5 + dj * 0.3, 0.75, hash(`${i}/${j}/${di}/${dj}`)]);
-  for (const [i, j] of grassTrees()) spots.push([i + 0.5, j + 0.5, 1.1, hash(`${i}/${j}`)]);
+  for (const t of grass) if (!hidden.has(`${t[0] - 0.5}/${t[1] - 0.5}`)) spots.push(t);
   spots.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
   for (const [i, j, s, seed] of spots) {
     const tg = new PIXI.Graphics(); tree(tg, 0, 0, s, seed);
@@ -1453,6 +1602,9 @@ const KIT = {
   road: "c080", sidewalk: "c074", lot: "c066", parks: ["c059", "c069", "c067", "c076"],
   // The plain lot tinted green: the pack has no plain grass.
   grass: "c066", grassTint: 0x9fd77a,
+  // The terrain's faces below a tile's own slab, in the colours of the
+  // pack's earth sides ([left, right]).
+  earth: [0xa77d53, 0x81603e],
   // Lots tinted by zone: concrete in the industrial quarter (its courtyard
   // too), pale green in the suburbs.
   zoneTints: { centre: 0xffffff, industry: 0xb4b8bc, suburb: 0xc8e6a8 },
@@ -1477,6 +1629,11 @@ async function loadKenney() {
     const im = new Image(); im.onload = () => ok([n, im]); im.onerror = () => fail(new Error(`sprite ${n}`)); im.src = KENNEY_SPRITES[n];
   })));
   for (const n of [5, 10]) images.push([KIT.decks[n], images.find(([m]) => m === KIT.roads[n])[1]]);
+  // Plain white for the ground's code-drawn parts (GroundPen), big enough to
+  // stay white in the smaller mipmaps.
+  const white = document.createElement("canvas"); white.width = white.height = 64;
+  const wctx = white.getContext("2d"); wctx.fillStyle = "#fff"; wctx.fillRect(0, 0, 64, 64);
+  images.push(["white", white]);
   const SIZE = 2048, frames = [];
   let x = 1, y = 1, rowH = 0;
   for (const [n, im] of images) {
@@ -1515,7 +1672,9 @@ const pick = (list, h, salt) => list[(h >>> salt) % list.length];
 function ksprite(name, ax, ay, scale = KS) {
   const s = new PIXI.Sprite(TEX[name]); s.anchor.set(ax, ay); s.scale.set(scale); return s;
 }
-function tileSprite(name) { const h = TEX[name].height; return ksprite(name, 0.5, (h > 101 ? h - 68 : 33) / h); }
+// Where a tile's top centre is, as an anchor: tall tiles carry something on top.
+function tileAnchor(name) { const h = TEX[name].height; return (h > 101 ? h - 68 : 33) / h; }
+function tileSprite(name) { return ksprite(name, 0.5, tileAnchor(name)); }
 
 // Mirrors buildings by name. It doubles the looks but swaps Kenney's lit and
 // shaded walls; set to false to keep every building as drawn in the pack.
@@ -1699,7 +1858,6 @@ const KENNEY = {
     return { h: [58, 50, 68][k.chimney % 3], color: [0xa8553f, 0x8f8a84, 0x7a4636][(k.chimney >>> 2) % 3] };
   },
   ground() {
-    const { W, H } = plan, m = MARGIN;
     // One-tile roads with their own kerbs.
     const road = roadTiles(plan);
     const isRoad = (i, j) => road.has(`${i}/${j}`);
@@ -1718,47 +1876,51 @@ const KENNEY = {
       });
     }
     for (const p of plan.parks) for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) green(i, j);
-    const tiles = [];
-    for (let j = -m; j < H + m; j++) for (let i = -m; i < W + m; i++) {
-      let name = land.get(`${i}/${j}`);
-      if (!name && inRiver(plan.river, i, j)) name = WATER;
-      else if (!name && isRoad(i, j)) {
-        // A zebra crossing on the straight next to every junction.
-        const n = joins(i, j);
-        const crossing = (n === 5 && (junction(i, j - 1) || junction(i, j + 1))) || (n === 10 && (junction(i - 1, j) || junction(i + 1, j)));
-        name = (crossing ? KIT.crossings[n] : KIT.roads[n]) || KIT.road;
-      }
-      tiles.push([i, j, name]);
-    }
-    tiles.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]) || a[0] - b[0]);
+    const nameAt = (i, j) => {
+      const name = land.get(`${i}/${j}`);
+      if (name) return name;
+      if (inRiver(plan.river, i, j)) return WATER;
+      if (!isRoad(i, j)) return null;
+      // A zebra crossing on the straight next to every junction.
+      const n = joins(i, j);
+      const crossing = (n === 5 && (junction(i, j - 1) || junction(i, j + 1))) || (n === 10 && (junction(i - 1, j) || junction(i + 1, j)));
+      return (crossing ? KIT.crossings[n] : KIT.roads[n]) || KIT.road;
+    };
+    const hidden = hiddenTrees(grassTrees().map(([i, j]) => [i + 0.5, j + 0.5]));
+    // All of the map's ground in one mesh, back to front: a tile's earth
+    // faces where the ground in front is lower (its own slab covers the first
+    // level), the pack's tile, then a tree the ground in front partly hides.
     // The river's water sinks below the banks, with a wall where a bank lies
     // behind it (1: towards -i, 2: towards -j).
-    const water = (i, j) => inRiver(plan.river, i, j);
-    for (const [i, j, name] of tiles) {
-      let t;
+    const pen = new GroundPen(TEX.white), water = (i, j) => inRiver(plan.river, i, j), bridges = [];
+    const tile = (name, x, y, tint) => pen.sprite(TEX[name], x, y, 0.5, tileAnchor(name), KS, tint);
+    const drawn = (draw, x, y) => { pen.dx = x; pen.dy = y; draw(); pen.dx = pen.dy = 0; };
+    if (terrain) eachGroundTile(terrain, (i, j, z, left, right) => {
+      groundFaces(pen, i, j, z, left, right, KIT.earth, KIT.earth);
+      const name = nameAt(i, j), [x, y] = iso(i + 0.5, j + 0.5);
       if (name === WATER) {
-        const walls = (water(i - 1, j) ? 0 : 1) | (water(i, j - 1) ? 0 : 2), ripple = hash(`ripple ${i}/${j}`) % 4;
-        t = new PIXI.Graphics(geometry(`k:water:${walls}:${ripple}`, g => kenneyWater(g, walls, ripple)).geometry);
-      } else t = tileSprite(name || KIT.grass);
-      t.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(t);
-      if (!name) t.tint = KIT.grassTint;
-      else if (tints.has(`${i}/${j}`)) t.tint = tints.get(`${i}/${j}`);
-    }
+        drawn(() => kenneyWater(pen, (water(i - 1, j) ? 0 : 1) | (water(i, j - 1) ? 0 : 2), hash(`ripple ${i}/${j}`) % 4), x, y - z);
+        if (isRoad(i, j)) bridges.push([i, j]);
+      } else tile(name || KIT.grass, x, y - z, name ? tints.get(`${i}/${j}`) ?? 0xffffff : landColour(KIT.grassTint, z));
+      if (hidden.has(`${i}/${j}`)) pen.sprite(TEX[KIT.tree], x, y - z, 0.5, 43 / 45, KS);
+    });
     // Bridges on top, once the water in front of them is down: the deck's
-    // shadow on the water, the deck, railings along both sides.
-    for (const [i, j, name] of tiles) {
-      if (name !== WATER || !isRoad(i, j)) continue;
-      const n = joins(i, j) & 5 ? 5 : 10;
-      const parts = [new PIXI.Graphics(geometry(`k:deckShadow:${n}`, g => deckShadow(g, n)).geometry), tileSprite(KIT.decks[n]),
-        new PIXI.Graphics(geometry(`k:rails:${n}`, g => deckRails(g, n)).geometry)];
-      for (const o of parts) { o.position.set(...iso(i + 0.5, j + 0.5)); groundLayer.addChild(o); }
+    // shadow on the water, the deck, railings along both sides. They stand
+    // in the flat town, where no ground in front rises over them.
+    for (const [i, j] of bridges) {
+      const n = joins(i, j) & 5 ? 5 : 10, [x, y] = iso(i + 0.5, j + 0.5);
+      drawn(() => deckShadow(pen, n), x, y);
+      tile(KIT.decks[n], x, y);
+      drawn(() => deckRails(pen, n), x, y);
     }
+    groundLayer.addChild(pen.mesh());
     // Lamps on the corners of every block, trees along the main roads, in the parks and on the grass.
     for (const d of plan.districts.flatMap(d => d.blocks)) {
       for (const [i, j] of [[d.x, d.y], [d.x + d.w - 1, d.y], [d.x, d.y + d.h - 1], [d.x + d.w - 1, d.y + d.h - 1]])
         addScenery(ksprite(KIT.lamp, 0.5, 0.95), i + 0.5, j + 0.5);
     }
     const trees = new Set([...avenueSpots(), ...plan.parks.flatMap(parkTrees), ...grassTrees()].map(([i, j]) => `${i}/${j}`));
+    for (const k of hidden.keys()) trees.delete(k);
     for (const k of trees) {
       const [i, j] = k.split("/").map(Number);
       addScenery(ksprite(KIT.tree, 0.5, 43 / 45), i + 0.5, j + 0.5);
@@ -1837,7 +1999,7 @@ function replan() {
     b.view.zIndex = (b.lot.i + b.lot.j) * 10;
   }
   districtStats();
-  cam.fit = fitScale(); cam.min = cam.fit * 0.55;
+  cam.fit = fitScale(); cam.min = minScale(cam.fit);
   if (!cam.moved) { fitCamera(false); applyDeepLink(); }
   cam.dirty = true;
 }
@@ -2026,9 +2188,16 @@ function fitScale() {
   const [vw, vh] = viewSize();
   return Math.min((vw - inspectorWidth()) / (bounds.r - bounds.l), vh / (bounds.b - bounds.t)) * 0.94;
 }
+// The farthest zoom: the whole world (the town and its terrain) in view.
+function minScale(fit) {
+  if (!terrain) return fit * 0.55;
+  const { x0, y0, W, H } = terrain, [vw, vh] = viewSize();
+  const w = iso(x0 + W, y0)[0] - iso(x0, y0 + H)[0], h = iso(x0 + W, y0 + H)[1] - iso(x0, y0)[1] + zOfLevel(LEVELS - 1) + BASE;
+  return Math.min(fit * 0.55, Math.min(vw / w, vh / h));
+}
 function fitCamera(animate, dur) {
   const s = fitScale();
-  cam.fit = s; cam.min = s * 0.55;
+  cam.fit = s; cam.min = minScale(s);
   const x = (bounds.l + bounds.r) / 2 + (inspectorWidth() / 2) / s, y = (bounds.t + bounds.b) / 2;
   flyTo(x, y, s, animate, dur);
 }
@@ -2218,7 +2387,7 @@ function setPanel(open, remember = true) {
   else document.documentElement.style.setProperty("--inspector-w", "0px");
   if (remember) try { localStorage.setItem("kube-city-panel", open ? "open" : "closed"); } catch { /* per-viewer convenience only */ }
   // A fitted view stays fitted to the space the panel leaves.
-  cam.fit = fitScale(); cam.min = cam.fit * 0.55;
+  cam.fit = fitScale(); cam.min = minScale(cam.fit);
   if (fitted) fitCamera(false);
   cam.dirty = true;
 }
@@ -2776,7 +2945,7 @@ new MutationObserver(syncTheme).observe(document.documentElement, { attributes: 
 addEventListener("resize", () => {
   // A fitted view stays fitted; any other view keeps its place.
   const fitted = !cam.fly && Math.abs(cam.s - cam.fit) < 1e-6;
-  cam.fit = fitScale(); cam.min = cam.fit * 0.55;
+  cam.fit = fitScale(); cam.min = minScale(cam.fit);
   if (fitted) fitCamera(false);
   cam.dirty = true;
 });

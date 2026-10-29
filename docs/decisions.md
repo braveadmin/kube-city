@@ -380,8 +380,8 @@ collecting downhill; ground cover from height, slope and moisture. About
 
 Built (#39, 2026-10-29): `planTerrain()` in the page's terrain section, run
 outside the page by `art/terrain_sketch.mjs` (the checks below, a map of
-levels and `art/out/terrain.html`, where any seed can be tried). Nothing in
-the page draws it yet: #40 does (owner's choice 1A in the issue).
+levels and `art/out/terrain.html`, where any seed can be tried). #40 draws
+it (below).
 
 | Topic | Decision | Why |
 |---|---|---|
@@ -397,6 +397,25 @@ Big recording, 13 seeds: 9–26 ms per terrain after the first (26–46 ms
 cold) in Node on a quiet machine, up to about 60 ms (90 ms cold) under load; level 1 is about half the map (the town is a fifth), level
 8 and up 1–20 %, 67–100 % of it in the back half; every seed reaches level
 9, ten of them 12 (with #37's river); within 10 tiles in front of the town always level 1.
+
+Built (#40, 2026-10-29): the terrain drawn with its height in both looks.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Height | A level is 16 px (`LEVEL_H`); a tile stands `(level − 1) × 16` px up, so the town (level 1) stays at 0 and nothing in it moves; peaks stand 176 px up, about a ten-storey tower | Owner's choice (2A): the Kenney tiles' own slab is about 17 px, so a one-level step shows the pack's side |
+| Drawing | One static mesh for the whole map's ground, built once per re-pack or seed: the Kenney atlas's tiles as textured quads, faces, water, bridges and hidden trees as flat-coloured polygons (a white patch in the atlas), all in one back-to-front order (`GroundPen`, a small shader with a colour per vertex). Metropolis builds its terrain the same way on plain white, then draws its town on top as one `Graphics`, as before | Owner's choice (1A) instead of the issue's `RenderTexture`: that would be about 7 000 × 3 700 px (60–100 MB), blurry at street zoom and over some GPUs' 4 096 px limit. The mesh is one draw call with no work per frame; in Kenney it replaces about 3 500 ground sprites |
+| Order | Back to front a diagonal (`i + j`) at a time: a tile's two front faces down to the ground in front, its top, then a tree that ground in front hides | Every tile covers what lies behind it |
+| Faces | Metropolis: the first level of a drop in the grass's side greens, the rest earth. Kenney: earth in the pack's earth colours below the tile's own slab. At the map's two front edges the faces run down to a base 22 px below level 0 | The diorama base, now round the whole world |
+| Tops | Grass a little lighter the higher it stands | Reads the relief at a glance; rock and snow come with #43 |
+| Town and buildings | Stay as they were, at z 0, in front of the terrain (Metropolis's town drawn after it; buildings in the city layer) | #39 keeps the town flat and the land rising slowly round it, so higher ground in front never reaches over it; `hiddenBy()` checks every town tile and every block tile with a 200 px building, on every seed |
+| Trees | Stand at their tile's height; a tree that higher ground in front would partly hide (`hiddenBy()`) is drawn into the ground in order, the rest stay in the city layer and sort with the buildings. Still only on the 4 tiles round the town | In the ground they would no longer sort with buildings, but such trees are always 2 or more tiles from the town; forests are #43 |
+| Roads and river | Still end 4 tiles out of town | #42 and #44 carry them on |
+| Camera | Zooms out until the whole world is in view; "fit" still frames the town | #46 |
+
+Big recording, 13 seeds, both road widths: no town tile or building is ever
+hidden; 0–40 trees go into the ground, none next to the town; the ground
+mesh has 58 000–71 000 vertices and takes 30–100 ms to build in Node on a
+busy machine (the terrain took 18–60 ms there, against 9–26 ms quiet).
 
 **Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
 out like SimCity or Cities: Skylines (houses, shops, towers).
