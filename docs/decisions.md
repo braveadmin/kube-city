@@ -3,7 +3,7 @@
 What was decided while building kube-city, and why. Read this before
 changing direction; update it when a decision changes.
 
-Last updated: 2026-10-29.
+Last updated: 2026-11-02.
 
 ## The idea
 
@@ -503,6 +503,38 @@ without a ramp, no ramp on a turn, water only under bridges of 1–2 tiles,
 every #39–#43 check still passes. Towns of one and of four namespaces (6
 seeds each): the same. The roads take 15–115 ms more on a busy machine
 (terrain alone 60–340 ms there); not measured quiet.
+
+Built (#45, 2026-11-02): world styles, `STYLES` beside `TERRAIN` in the
+page's terrain section, and the island harbour in `countryRoads()`. The
+owner left the decisions to Claude (1A 2A 3A 4A in the issue).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Styles | Each style overrides part of `TERRAIN`: Valley (no sea, strong mountains kept to the back), Coast (always a sea over a front side), Island (sea all round), Lake country (gentle hills, small dents that become lakes, almost every hollow a lake), Highlands (higher and more mountains, also round the sides, snow on the top three levels, side rivers from 160 tiles of flow) | The issue: "styles are plain settings objects"; one generator, no special cases per style |
+| New settings | `range` (where ranges start), `dry` (no land under the sea), `island` (tiles from the town where the land starts to sink, over `ISLAND_SHORE` 11), `dents`, `snow` (top levels of snow), `riverFlow` | What the five needed beyond #39–#43's settings |
+| No stray sea | Land only goes under the sea where the style's coast or island says so; elsewhere it stays at level 1 or higher | Before, half the worlds had small patches of sea along the map's edge; "no sea" has to mean none |
+| Island | The land sinks with the distance from the town (with a wobble for bays), so the island follows the town's shape; its mountains sink with it | A round island in a square map left too little land beside a long town |
+| Lake country | Dents of up to 0.25 on a smaller noise (every 6 tiles), on land raised to about level 4 | Deeper or wider dents run together into flat ground that drains away: 2–18 lakes on 13 seeds, against 13–33 now |
+| Seed → style | `hash(seed + " style") % 5`, all equally likely | Decision 2A |
+| Forced style | A **World style** dropdown under the seed ("Picked by the seed" and the five); kept in the seed's `localStorage` entry as `{"seed","style"}`, a plain seed (as kept before) leaves the style to the seed; **New world** keeps a forced style | Decision 3A: "another island" |
+| Legend | Names the style and the seed above the legend | The issue |
+| Harbour | On an island the first road out of town runs to the nearest lead on level 1, not on a ramp, whose next two rows ahead are open sea; the others join it (decision 4A). A timber pier of up to 3 rows straight on (`PIER`), a moored boat beside its second row and a shed with crates beside the road's end, all drawn in code in both looks (`quayPiece`, `harbourShed`) | Planned as "preferably behind or beside the town"; dropped: behind it, the town's towers and the island's mountains would hide it, and in front the ground stays low. 20 of 26 land behind or beside the town anyway |
+| Roads (#44) | Found on the new worlds and fixed: no U-turn (two turns the same way in a row); a road that loops back beside itself at another level is searched again with that spot costing `CLASH` (40); so is a tile beside another road, or beside where a later road out of town starts, at another level; a two-tile road may not be filled up to more than `SLOPE` a tile above water or town within 3 tiles; rivers and the sea (not lakes) drain a hollow a road dams, and a dammed lake rises to its new rim; rock raised to the snow line becomes snow | These broke #39–#44's checks on steep or wet worlds |
+
+Big recording, 13 seeds × 5 styles × both road widths (130 runs): sea 0 % in
+Valley, Lake country and Highlands, 7–21 % on the Coast (never on the back
+halves of the two back edges), 38–44 % round an island (every map-edge tile);
+lakes: Valley 1–13, Lake country 13–33 (3–7 % of the map), Highlands up to
+10; snow: Highlands 11–29 % of the land outside town, the others 0–13 %;
+every island has its harbour with 2–3 rows of pier and every road ends at it
+or joins one that does. Every #39–#44 check passes but one: Lake country,
+Metropolis, seed 3 leaves 4 tiles of road a level below the land round it
+(a dammed hollow #44's fill does not raise roads in). Towns of one and of
+four namespaces, 6 seeds each (120 runs): all pass but one dead end
+(Highlands, Metropolis, four namespaces, seed 2) on ground too steep for
+#44's ramps; a town of one namespace has no road out of town, so its island
+has no harbour. The terrain takes 130–450 ms on a busy machine (#44 alone:
+60–340 ms there); not measured quiet.
 
 **Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
 out like SimCity or Cities: Skylines (houses, shops, towers).
