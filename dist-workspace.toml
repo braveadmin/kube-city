@@ -22,3 +22,7 @@ unix-archive = ".tar.gz"
 # HOMEBREW_TAP_TOKEN secret: a token that can write to that repo)
 tap = "braveadmin/homebrew-tap"
 publish-jobs = ["homebrew"]
+
+# GitHub retired the macos-14 runners on 2026-11-02
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
