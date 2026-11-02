@@ -1,22 +1,24 @@
 #!/usr/bin/env node
 // Lays out a recorded cluster with the page's own layout code, grows the
 // terrain round it with the page's own terrain code and prints the checks
-// from issues #39 to #43, a map of levels and `art/out/terrain.html`: the town
+// from issues #39 to #45, a map of levels and `art/out/terrain.html`: the town
 // and its terrain, in which the seed can be changed. Only the sizes and zones of
 // namespaces are used, so neither output holds names.
 //
-//   node art/terrain_sketch.mjs recordings/big-cluster.jsonl [seed] [gap]
+//   node art/terrain_sketch.mjs recordings/big-cluster.jsonl [seed] [gap] [style]
 //
-// gap is the road width: 1 for the Kenney look (the default), 2 for Metropolis.
+// gap is the road width: 1 for the Kenney look (the default), 2 for Metropolis;
+// style a world style (valley, coast, island, lakes, highlands; #45), picked
+// by the seed when left out.
 //
 // Map: # the town (its river too), 0–9 and a–c the ground level (the town
 // stands on 1), ~ sea, = lake, . beach, F forest, f woods, : field, h farm,
 // ^ rock, * snow, % river (the town's river and side rivers), + country road,
-// / its ramps, H its bridges; meadow shows its level.
+// / its ramps, H its bridges, Q a harbour's pier, S its shed; meadow shows its level.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
-const [file, seed = "1", gapArg] = process.argv.slice(2);
+const [file, seed = "1", gapArg, styleArg] = process.argv.slice(2);
 if (!file) { console.error("usage: node art/terrain_sketch.mjs RECORDING.jsonl [seed] [gap]"); process.exit(2); }
 const gap = Number(gapArg || 1);
 
@@ -32,9 +34,9 @@ const code = `${helpers}${polyCode}\n${section("layout")}${section("terrain")}`;
 const block = start => page.slice(page.indexOf(start), page.indexOf("\n}", page.indexOf(start)) + 2);
 const art = [page.slice(page.indexOf("function shade("), page.indexOf("const cssColor")), block("const ART = {"), page.match(/^const P = .*$/m)[0],
   page.match(/^function shadedBox\(.*$/m)[0],
-  ...["class GroundPen {", "function box(", "function tree(", "function pine(", "function farm(", "function coverDetails("].map(block)].join("\n");
-const { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, tree, pine } =
-  new Function(`${code}\n${art}\nreturn { planCity, lotsFor, zoneOf, planTerrain, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, tree, pine };`)();
+  ...["class GroundPen {", "function box(", "function tree(", "function pine(", "function gabled(", "function farm(", "function harbourShed(", "function quayPiece(", "function coverDetails("].map(block)].join("\n");
+const { planCity, lotsFor, zoneOf, planTerrain, worldStyle, STYLES, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, quayPiece, tree, pine } =
+  new Function(`${code}\n${art}\nreturn { planCity, lotsFor, zoneOf, planTerrain, worldStyle, STYLES, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, quayPiece, tree, pine };`)();
 
 // Workloads per namespace, as the page counts them: one building per workload.
 const workloads = new Map(), daemons = new Set();
@@ -49,15 +51,17 @@ for (const line of readFileSync(file, "utf8").split("\n")) {
 const needs = [...workloads].map(([name, set], k) => ({ name: `ns-${String(k).padStart(3, "0")}`, n: lotsFor(set.size, 0), zone: zoneOf(name, daemons.has(name)) }));
 const city = planCity(needs, gap);
 // What the terrain reads of a plan, and nothing more.
+if (styleArg && !STYLES[styleArg]) { console.error(`unknown style ${styleArg}: ${Object.keys(STYLES).join(", ")}`); process.exit(2); }
+const style = worldStyle(seed, styleArg);
 const plan = { districts: city.districts.map(d => ({ blocks: d.blocks })), parks: city.parks, roads: city.roads, river: city.river, W: city.W, H: city.H, gap };
 
 // Timing (the first run warms up), and the same terrain twice.
 const times = [];
 let t;
-for (let n = 0; n < 6; n++) { const t0 = performance.now(); t = planTerrain(plan, seed); times.push(performance.now() - t0); }
-const again = planTerrain(plan, seed);
+for (let n = 0; n < 6; n++) { const t0 = performance.now(); t = planTerrain(plan, seed, style); times.push(performance.now() - t0); }
+const again = planTerrain(plan, seed, style);
 const same = t.level.every((v, k) => v === again.level[k]) && t.height.every((v, k) => v === again.height[k]) && t.cover.every((v, k) => v === again.cover[k]);
-const other = planTerrain(plan, `${seed}x`);
+const other = planTerrain(plan, `${seed}x`, style);
 const differs = t.level.some((v, k) => v !== other.level[k]);
 
 // The map, and the checks.
@@ -89,7 +93,9 @@ const { cover } = t, sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 let dryTown = true, smallest = Infinity, flatWater = true, lakes = 0, hollows = 0;
 const part = new Int32Array(W * H).fill(-1);
 for (let k0 = 0; k0 < W * H; k0++) {
-  if (toTown[k0] <= FLAT && (isWater(cover[k0]) || cover[k0] === COVER.beach) && !t.main[k0]) dryTown = false;
+  // A side river may join the town river by its ends (#42 keeps the flat ring off them).
+  const byMain = () => { for (let dj = -FLAT; dj <= FLAT; dj++) for (let di = -FLAT; di <= FLAT; di++) if (t.main[k0 + dj * W + di]) return true; return false; };
+  if (toTown[k0] <= FLAT && (isWater(cover[k0]) || cover[k0] === COVER.beach) && !t.main[k0] && !(cover[k0] === COVER.river && byMain())) dryTown = false;
   if (!isWater(cover[k0]) || cover[k0] === COVER.river || part[k0] >= 0) continue;
   const tiles = [k0];
   part[k0] = k0;
@@ -228,6 +234,27 @@ const banks = routes.filter(r => r.tiles.length && toMain[r.tiles[0]] <= 2).map(
   const first = r.tiles.slice(0, 20);
   return first.filter(k => toMain[k] <= 3).length >= first.length / 2 ? "follows" : "turns away";
 });
+// The harbour (#45): on an island every road ends at it or joins one that
+// does, and its pier reaches at least two rows out to sea (a town without
+// roads out of town has none).
+const harbourOk = !STYLES[style].island || !routes.length || (t.harbour && t.harbour.rows >= 2 && routes.every(r => r.how === "harbour" || r.how === "joined") && routes.filter(r => r.how === "harbour").length === 1);
+// Where the harbour lies: in front of the town (below it on screen) or behind or beside it.
+const harbourWhere = !t.harbour ? "" : (() => {
+  const i = t.harbour.k % W + t.x0, j = ((t.harbour.k / W) | 0) + t.y0;
+  return i - plan.W / 2 + j - plan.H / 2 > (plan.W + plan.H) / 4 ? "in front of the town" : "behind or beside the town";
+})();
+// World styles (#45): what each promises. No sea in Valley, Lake country
+// and Highlands; on the Coast sea, but none on the halves of the map's two
+// back edges nearer its back corner; an
+// island has sea on every tile of the map's edge.
+let edgeSea = 0, edgeAll = 0, backSea = 0;
+for (let k = 0; k < N; k++) {
+  if (!edgeTile(k)) continue;
+  edgeAll++;
+  if (cover[k] === COVER.sea) { edgeSea++; if ((k % W === 0 && k / W < H / 2) || (k < W && k < W / 2)) backSea++; }
+}
+const seaTiles = cover.filter(c => c === COVER.sea).length;
+const styleOk = { valley: !seaTiles, lakes: !seaTiles, highlands: !seaTiles, coast: seaTiles > 0 && !backSea, island: edgeSea === edgeAll }[style];
 const roadTimes = [];
 
 // Drawing (#40): the town's ground is drawn over the terrain and buildings
@@ -287,7 +314,10 @@ for (let n = 0; n < 6; n++) {
   eachGroundTile(t, (i, j, z, left, right, k) => {
     groundFaces(built, i, j, z, left, right, [0x6e9a58, 0x5b8248], [0x8a6a4a, 0x6b523a]);
     poly(built, 0x8cba6c, [iso(i, j), iso(i + 1, j), iso(i + 1, j + 1), iso(i, j + 1)].map(([x, y]) => [x, y - z]));
-    if (isWater(t.cover[k])) poly(built, 0xb3d6ec, [iso(i + 0.3, j + 0.4), iso(i + 0.7, j + 0.4), iso(i + 0.7, j + 0.45), iso(i + 0.3, j + 0.45)].map(([x, y]) => [x, y - z]));
+    if (isWater(t.cover[k])) {
+      poly(built, 0xb3d6ec, [iso(i + 0.3, j + 0.4), iso(i + 0.7, j + 0.4), iso(i + 0.7, j + 0.45), iso(i + 0.3, j + 0.45)].map(([x, y]) => [x, y - z]));
+      if (t.quay[k]) quayPiece(built, t, i, j, k);
+    }
     else coverDetails(built, t, k, i, j, z, inGround, ([x, y, size, s, conifer]) => (conifer ? pine : tree)(built, x, y, size, s, true));
   });
   groundTimes.push(performance.now() - t0);
@@ -295,10 +325,11 @@ for (let n = 0; n < 6; n++) {
 
 for (let j = 0; j < H; j++) {
   let row = "";
-  for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : isRoadTile(k) ? (isWater(cover[k]) ? "H" : ramp[k] ? "/" : "+") : farms.has(k) ? "h" : ["", "~", "=", ".", "F", "f", ":", "^", "*", "%"][cover[k]] || level[k].toString(13); }
+  for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : isRoadTile(k) ? (isWater(cover[k]) ? "H" : ramp[k] ? "/" : "+") : t.quay[k] ? "Q" : t.harbour?.shed === k ? "S" : farms.has(k) ? "h" : ["", "~", "=", ".", "F", "f", ":", "^", "*", "%"][cover[k]] || level[k].toString(13); }
   console.log(row);
 }
 console.log();
+console.log(`style ${STYLES[style].name}${styleArg ? " (forced)" : " (picked by the seed)"}: ${styleOk ? "as promised" : "NO"}; sea ${(100 * seaTiles / (W * H)).toFixed(1)} %, on the map's edge ${(100 * edgeSea / edgeAll).toFixed(0)} % (back edges ${backSea}); harbour: ${t.harbour ? `${t.harbour.rows} rows of pier, ${t.harbour.shed === undefined ? "no shed" : "a shed"}, ${harbourWhere}` : "none"}${harbourOk ? "" : " NO"}`);
 console.log(`seed ${JSON.stringify(seed)}: town ${city.W} × ${city.H}, map ${W} × ${H} (${W * H} tiles)`);
 console.log(`terrain in ${times[0].toFixed(1)} ms the first time, then ${Math.min(...times.slice(1)).toFixed(1)}–${Math.max(...times.slice(1)).toFixed(1)} ms`);
 console.log(`levels: ${hist.map((n, l) => `${l.toString(13)} ${(100 * n / (W * H)).toFixed(0)}%`).join(", ")}; highest ${hist.findLastIndex(n => n > 0)}`);
@@ -326,6 +357,7 @@ const html = `<!doctype html>
 </style>
 <form onsubmit="return false">
   <label>Seed <input id="seed" type="text" maxlength="40" value=${JSON.stringify(JSON.stringify(seed))}></label>
+  <label>Style <select id="style"><option value="">Picked by the seed</option>${Object.entries(STYLES).map(([k, v]) => `<option value="${k}"${k === styleArg ? " selected" : ""}>${v.name}</option>`).join("")}</select></label>
   <button id="new" type="button">New world</button>
   <label>Relief <input id="relief" type="range" min="0" max="12" value="8"></label>
 </form>
@@ -342,7 +374,7 @@ const ROAD = "#6f6a62", BRIDGE = "#a3794f", TOWN = "#b9b5ae", WATER = "#4f9fd8",
 const shade = (hex, f) => "#" + [1, 3, 5].map(n => Math.round(parseInt(hex.slice(n, n + 2), 16) * f).toString(16).padStart(2, "0")).join("");
 function draw() {
   const seed = document.getElementById("seed").value, lift = Number(document.getElementById("relief").value);
-  const t0 = performance.now(), t = planTerrain(plan, seed), ms = performance.now() - t0;
+  const t0 = performance.now(), style = worldStyle(seed, document.getElementById("style").value), t = planTerrain(plan, seed, style), ms = performance.now() - t0;
   const { W, H, level, toTown } = t, canvas = document.getElementById("map"), top = 12 * lift + T;
   canvas.width = (W + H) * T; canvas.height = (W + H) * T / 2 + top;
   const g = canvas.getContext("2d");
@@ -351,16 +383,17 @@ function draw() {
   for (let s = 0; s < W + H - 1; s++) for (let i = Math.max(0, s - H + 1); i <= Math.min(W - 1, s); i++) {
     const j = s - i, k = j * W + i, wet = isWater(t.cover[k]), z = level[k] * lift - (wet ? 2 : 0);
     const sea = t.depth[k] < 2 ? SHALLOW : t.depth[k] < 6 ? WATER : DEEP;
-    const colour = t.road[k] & 16 ? (wet ? BRIDGE : ROAD) : inRiver(plan.river, i + t.x0, j + t.y0) ? WATER : toTown[k] === 0 ? TOWN : wet ? sea : t.cover[k] === COVER.beach ? BEACH : COVERS[t.cover[k]] || COLOURS[level[k]];
+    const colour = t.quay[k] || t.harbour?.shed === k ? "#9a7650" : t.road[k] & 16 ? (wet ? BRIDGE : ROAD) : inRiver(plan.river, i + t.x0, j + t.y0) ? WATER : toTown[k] === 0 ? TOWN : wet ? sea : t.cover[k] === COVER.beach ? BEACH : COVERS[t.cover[k]] || COLOURS[level[k]];
     poly(shade(colour, 0.78), [at(i, j + 1, z), at(i + 1, j + 1, z), at(i + 1, j + 1, 0), at(i, j + 1, 0)]);
     poly(shade(colour, 0.62), [at(i + 1, j, z), at(i + 1, j + 1, z), at(i + 1, j + 1, 0), at(i + 1, j, 0)]);
     poly(colour, [at(i, j, z), at(i + 1, j, z), at(i + 1, j + 1, z), at(i, j + 1, z)]);
   }
   const hist = new Array(LEVELS).fill(0);
   for (const l of level) hist[l]++;
-  document.getElementById("facts").textContent = \`map \${W} × \${H}, terrain in \${ms.toFixed(1)} ms; levels \${hist.map((n, l) => \`\${l}: \${(100 * n / level.length).toFixed(0)}%\`).join(", ")}\`;
+  document.getElementById("facts").textContent = \`\${STYLES[style].name}, map \${W} × \${H}, terrain in \${ms.toFixed(1)} ms; levels \${hist.map((n, l) => \`\${l}: \${(100 * n / level.length).toFixed(0)}%\`).join(", ")}\`;
 }
 document.getElementById("seed").addEventListener("change", draw);
+document.getElementById("style").addEventListener("change", draw);
 document.getElementById("relief").addEventListener("input", draw);
 document.getElementById("new").addEventListener("click", () => { document.getElementById("seed").value = String(1 + Math.floor(Math.random() * 999999)); draw(); });
 draw();

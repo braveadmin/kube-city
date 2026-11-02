@@ -88,9 +88,12 @@ Every cluster gets a world of its own: the land round the town grows from
 a seed, which the page picks the first time it shows a context and keeps in
 your browser for that context (the demo and replays have one each). The
 **World** section of the details panel shows the seed; type another one, or
-press **New world** for a random one. The seed stays in the browser and
-never reaches kube-city or a recording, so another browser, or clearing the
-site's data, gives a new world.
+press **New world** for a random one. The seed also picks the kind of land:
+a valley, a coast, an island with a harbour, lake country or highlands. The
+style dropdown below the seed picks one for you instead, and **New world**
+then keeps it; the legend names the style and the seed. Both stay in the
+browser and never reach kube-city or a recording, so another browser, or
+clearing the site's data, gives a new world.
 
 `--record city.jsonl` saves everything that happens and `--replay
 city.jsonl` plays it back later (`--replay-speed 10` for ten times faster):

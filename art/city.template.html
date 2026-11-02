@@ -81,10 +81,14 @@ button, input { font: inherit; color: inherit; }
 }
 .pick select:disabled { cursor: progress; opacity: 0.6; }
 .seed { display: flex; gap: 8px; }
-.seed input {
+.seed input, .seed select {
   flex: 1; min-width: 0; padding: 6px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2);
   color: var(--ink); font: 500 0.86rem var(--mono);
 }
+.seed select { font-family: var(--body); cursor: pointer; }
+.seed + .seed { margin-top: 8px; }
+.world-name { margin: 0 0 8px; font-weight: 600; }
+.world-name small { color: var(--muted); font: 500 0.76rem var(--mono); margin-left: 4px; }
 kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; opacity: 0.6; }
 
 /* stage */
@@ -269,13 +273,17 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
         </section>
         <section>
           <h2>Legend</h2>
+          <p class="world-name" id="world-name"></p>
           <div class="legend" id="legend"></div>
         </section>
         <section>
           <h2><label for="seed">World</label></h2>
           <div class="seed">
             <input id="seed" type="text" maxlength="40" autocomplete="off" spellcheck="false" title="The seed the land round the town grows from; type one and press Enter">
-            <button class="btn" id="new-world" title="Roll a new seed">New world</button>
+            <button class="btn" id="new-world" title="Roll a new seed; a style picked below stays">New world</button>
+          </div>
+          <div class="seed">
+            <select id="world-style" aria-label="World style" title="The kind of land round the town: the seed picks one, or pick it here"></select>
           </div>
           <p class="note" id="seed-note"></p>
         </section>
@@ -352,6 +360,8 @@ const ART = {
   // Ground cover: forest and woods floors, crops (wheat, green, ploughed,
   // fallow), rock and snow.
   forest: 0x76a75c, woods: 0x82b263, crops: [0xdcc56a, 0xa8c664, 0xa8835e, 0xc6bd86], rock: 0xa39d93, snow: 0xf1f4f6,
+  // A harbour's pier and crates.
+  timber: 0x9a7650,
 };
 
 const P = (di, dj, z) => [(di - dj) * TW / 2, (di + dj) * TH / 2 - z];
@@ -564,17 +574,52 @@ function pine(g, x, y, s, seed) {
 
 // A small farm on a field: a white house with a red roof and a red barn,
 // lower than anything in town. (x, y) is the tile's middle.
+// A box with a roof ridge along i.
+function gabled(g, cx, cy, a, b, h, ridge, walls, top) {
+  box(g, cx, cy, a, b, h, walls, shade(walls, 0.88), shade(walls, 0.7));
+  poly(g, shade(top, 0.8), [P(cx - a, cy - b, h), P(cx + a, cy - b, h), P(cx + a, cy, h + ridge), P(cx - a, cy, h + ridge)]);
+  poly(g, shade(walls, 0.7), [P(cx + a, cy - b, h), P(cx + a, cy + b, h), P(cx + a, cy, h + ridge)]);
+  poly(g, top, [P(cx - a, cy + b, h), P(cx + a, cy + b, h), P(cx + a, cy, h + ridge), P(cx - a, cy, h + ridge)]);
+}
 function farm(g, x, y, seed) {
-  const flip = seed % 2 ? 1 : -1, roof = 0xb4473a, wall = 0xeeeae0;
-  // The barn behind, then the house; each a box with a roof ridge along i.
-  const shed = (cx, cy, a, b, h, ridge, walls, top) => {
-    box(g, cx, cy, a, b, h, walls, shade(walls, 0.88), shade(walls, 0.7));
-    poly(g, shade(top, 0.8), [P(cx - a, cy - b, h), P(cx + a, cy - b, h), P(cx + a, cy, h + ridge), P(cx - a, cy, h + ridge)]);
-    poly(g, shade(walls, 0.7), [P(cx + a, cy - b, h), P(cx + a, cy + b, h), P(cx + a, cy, h + ridge)]);
-    poly(g, top, [P(cx - a, cy + b, h), P(cx + a, cy + b, h), P(cx + a, cy, h + ridge), P(cx - a, cy, h + ridge)]);
-  };
-  shed(x - 0.12 * flip, y - 0.16, 0.2, 0.13, 9, 6, 0xa8443a, 0x8a8580);
-  shed(x + 0.14 * flip, y + 0.14, 0.15, 0.11, 7, 6, wall, roof);
+  const flip = seed % 2 ? 1 : -1;
+  // The barn behind, then the house.
+  gabled(g, x - 0.12 * flip, y - 0.16, 0.2, 0.13, 9, 6, 0xa8443a, 0x8a8580);
+  gabled(g, x + 0.14 * flip, y + 0.14, 0.15, 0.11, 7, 6, 0xeeeae0, 0xb4473a);
+}
+// A harbour's shed (#45): a long store with a slate roof, crates in front.
+function harbourShed(g, x, y) {
+  gabled(g, x - 0.04, y - 0.06, 0.34, 0.2, 10, 5, 0xd2c8b2, 0x5f6e7c);
+  shadedBox(g, x + 0.2, y + 0.3, 0.06, 0.06, 4, ART.timber);
+  shadedBox(g, x + 0.04, y + 0.32, 0.05, 0.05, 3.5, 0x5b7fa6);
+  shadedBox(g, x + 0.2, y + 0.3, 0.05, 0.05, 3, 0xb4473a, 4);
+}
+// A tile of a harbour's pier (#45): posts in the water, a plank deck level
+// with the road's end and, on its second row, a boat moored beside it.
+function quayPiece(g, t, i, j, k) {
+  const { d, mid } = t.harbour, alongJ = !(d & 1), zw = zOfTile(t, k), zd = zOfLevel(1);
+  const a = alongJ ? i : j, lo = Math.max(a, mid - 0.2), hi = Math.min(a + 1, mid + 0.2);
+  if (hi > lo) {
+    const [cx, cy, ea, eb] = alongJ ? [(lo + hi) / 2, j + 0.5, (hi - lo) / 2, 0.5] : [i + 0.5, (lo + hi) / 2, 0.5, (hi - lo) / 2];
+    for (const f of [-0.3, 0.3]) {
+      const [px, py] = alongJ ? [Math.min(hi - 0.04, mid + 0.16), j + 0.5 + f] : [i + 0.5 + f, Math.min(hi - 0.04, mid + 0.16)];
+      shadedBox(g, px, py, 0.03, 0.03, zd - zw, shade(ART.timber, 0.8), zw);
+    }
+    box(g, cx, cy, ea, eb, 2, ART.timber, shade(ART.timber, 0.8), shade(ART.timber, 0.65), zd - 2);
+    // Planks across the deck.
+    for (const u of [0.12, 0.37, 0.62, 0.87]) {
+      const pts = alongJ ? [P(lo, j + u, zd), P(hi, j + u, zd), P(hi, j + u + 0.03, zd), P(lo, j + u + 0.03, zd)]
+        : [P(i + u, lo, zd), P(i + u + 0.03, lo, zd), P(i + u + 0.03, hi, zd), P(i + u, hi, zd)];
+      poly(g, 0x000000, pts, 0.12);
+    }
+  }
+  if (t.quay[k] === 2) {
+    // The boat: a red and white hull and a cabin, along the pier.
+    const [bx, by, ba, bb] = alongJ ? [mid + 0.35, j + 0.5, 0.11, 0.34] : [i + 0.5, mid + 0.35, 0.34, 0.11];
+    shadedBox(g, bx, by, ba, bb, 2, 0xb4473a, zw);
+    shadedBox(g, bx, by, ba, bb, 2.5, 0xf2efe6, zw + 2);
+    shadedBox(g, alongJ ? bx : bx - 0.08, alongJ ? by - 0.08 : by, ba * 0.65, bb * 0.4, 4, 0xe6e1d4, zw + 4.5);
+  }
 }
 
 // A car along i, or along j when `turned`.
@@ -1062,12 +1107,29 @@ const HILLS = 5;          // the town's river rises where the ground is at least
 const RIVER_FLOW = 250;   // tiles that drain through a tile before a side river runs on it
 const DIG = 2;            // what digging a tile down a level costs a river's path, in tiles of length
 const RING_COST = 6;      // what a tile of the town's flat ring costs a river's path, but at its own ends
-// The shape of the land; #45's world styles will be presets of these. `coast`
-// is the share of worlds whose sea comes in over one of the map's front sides,
-// `sea` how deep it cuts there, `lakes` the share of hollows that hold a lake.
-// `forest` and `woods` are the moisture above which those grow, `fields` how
-// far out fields reach at most, in tiles.
-const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, back: 0.85, coast: 0.5, sea: 1.2, lakes: 0.5, forest: 0.6, woods: 0.53, fields: 12 };
+// The shape of the land, which each world style (STYLES) changes in part.
+// `coast` is the share of worlds whose sea comes in over one of the map's
+// front sides, `sea` how deep it cuts there, `lakes` the share of hollows that
+// hold a lake. `forest` and `woods` are the moisture above which those grow,
+// `fields` how far out fields reach at most, in tiles. `range` is where the
+// range noise starts to raise mountains (lower: more of them), `dry` keeps
+// all land above the sea (on a coast or an island it stays above it away
+// from the coast too), `island` sinks it under the sea between `island`
+// tiles from the town and `island + ISLAND_SHORE`, `dents` digs hollows of up
+// to that height, `snow` is how many of the world's top levels are snow and
+// `riverFlow` how many tiles drain through a tile before a side river runs on it.
+const TERRAIN = { hills: 0.5, rise: 0.1, hillSize: 22, mountains: 2.2, rangeSize: 26, range: 0.35, back: 0.85, coast: 0.5, sea: 1.2, lakes: 0.5, forest: 0.6, woods: 0.53, fields: 12, dry: 0, island: 0, dents: 0, snow: 2, riverFlow: RIVER_FLOW };
+// World styles (#45): the seed picks one, all equally likely, unless the
+// viewer forces one.
+const STYLES = {
+  valley: { name: "Valley", coast: 0, dry: 1, mountains: 2.7, back: 0.92, range: 0.3 },
+  coast: { name: "Coast", coast: 1, mountains: 1.9 },
+  island: { name: "Island", coast: 0, island: 13, mountains: 2.2, back: 0.6 },
+  lakes: { name: "Lake country", coast: 0, dry: 1, hills: 0.2, rise: 0.3, mountains: 0.7, range: 0.45, dents: 0.25, lakes: 0.95, forest: 0.57, woods: 0.5 },
+  highlands: { name: "Highlands", coast: 0, dry: 1, hills: 0.7, mountains: 3.4, back: 0.6, range: 0.22, rangeSize: 22, snow: 3, riverFlow: 160 },
+};
+const ISLAND_SHORE = 11;  // tiles over which an island's land sinks under the sea
+const worldStyle = (seed, forced) => STYLES[forced] ? forced : Object.keys(STYLES)[hash(`${seed} style`) % 5];
 // What covers a tile of terrain; grass is meadow.
 const COVER = { grass: 0, sea: 1, lake: 2, beach: 3, forest: 4, woods: 5, field: 6, rock: 7, snow: 8, river: 9 };
 const PINES = 4;          // trees from this level up are pines (rock starts at 6 or higher)
@@ -1105,8 +1167,9 @@ function noiseFrom(seed) {
 // `crop` a field's crop (0 to CROPS - 1), `farms` the tiles with a farm
 // (index -> the plot's hash), `main` 1 on the town river's water outside the
 // town and in it (its cut), and `down` the tile each tile drains to (-1: off
-// the map or into the sea or the town river, -2: none, the town).
-function planTerrain(plan, seed) {
+// the map or into the sea or the town river, -2: none, the town). `style` is
+// a key of STYLES; the seed picks one when it is left out.
+function planTerrain(plan, seed, style = worldStyle(seed)) {
   const x0 = -WORLD_MARGIN, y0 = -WORLD_MARGIN, W = plan.W + 2 * WORLD_MARGIN, H = plan.H + 2 * WORLD_MARGIN, N = W * H;
   const at = (i, j) => (j - y0) * W + (i - x0);
 
@@ -1136,7 +1199,8 @@ function planTerrain(plan, seed) {
   // where a third says there is a range, fading towards the front of the view;
   // finer noise along a ridge makes peaks and saddles of it.
   const hills = noiseFrom(hash(`${seed} hills`)), ridges = noiseFrom(hash(`${seed} ridges`)), ranges = noiseFrom(hash(`${seed} ranges`));
-  const t = TERRAIN, cx = Math.floor(plan.W / 2), cy = Math.floor(plan.H / 2);
+  const dents = noiseFrom(hash(`${seed} dents`));
+  const t = { ...TERRAIN, ...STYLES[style] }, cx = Math.floor(plan.W / 2), cy = Math.floor(plan.H / 2);
   const smooth = (a, b, x) => { const s = Math.min(1, Math.max(0, (x - a) / (b - a))); return s * s * (3 - 2 * s); };
   // The coast, on some worlds: the land sinks under the sea towards the map's
   // front-right side (+i), its front-left one (+j) or its front corner, low
@@ -1149,13 +1213,20 @@ function planTerrain(plan, seed) {
     const away = smooth(FLAT, BLEND, toTown[k]);
     const forward = (x + y) / ((W + H) / 2);   // -1 at the back corner, +1 at the front one
     const ridge = 1 - Math.abs(2 * ridges(x / t.rangeSize, y / t.rangeSize, 3) - 1);
-    const range = smooth(0.35, 0.6, ranges(x / (2 * t.rangeSize), y / (2 * t.rangeSize), 2));
+    const range = smooth(t.range, t.range + 0.25, ranges(x / (2 * t.rangeSize), y / (2 * t.rangeSize), 2));
     const peaks = 0.45 + 0.55 * ridges(x / 7 + 91.7, y / 7 - 33.1, 2);
-    const mountain = t.mountains * Math.pow(ridge, 4) * peaks * range * (1 - t.back * smooth(-0.3, 0.5, forward));
+    // An island's land sinks under the sea all round, from `island` tiles off
+    // the town (a wobble makes bays and headlands); its mountains with it.
+    const shore = t.island ? smooth(t.island, t.island + ISLAND_SHORE, toTown[k] + 10 * (hills(x / 8 - 61.3, y / 8 + 23.9, 3) - 0.5)) : 0;
+    const mountain = t.mountains * Math.pow(ridge, 4) * peaks * range * (1 - t.back * smooth(-0.3, 0.5, forward)) * (1 - shore);
     // 0 in the town's middle, 1 at the coast's side of the map; a wobble makes bays and headlands.
     const out = coast ? (x * coast[0] + y * coast[1]) / (coast[0] * W / 2 + coast[1] * H / 2) + 0.4 * (hills(x / 9 - 61.3, y / 9 + 23.9, 3) - 0.5) : 0;
-    const sea = coast ? t.sea * smooth(0.5, 0.9, out) : 0;
-    const h = away * (t.hills * (2 * hills(x / t.hillSize, y / t.hillSize, 4) - 1) + t.rise + mountain - sea);
+    const sea = coast ? t.sea * smooth(0.5, 0.9, out) : t.sea * shore;
+    // Lake country: dents in the land, away from the town, that become hollows.
+    const dent = t.dents * smooth(0.5, 0.7, dents(x / 6, y / 6, 2)) * smooth(FLAT + 3, BLEND, toTown[k]);
+    let h = away * (t.hills * (2 * hills(x / t.hillSize, y / t.hillSize, 4) - 1) + t.rise + mountain - sea) - dent;
+    // The sea comes in only where the style says: no puddles of it elsewhere.
+    if (t.dry || sea === 0) h = Math.max(0, h);
     height[k] = h;
     level[k] = h < -0.06 ? 0 : Math.min(LEVELS - 1, 1 + Math.floor((LEVELS - 1) * (1 - Math.exp(-1.4 * Math.max(0, h)))));
   }
@@ -1371,7 +1442,7 @@ function planTerrain(plan, seed) {
   for (let n = order.length - 1; n >= 0; n--) { const k = order[n]; flow[k] += 1; if (downTo[k] >= 0) flow[downTo[k]] += flow[k]; }
   for (let k = 0; k < N; k++) {
     if (main[k] && toTown[k] > 0) cover[k] = COVER.river;
-    else if (!main[k] && !cover[k] && downTo[k] !== -2 && flow[k] >= RIVER_FLOW) cover[k] = COVER.river;
+    else if (!main[k] && !cover[k] && downTo[k] !== -2 && flow[k] >= t.riverFlow) cover[k] = COVER.river;
   }
   // Beaches on the low land along the sea.
   for (let k = 0; k < N; k++) {
@@ -1403,7 +1474,7 @@ function planTerrain(plan, seed) {
   const moisture = noiseFrom(hash(`${seed} moisture`)), plots = noiseFrom(hash(`${seed} fields`));
   let top = 0;
   for (let k = 0; k < N; k++) if (toTown[k] > 0 && !isWater(cover[k])) top = Math.max(top, level[k]);
-  const snow = Math.max(ROCK_MIN + 1, top - 1), rock = Math.max(ROCK_MIN, top - 4);
+  const snow = Math.max(ROCK_MIN + 1, top + 1 - t.snow), rock = Math.max(ROCK_MIN, snow - 3);
   const crop = new Uint8Array(N), farms = new Map();
   for (let k = 0; k < N; k++) {
     if (cover[k] || toTown[k] === 0) continue;
@@ -1426,7 +1497,7 @@ function planTerrain(plan, seed) {
     else if (damp > t.forest) cover[k] = COVER.forest;
     else if (damp > t.woods) cover[k] = COVER.woods;
   }
-  const terrain = { x0, y0, W, H, level, height, toTown, cover, depth, crop, farms, main, down: downTo };
+  const terrain = { x0, y0, W, H, level, height, toTown, cover, depth, crop, farms, main, down: downTo, style, seed, snowFrom: snow };
   return Object.assign(terrain, countryRoads(plan, terrain));
 }
 
@@ -1450,8 +1521,10 @@ const CLIMB = 4;       // what a ramp costs, in tiles of road
 const TURN = 1.5;      // what a turn costs: roads run straight where they can
 const BRIDGE = 6;      // what a tile of bridge costs
 const NEAR_ROAD = 6;   // what a tile next to another road costs (it may only meet one at a junction)
+const CLASH = 40;      // what a tile next to another road at another level costs
 const RING_ROAD = 2;   // what a tile of the town's flat ring costs: roads leave the town
 const SHARE = 0.5;     // what a tile of a road laid before costs, once joined
+const PIER = 3;        // a harbour's pier reaches this many rows out to sea at most
 const DIRS = [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]];   // north, east, south, west: di, dj, bit
 function countryRoads(plan, t) {
   const { x0, y0, W, H, level, cover, toTown, farms } = t, N = W * H, s = plan.gap, half = s / 2;
@@ -1475,11 +1548,57 @@ function countryRoads(plan, t) {
   const toEdge = k => { const i = k % W, j = (k / W) | 0; return Math.min(i, j, W - s - i, H - s - j); };
   const rough = c => c === COVER.forest || c === COVER.beach ? 0.5 : c === COVER.woods ? 0.3 : c === COVER.rock ? 2 : c === COVER.snow ? 3 : 0;
   const river = k => cover[k] === COVER.river && toTown[k] > 0;
+  // Ground raised under or beside a road keeps its cover where it belongs:
+  // no fields above level 2, snow (not rock) from the snow line up.
+  const recover = q => {
+    if (cover[q] === COVER.field && level[q] > 2) { cover[q] = COVER.grass; t.crop[q] = 0; farms.delete(q); }
+    if (cover[q] === COVER.rock && level[q] >= t.snowFrom) cover[q] = COVER.snow;
+  };
+  // On an island the roads end at one harbour on the coast instead (#45):
+  // the first road runs to the nearest lead on level 1 whose next two rows
+  // ahead are open sea, room for a pier; the roads after it join it.
+  const island = STYLES[t.style]?.island > 0, sea = q => cover[q] === COVER.sea;
+  const toShore = new Float32Array(N).fill(Infinity), shoreQ = [];
+  if (island) {
+    for (let k = 0; k < N; k++) if (sea(k)) { toShore[k] = 0; shoreQ.push(k); }
+    for (let n = 0; n < shoreQ.length; n++) {
+      const k = shoreQ[n], i = k % W;
+      for (const nk of [i > 0 ? k - 1 : -1, i < W - 1 ? k + 1 : -1, k - W, k + W]) if (nk >= 0 && nk < N && toShore[nk] === Infinity) { toShore[nk] = toShore[k] + 1; shoreQ.push(nk); }
+    }
+  }
+  let harbour = null;
+  const harbourAt = (k, d, lv) => {
+    if (lv !== 1) return false;
+    const a = next(k, d), b = a >= 0 ? next(a, d) : -1;
+    return b >= 0 && rowOf(a, d).every(sea) && rowOf(b, d).every(sea);
+  };
   // A row's level (its higher tile's), or -1 where it cannot carry a road.
   const rowLevel = row => {
     let lo = Infinity, hi = -Infinity;
     for (const q of row) { if (toTown[q] === 0 || isWater(cover[q])) return -1; lo = Math.min(lo, level[q]); hi = Math.max(hi, level[q]); }
-    return hi - lo > 1 ? -1 : hi;
+    if (hi - lo > 1) return -1;
+    // Filled up to hi, a two-tile road raises the land round it to keep the
+    // taper (SLOPE levels a tile); water and the town cannot be raised, so
+    // none may lie lower than that within a few tiles.
+    if (s > 1 && hi > lo) for (const q of row) {
+      const i = q % W, j = (q / W) | 0;
+      for (let dj = -3; dj <= 3; dj++) for (let di = Math.abs(dj) - 3; di <= 3 - Math.abs(dj); di++) {
+        const ni = i + di, nj = j + dj, nq = nj * W + ni, dist = Math.abs(di) + Math.abs(dj);
+        if (dist && ni >= 0 && nj >= 0 && ni < W && nj < H && (isWater(cover[nq]) || toTown[nq] === 0) && level[nq] < hi - SLOPE * dist) return -1;
+      }
+    }
+    return hi;
+  };
+  // A tile beside a road laid before at another level, or beside where a
+  // road out of town still to come starts: a road would stand a step above
+  // or below the other there, so it costs CLASH.
+  const clash = (q, lv) => {
+    const i = q % W;
+    for (const nq of [i > 0 ? q - 1 : -1, i < W - 1 ? q + 1 : -1, q - W, q + W]) {
+      if (nq < 0 || nq >= N) continue;
+      if (road[nq] & 16 ? roadLevel[nq] !== lv : startLv[nq] >= 0 && startLv[nq] !== lv) return true;
+    }
+    return false;
   };
   // Leads of the roads laid so far: how many leads on to their end (-1: none)
   // and whether a road may join there (flat, on land, away from the town).
@@ -1495,10 +1614,18 @@ function countryRoads(plan, t) {
       : [[r.i0 === -MARGIN + half, 3, r.i0, r.j0, -MARGIN - s, r.j0 - half], [r.i1 === plan.W + MARGIN - half, 1, r.i1, r.j1, plan.W + MARGIN, r.j1 - half]];
     for (const [free, d, ei, ej, li, lj] of ends) if (free && inMap(li, lj) && inMap(li + s - 1, lj + s - 1)) starts.push({ d, end: [ei, ej], lead: at(li, lj) });
   }
+  // Where each road out of town starts, at its level, until it is laid.
+  const startLv = new Int8Array(N).fill(-1);
+  for (const st of starts) {
+    const lv = rowLevel(square(st.lead));
+    if (lv >= 0) for (const q of square(st.lead)) { startLv[q] = lv; markNear(q); }
+  }
+  const avoid = new Uint8Array(N);
 
-  const S = 20 * N, spent = new Float64Array(S), back = new Int32Array(S), done = new Uint8Array(S), via = new Map();
+  const S = 32 * N, spent = new Float64Array(S), back = new Int32Array(S), done = new Uint8Array(S), via = new Map();
   for (const start of starts) {
     const k0 = start.lead, lv0 = rowLevel(square(k0));
+    for (const q of square(k0)) startLv[q] = -1;
     if (lv0 < 0) continue;
     if (square(k0).some(q => road[q] & 16)) {
       // A road laid before already runs past this end: join it there.
@@ -1508,117 +1635,143 @@ function countryRoads(plan, t) {
       routes.push({ how: "joined", tiles: [], from: start.end });
       continue;
     }
-    spent.fill(Infinity); back.fill(-1); done.fill(0); via.clear();
-    const share = routes.length ? SHARE : 1;
-    // A heap of states (lead * 20 + heading * 5 + lock), by cost so far plus
-    // the least it can still cost. A ramp's row may be no part of a turn or a
-    // junction, so after one the road goes on straight for a while; the lock
-    // says how: 0 free, 1 level for a step (it just turned), 2
-    // straight for a step, 3 straight for a step and no climb (just ramped
-    // down, one tile wide), 4 straight for two steps and no climb (just
-    // ramped down, two tiles wide).
-    const heap = [], key = new Float64Array(S);
-    const less = (a, b) => key[heap[a]] < key[heap[b]];
-    const swap = (a, b) => { const x = heap[a]; heap[a] = heap[b]; heap[b] = x; };
-    const push = (x, c) => {
-      spent[x] = c; key[x] = c + share * toEdge((x / 20) | 0); heap.push(x);
-      for (let n = heap.length - 1; n > 0 && less(n, (n - 1) >> 1); n = (n - 1) >> 1) swap(n, (n - 1) >> 1);
-    };
-    const pop = () => {
-      const top = heap[0], last = heap.pop();
-      if (heap.length) {
-        heap[0] = last;
-        for (let n = 0; ;) {
-          const a = 2 * n + 1, b = a + 1;
-          let m = n;
-          if (a < heap.length && less(a, m)) m = a;
-          if (b < heap.length && less(b, m)) m = b;
-          if (m === n) break;
-          swap(m, n); n = m;
-        }
-      }
-      return top;
-    };
-    // A state's level: its lead's, which depends on how it was entered.
-    const lvOf = new Int8Array(S);
-    const relax = (x, c, from, lv, path) => {
-      if (c >= spent[x]) return;
-      back[x] = from; lvOf[x] = lv; push(x, c);
-      if (path) via.set(x, path); else via.delete(x);
-    };
-    const state = (k, d, lock) => k * 20 + d * 5 + lock, first = state(k0, start.d, 0);
-    lvOf[first] = lv0; push(first, 0);
-    let best = -1, bestCost = Infinity, far = first, how = "dead end";
-    while (heap.length) {
-      const x = pop();
-      if (done[x]) continue;
-      done[x] = 1;
-      const c = spent[x];
-      if (key[x] >= bestCost) break;
-      const k = (x / 20) | 0, d = ((x / 5) | 0) % 4, locked = x % 5, lv = lvOf[x];
-      if (rest[k] >= 0 && x !== first) {
-        const total = c + SHARE * rest[k];
-        if (total < bestCost) { bestCost = total; best = x; how = "joined"; }
-        continue;
-      }
-      if (toEdge(k) === 0) { if (c < bestCost) { bestCost = c; best = x; how = "edge"; } continue; }
-      if (toTown[k] > toTown[far >> 3]) far = x;
-      for (let nd = 0; nd < 4; nd++) {
-        if (nd === (d ^ 2) || (locked >= 2 && nd !== d)) continue;
-        const turn = nd !== d, nk = next(k, nd);
-        if (nk < 0) continue;
-        const row = rowOf(nk, nd);
-        // A bridge: one or two rows of river straight ahead, then land at this level.
-        if (row.every(river)) {
-          if (turn) continue;
-          const leads = [nk];
-          let m = next(nk, nd);
-          while (m >= 0 && leads.length < 3 && rowOf(m, nd).every(river)) { leads.push(m); m = next(m, nd); }
-          const span = leads.length;
-          if (span > 2 || m < 0) continue;
-          let ok = true;
-          for (let n = 0; n < s && ok; n++) {
-            if (n) m = next(m, nd);
-            ok = m >= 0 && rowLevel(rowOf(m, nd)) === lv && !rowOf(m, nd).some(q => near[q]);
-            if (ok) leads.push(m);
+    avoid.fill(0);
+    let best, how, chain;
+    for (let attempt = 0; ; attempt++) {
+      spent.fill(Infinity); back.fill(-1); done.fill(0); via.clear();
+      const share = routes.length ? SHARE : 1;
+      // A heap of states ((lead * 4 + heading) * 8 + lock), by cost so far plus
+      // the least it can still cost. A ramp's row may be no part of a turn or a
+      // junction, so after one the road goes on straight for a while; the lock
+      // says how: 0 free, 1 level for a step (it just turned left; 5: right),
+      // 2 straight for a step, 3 straight for a step and no climb (just ramped
+      // down, one tile wide), 4 straight for two steps and no climb (just
+      // ramped down, two tiles wide).
+      const heap = [], key = new Float64Array(S);
+      const less = (a, b) => key[heap[a]] < key[heap[b]];
+      const swap = (a, b) => { const x = heap[a]; heap[a] = heap[b]; heap[b] = x; };
+      const push = (x, c) => {
+        const k = x >> 5;
+        spent[x] = c; key[x] = c + share * (!island ? toEdge(k) : harbour ? 0 : Math.max(0, toShore[k] - s)); heap.push(x);
+        for (let n = heap.length - 1; n > 0 && less(n, (n - 1) >> 1); n = (n - 1) >> 1) swap(n, (n - 1) >> 1);
+      };
+      const pop = () => {
+        const top = heap[0], last = heap.pop();
+        if (heap.length) {
+          heap[0] = last;
+          for (let n = 0; ;) {
+            const a = 2 * n + 1, b = a + 1;
+            let m = n;
+            if (a < heap.length && less(a, m)) m = a;
+            if (b < heap.length && less(b, m)) m = b;
+            if (m === n) break;
+            swap(m, n); n = m;
           }
-          if (!ok) continue;
-          const land = leads.pop(), y = state(land, nd, 0);
-          const cost = c + leads.length + 1 + BRIDGE * span;
-          relax(y, cost, x, lv, leads);
+        }
+        return top;
+      };
+      // A state's level: its lead's, which depends on how it was entered.
+      const lvOf = new Int8Array(S);
+      const relax = (x, c, from, lv, path) => {
+        if (c >= spent[x]) return;
+        back[x] = from; lvOf[x] = lv; push(x, c);
+        if (path) via.set(x, path); else via.delete(x);
+      };
+      const state = (k, d, lock) => (k * 4 + d) * 8 + lock, first = state(k0, start.d, 0);
+      lvOf[first] = lv0; push(first, 0);
+      let bestCost = Infinity, far = first;
+      best = -1; how = "dead end";
+      while (heap.length) {
+        const x = pop();
+        if (done[x]) continue;
+        done[x] = 1;
+        const c = spent[x];
+        if (key[x] >= bestCost) break;
+        const k = x >> 5, d = (x >> 3) & 3, locked = x & 7, lv = lvOf[x];
+        if (rest[k] >= 0 && x !== first) {
+          const total = c + SHARE * rest[k];
+          if (total < bestCost) { bestCost = total; best = x; how = "joined"; }
           continue;
         }
-        const nlv = rowLevel(row);
-        if (nlv < 0) continue;
-        const onRoad = row.some(q => road[q] || townRoad[q]);
-        if (onRoad) {
-          // Only onto a lead of a road laid before, at a flat spot, as a
-          // junction. A two-tile road meets one across it a step further on,
-          // where its square lies on the other road's.
-          const jk = s === 1 ? nk : next(nk, nd);
-          if (jk < 0 || !joinable[jk] || nlv !== lv || x === first) continue;
-          relax(state(jk, nd, 0), c + s, x, nlv, null);
+        if (!island && toEdge(k) === 0) { if (c < bestCost) { bestCost = c; best = x; how = "edge"; } continue; }
+        if (island && !harbour && locked !== 3 && locked !== 4 && harbourAt(k, d, lv)) {   // not on a ramp: the pier goes on level
+          if (c < bestCost) { bestCost = c; best = x; how = "harbour"; }
           continue;
         }
-        const dl = nlv - lv;
-        if (Math.abs(dl) > 1 || (dl && (turn || x === first || locked === 1)) || (dl > 0 && locked >= 3)) continue;
-        let cost = c + 1 + (dl ? CLIMB : 0) + (turn ? TURN : 0);
-        for (const q of row) cost += rough(cover[q]) + (near[q] ? NEAR_ROAD : 0) + (toTown[q] <= FLAT ? RING_ROAD : 0);
-        const y = state(nk, nd, dl < 0 ? (s === 1 ? 3 : 4) : dl > 0 ? (s === 1 ? 0 : 2) : turn ? 1 : locked === 4 ? 2 : 0);
-        relax(y, cost, x, nlv, null);
+        if (toTown[k] > toTown[far >> 5]) far = x;
+        for (let nd = 0; nd < 4; nd++) {
+          if (nd === (d ^ 2) || (locked >= 2 && locked <= 4 && nd !== d)) continue;
+          const turn = nd !== d, right = nd === ((d + 1) & 3), nk = next(k, nd);
+          // No U-turn: not twice the same way round in a row, which would lay
+          // the road on or beside itself.
+          if (turn && (right ? locked === 5 : locked === 1)) continue;
+          if (nk < 0) continue;
+          const row = rowOf(nk, nd);
+          // A bridge: one or two rows of river straight ahead, then land at this level.
+          if (row.every(river)) {
+            if (turn) continue;
+            const leads = [nk];
+            let m = next(nk, nd);
+            while (m >= 0 && leads.length < 3 && rowOf(m, nd).every(river)) { leads.push(m); m = next(m, nd); }
+            const span = leads.length;
+            if (span > 2 || m < 0) continue;
+            let ok = true;
+            for (let n = 0; n < s && ok; n++) {
+              if (n) m = next(m, nd);
+              ok = m >= 0 && rowLevel(rowOf(m, nd)) === lv && !rowOf(m, nd).some(q => near[q]);
+              if (ok) leads.push(m);
+            }
+            if (!ok) continue;
+            const land = leads.pop(), y = state(land, nd, 0);
+            const cost = c + leads.length + 1 + BRIDGE * span;
+            relax(y, cost, x, lv, leads);
+            continue;
+          }
+          const nlv = rowLevel(row);
+          if (nlv < 0) continue;
+          const onRoad = row.some(q => road[q] || townRoad[q]);
+          if (onRoad) {
+            // Only onto a lead of a road laid before, at a flat spot, as a
+            // junction. A two-tile road meets one across it a step further on,
+            // where its square lies on the other road's.
+            const jk = s === 1 ? nk : next(nk, nd);
+            if (jk < 0 || !joinable[jk] || nlv !== lv || x === first) continue;
+            relax(state(jk, nd, 0), c + s, x, nlv, null);
+            continue;
+          }
+          const dl = nlv - lv;
+          if (Math.abs(dl) > 1 || (dl && (turn || x === first || locked === 1 || locked === 5)) || (dl > 0 && (locked === 3 || locked === 4))) continue;
+          let cost = c + 1 + (dl ? CLIMB : 0) + (turn ? TURN : 0);
+          for (const q of row) cost += rough(cover[q]) + (near[q] ? (clash(q, nlv) ? CLASH : NEAR_ROAD) : 0) + (toTown[q] <= FLAT ? RING_ROAD : 0) + (avoid[q] ? CLASH : 0);
+          const y = state(nk, nd, dl < 0 ? (s === 1 ? 3 : 4) : dl > 0 ? (s === 1 ? 0 : 2) : turn ? (right ? 5 : 1) : locked === 4 ? 2 : 0);
+          relax(y, cost, x, nlv, null);
+        }
       }
+      if (best < 0) best = far;
+      // The leads from the town out, with their heading and level.
+      chain = [];
+      for (let x = best; x >= 0; x = back[x]) {
+        chain.push({ k: x >> 5, d: (x >> 3) & 3, lv: lvOf[x] });
+        const extra = via.get(x);
+        if (extra) for (let n = extra.length - 1; n >= 0; n--) chain.push({ k: extra[n], d: (x >> 3) & 3, lv: -1 });
+      }
+      chain.reverse();
+      // Bridge leads stand at the level of the land before them.
+      for (let n = 1; n < chain.length; n++) if (chain[n].lv < 0) chain[n].lv = chain[n - 1].lv;
+      // A road that loops back beside itself at another level is searched
+      // again with that spot made dear (CLASH), at most twice.
+      const at0 = new Map();
+      chain.forEach((l, n) => { for (const q of square(l.k)) if (!at0.has(q)) at0.set(q, n); });
+      let looped = false;
+      for (const [q, n] of at0) {
+        const i = q % W;
+        for (const nq of [i > 0 ? q - 1 : -1, i < W - 1 ? q + 1 : -1, q - W, q + W]) {
+          const m = at0.get(nq);
+          if (m !== undefined && Math.abs(m - n) > s + 2 && chain[m].lv !== chain[n].lv) { avoid[q] = avoid[nq] = 1; looped = true; }
+        }
+      }
+      if (!looped || attempt === 2) break;
     }
-    if (best < 0) best = far;
-    // The leads from the town out, with their heading and level.
-    const chain = [];
-    for (let x = best; x >= 0; x = back[x]) {
-      chain.push({ k: (x / 20) | 0, d: ((x / 5) | 0) % 4, lv: lvOf[x] });
-      const extra = via.get(x);
-      if (extra) for (let n = extra.length - 1; n >= 0; n--) chain.push({ k: extra[n], d: ((x / 5) | 0) % 4, lv: -1 });
-    }
-    chain.reverse();
-    // Bridge leads stand at the level of the land before them.
-    for (let n = 1; n < chain.length; n++) if (chain[n].lv < 0) chain[n].lv = chain[n - 1].lv;
     const joined = how === "joined", own = joined ? chain.slice(0, -1) : chain, tiles = [];
     const mine = new Set();
     own.forEach((l, n) => {
@@ -1655,7 +1808,7 @@ function countryRoads(plan, t) {
       for (const nq of [i > 0 ? q - 1 : -1, i < W - 1 ? q + 1 : -1, q - W, q + W]) {
         if (nq < 0 || nq >= N || road[nq] & 16 || isWater(cover[nq]) || toTown[nq] === 0 || level[nq] >= level[q] - SLOPE) continue;
         level[nq] = level[q] - SLOPE;
-        if (cover[nq] === COVER.field && level[nq] > 2) { cover[nq] = COVER.grass; t.crop[nq] = 0; farms.delete(nq); }
+        recover(nq);
         raise.push(nq);
       }
     }
@@ -1676,15 +1829,45 @@ function countryRoads(plan, t) {
       const [a, b] = [bends[n - 1], bends[n]];
       roads.push({ i0: Math.min(a[0], b[0]), j0: Math.min(a[1], b[1]), i1: Math.max(a[0], b[0]), j1: Math.max(a[1], b[1]) });
     }
+    if (how === "harbour") harbour = { k: best >> 5, d: (best >> 3) & 3 };
     routes.push({ how, tiles, from: start.end });
+  }
+  // The harbour: a pier of up to PIER rows straight on from the road's end,
+  // a strip 0.4 tiles wide down the road's middle (`quay` 1 on its tiles, 2
+  // where a boat lies beside it, on its second row), and a shed on dry land
+  // beside the road's end. `mid` is the pier's middle across the road.
+  const quay = new Uint8Array(N);
+  if (harbour) {
+    const { k, d } = harbour, alongJ = !(d & 1), across = q => alongJ ? q % W + x0 : ((q / W) | 0) + y0;
+    harbour.mid = across(k) + half;
+    let m = k;
+    for (harbour.rows = 0; harbour.rows < PIER; harbour.rows++) {
+      const nm = next(m, d);
+      if (nm < 0 || !rowOf(nm, d).every(sea)) break;
+      m = nm;
+      for (const q of rowOf(m, d)) {
+        const a = across(q);
+        if (a < harbour.mid + 0.2 && a + 1 > harbour.mid - 0.2) quay[q] = 1;
+        if (harbour.rows === 1 && a <= harbour.mid + 0.35 && harbour.mid + 0.35 < a + 1) quay[q] = 2;
+      }
+    }
+    // The shed: on the side away from the boat if it can, in the road's last row.
+    const last = d === 0 || d === 3 ? k : k + (d === 2 ? (s - 1) * W : s - 1), step = alongJ ? 1 : W;
+    for (const q of [last - step, last + s * step]) {
+      const ok = q >= 0 && q < N && (!alongJ || ((q / W) | 0) === ((last / W) | 0));
+      if (!ok || road[q] & 16 || isWater(cover[q]) || toTown[q] <= FLAT || level[q] !== 1) continue;
+      harbour.shed = q;
+      cover[q] = COVER.grass; t.crop[q] = 0; farms.delete(q);
+      break;
+    }
   }
   // Ground filled up under a road may dam a dry hollow: it is filled in to
   // its rim, as planTerrain fills hollows (a flood from the map's edges, the
-  // town and its river; a bucket per level).
+  // town, rivers and the sea; a bucket per level).
   const rim = new Int8Array(N).fill(-1), buckets = Array.from({ length: LEVELS }, () => []);
   for (let k = 0; k < N; k++) {
     const i = k % W, j = (k / W) | 0;
-    if (i === 0 || j === 0 || i === W - 1 || j === H - 1 || toTown[k] === 0 || t.main[k]) { rim[k] = level[k]; buckets[level[k]].push(k); }
+    if (i === 0 || j === 0 || i === W - 1 || j === H - 1 || toTown[k] === 0 || t.main[k] || cover[k] === COVER.river || cover[k] === COVER.sea) { rim[k] = level[k]; buckets[level[k]].push(k); }
   }
   for (let l = 0; l < LEVELS; l++) for (let n = 0; n < buckets[l].length; n++) {
     const k = buckets[l][n], i = k % W;
@@ -1694,11 +1877,12 @@ function countryRoads(plan, t) {
     }
   }
   for (let k = 0; k < N; k++) {
-    if (rim[k] <= level[k] || isWater(cover[k]) || road[k] & 16) continue;
+    // A lake the road dams rises to its new rim with the land round it.
+    if (rim[k] <= level[k] || (isWater(cover[k]) && cover[k] !== COVER.lake) || road[k] & 16) continue;
     level[k] = rim[k];
-    if (cover[k] === COVER.field && level[k] > 2) { cover[k] = COVER.grass; t.crop[k] = 0; farms.delete(k); }
+    recover(k);
   }
-  return { road, ramp, roadLevel, along, roads, routes };
+  return { road, ramp, roadLevel, along, roads, routes, quay, harbour };
 }
 
 // The trees the ground cover grows: two or three a tile in a forest, about
@@ -1708,7 +1892,7 @@ function countryRoads(plan, t) {
 function coverTrees(t, seed) {
   const trees = [];
   for (let k = 0; k < t.W * t.H; k++) {
-    if (t.road[k] & 16) continue;   // none on a country road
+    if (t.road[k] & 16 || t.harbour?.shed === k) continue;   // none on a country road or the harbour's shed
     const c = t.cover[k], i = k % t.W + t.x0, j = ((k / t.W) | 0) + t.y0, h = hash(`${seed} trees ${i}/${j}`);
     const n = c === COVER.forest ? 2 + (h % 2) : c === COVER.woods ? (h % 5 < 3 ? 1 : h % 5 === 3 ? 2 : 0) : c === COVER.grass && t.toTown[k] > 0 && h % 14 === 0 ? 1 : 0;
     const r = rng(h);
@@ -2170,6 +2354,7 @@ function coverDetails(pen, t, k, i, j, z, trees, drawTree) {
     if (h % 3 === 0) shadedBox(pen, i + 0.3 + ((h >>> 4) % 5) / 10, j + 0.3 + ((h >>> 8) % 5) / 10, 0.07 + ((h >>> 12) % 3) / 50, 0.06, 3 + (h >>> 14) % 4, ART.rock);
   }
   if (t.farms.has(k)) farm(pen, i + 0.5, j + 0.5, t.farms.get(k));
+  if (t.harbour?.shed === k) harbourShed(pen, i + 0.5, j + 0.5, !(t.harbour.d & 1));
   for (const tree of trees.get(k) || []) drawTree(tree);
   pen.dy = 0;
 }
@@ -2191,6 +2376,7 @@ function drawGround() {
     // A country road's deck over a river: a pier if it stands high, the
     // deck's edge, the deck, and a parapet on each side that is not more deck.
     const decks = laterBridges((i, j, k) => {
+      if (terrain.quay[k]) return quayPiece(pen, terrain, i, j, k);
       const zd = zOfLevel(terrain.roadLevel[k]), alongI = terrain.along[k] === 2;
       pier(pen, i, j, zd, zOfTile(terrain, k), ART.concrete);
       groundFaces(pen, i, j, zd, 3, 3, deckSides, deckSides);
@@ -2210,7 +2396,7 @@ function drawGround() {
       const cover = terrain.cover[k], high = cover === COVER.rock || cover === COVER.snow, f = falls(terrain, k);
       const sides = isWater(cover) ? waterSides : cover === COVER.beach ? sandSides : cover === COVER.rock ? rockSides : cover === COVER.snow ? snowSides : upper;
       groundFaces(pen, i, j, z, left, right, foamed(sides, f), foamed(high ? rockLower : lower, f));
-      if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], water); if (terrain.road[k] & 16) decks.add(i, j, k); return; }
+      if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], water); if (terrain.road[k] & 16 || terrain.quay[k]) decks.add(i, j, k); return; }
       if (terrain.road[k] & 16) {
         const r = terrain.ramp[k];
         if (r) rampSides(pen, i, j, z, r, upper);
@@ -2646,6 +2832,7 @@ const KENNEY = {
     const drawn = (draw, x, y) => { pen.dx = x; pen.dy = y; draw(); pen.dx = pen.dy = 0; };
     // A country road's bridge: a pier if it stands high, then as in town.
     const decks = laterBridges((i, j, k) => {
+      if (terrain.quay[k]) return quayPiece(pen, terrain, i, j, k);
       const n = terrain.along[k] === 1 ? 5 : 10, zd = zOfLevel(terrain.roadLevel[k]), [x, y] = iso(i + 0.5, j + 0.5);
       pier(pen, i, j, zd, zOfTile(terrain, k), KIT.water.wall[0]);
       drawn(() => deckShadow(pen, n), x, y - zd);
@@ -2658,7 +2845,7 @@ const KENNEY = {
       const high = cover === COVER.rock || cover === COVER.snow;
       groundFaces(pen, i, j, z, left, right, foamed(isWater(cover) ? KIT.water.side : high ? KIT.rock : KIT.earth, f), foamed(high ? KIT.rock : KIT.earth, f));
       const name = nameAt(i, j), [x, y] = iso(i + 0.5, j + 0.5);
-      if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], KIT.open); if (country) decks.add(i, j, k); }
+      if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], KIT.open); if (country || terrain.quay[k]) decks.add(i, j, k); }
       else if (country) {
         // A ramp is the straight tile, tilted.
         const r = terrain.ramp[k];
@@ -2728,31 +2915,40 @@ function rebuildGround() {
 // The land round the town grows from a seed. The page picks one the first
 // time it shows a context (or the demo, or a replay) and keeps it in this
 // browser under that name; the server never sees it. Without storage every
-// visit is a new world.
+// visit is a new world. The seed also picks the world's style (#45) unless
+// the viewer forces one, which is kept with the seed as {seed, style}; a
+// plain seed (kept before #45) leaves the style to the seed.
 
-const worldSeed = { key: null, seed: "", kept: true };
-const seedInput = document.getElementById("seed");
+const worldSeed = { key: null, seed: "", style: "", kept: true };
+const seedInput = document.getElementById("seed"), styleSelect = document.getElementById("world-style");
 const randomSeed = () => String(1 + Math.floor(Math.random() * 999999));
+styleSelect.innerHTML = `<option value="">Picked by the seed</option>${Object.entries(STYLES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join("")}`;
+const currentStyle = () => worldStyle(worldSeed.seed, worldSeed.style);
 
 // Shows the world kept for `key`, or a new one; the ground is drawn again
 // unless a new plan is on its way anyway.
 function useWorld(key) {
   if (key === worldSeed.key) return;
-  let seed = null;
-  try { seed = localStorage.getItem(key); worldSeed.kept = true; } catch { worldSeed.kept = false; }
+  let kept = null;
+  try { kept = localStorage.getItem(key); worldSeed.kept = true; } catch { worldSeed.kept = false; }
+  let seed = kept, style = "";
+  try { const v = JSON.parse(kept); if (v && typeof v.seed === "string") { seed = v.seed; style = STYLES[v.style] ? v.style : ""; } } catch { /* a plain seed */ }
   worldSeed.key = key;
-  setSeed(seed || randomSeed());
+  setSeed(seed || randomSeed(), style);
 }
-function setSeed(seed) {
-  const changed = seed !== worldSeed.seed;
-  worldSeed.seed = seed;
-  seedInput.value = seed;
-  try { localStorage.setItem(worldSeed.key, seed); } catch { worldSeed.kept = false; }
+function setSeed(seed, style = worldSeed.style) {
+  const changed = seed !== worldSeed.seed || style !== worldSeed.style;
+  worldSeed.seed = seed; worldSeed.style = style;
+  seedInput.value = seed; styleSelect.value = style;
+  try { localStorage.setItem(worldSeed.key, style ? JSON.stringify({ seed, style }) : seed); } catch { worldSeed.kept = false; }
   const where = worldSeed.key.startsWith("kube-city-world:context:") ? "this context" : worldSeed.key.endsWith(":demo") ? "the demo" : "replays";
   document.getElementById("seed-note").textContent = worldSeed.kept
     ? `Kept in this browser for ${where}; the same seed always grows the same land.`
     : "This browser keeps no site data here, so every visit is a new world.";
-  if (changed && !planDirty && groundLayer.children.length) { terrain = planTerrain(plan, seed); rebuildGround(); makeCars(); }
+  const name = document.getElementById("world-name");
+  name.textContent = STYLES[currentStyle()].name;
+  name.append(Object.assign(document.createElement("small"), { textContent: `seed ${seed}` }));
+  if (changed && !planDirty && groundLayer.children.length) { terrain = planTerrain(plan, seed, currentStyle()); rebuildGround(); makeCars(); }
 }
 seedInput.addEventListener("change", () => {
   const seed = seedInput.value.trim();
@@ -2760,6 +2956,7 @@ seedInput.addEventListener("change", () => {
   else seedInput.value = worldSeed.seed;
 });
 seedInput.addEventListener("keydown", (e) => { if (e.key === "Enter") seedInput.blur(); });
+styleSelect.addEventListener("change", () => { if (worldSeed.key) setSeed(worldSeed.seed, styleSelect.value); });
 document.getElementById("new-world").addEventListener("click", () => { if (worldSeed.key) setSeed(randomSeed()); });
 
 // Lays the districts out again (a namespace appeared or one ran out of lots)
@@ -2767,7 +2964,7 @@ document.getElementById("new-world").addEventListener("click", () => { if (world
 function replan() {
   planDirty = false;
   Object.assign(plan, planDistricts());
-  terrain = planTerrain(plan, worldSeed.seed);
+  terrain = planTerrain(plan, worldSeed.seed, currentStyle());
   world.districts = plan.districts;
   bounds = computeBounds();
   rebuildGround();
