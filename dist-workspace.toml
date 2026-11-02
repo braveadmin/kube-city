@@ -10,7 +10,8 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+# No macOS for now; bring it back in #80
+targets = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Build every platform on pull requests too, so a release never breaks first
 pr-run-mode = "upload"
 # Let Dependabot keep the actions in the release workflow up to date; run
@@ -22,7 +23,3 @@ unix-archive = ".tar.gz"
 # HOMEBREW_TAP_TOKEN secret: a token that can write to that repo)
 tap = "braveadmin/homebrew-tap"
 publish-jobs = ["homebrew"]
-
-# GitHub retired the macos-14 runners on 2026-11-02
-[dist.github-custom-runners]
-aarch64-apple-darwin = "macos-15"
