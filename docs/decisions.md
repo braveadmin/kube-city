@@ -409,7 +409,7 @@ Built (#40, 2026-10-29): the terrain drawn with its height in both looks.
 | Tops | Grass a little lighter the higher it stands | Reads the relief at a glance; rock and snow come with #43 |
 | Town and buildings | Stay as they were, at z 0, in front of the terrain (Metropolis's town drawn after it; buildings in the city layer) | #39 keeps the town flat and the land rising slowly round it, so higher ground in front never reaches over it; `hiddenBy()` checks every town tile and every block tile with a 200 px building, on every seed |
 | Trees | Stand at their tile's height; a tree that higher ground in front would partly hide (`hiddenBy()`) is drawn into the ground in order, the rest stay in the city layer and sort with the buildings. Still only on the 4 tiles round the town | In the ground they would no longer sort with buildings, but such trees are always 2 or more tiles from the town; forests are #43 |
-| Roads and river | Still end 4 tiles out of town | #42 and #44 carry them on |
+| Roads and river | Still end 4 tiles out of town | #42 and #44 carry them on (both built) |
 | Camera | Zooms out until the whole world is in view; "fit" still frames the town | #46 |
 
 Big recording, 13 seeds, both road widths: no town tile or building is ever
@@ -479,6 +479,30 @@ edge, at most 1 starting next to the town river; the town drains; every
 one namespace: no river, side rivers from 1–5 sources, drains. The terrain
 takes about 1–1.5 × master's time (55–80 ms against 53 ms on a busy
 machine; not measured quiet).
+
+Built (#44, 2026-11-02): roads out of town, `countryRoads()` at the end of
+`planTerrain()`, drawn in the ground mesh in both looks; cars drive them.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Where | Every road that runs out to the margin's edge (#35's main roads, the bank roads, a one-block town's country road) goes on to the map's edge, one after another; a later one may join an earlier one and share it from there | The issue: "sharing a road where two meet" |
+| Path | Cheapest over the terrain (a search over squares of the road's width, with heading): a tile costs 1, a ramp `CLIMB` 4, a turn `TURN` 1.5, forest, woods, beach, rock and snow a little more, a tile next to another road `NEAR_ROAD` 6, one of the town's flat ring `RING_ROAD` 2, a shared tile `SHARE` 0.5 | Around steep slopes and lakes, straight where it can be, away from the town |
+| Climbing | At most a level a tile, on a ramp: a straight tile whose top rises a level (owner's choice); never where it turns or meets a road, so it goes on straight just after one | "Never up a cliff" |
+| Ramps | Kenney: the pack's straight road stretched over the slope (`GroundPen.sprite` with a lift); Metropolis: asphalt; earth on the rise's open sides | Owner's choice; no new sprites |
+| Water | Never a lake or the sea. A river of one or two tiles is crossed straight on a bridge, its banks at the same level, at any level; Kenney uses #37's deck and railings, Metropolis an asphalt deck with parapets; a pier under a deck that stands high | Owner's decision 2A on #42: the general bridge is built here |
+| Width | Kenney roads are one tile, Metropolis two; under a two-tile road the lower tile is filled up to the higher one, and the land beside it raised where it would drop more than `SLOPE`; a dry hollow it dams is filled in | Keeps #39's taper and #41's "no hollows" |
+| Drawing | Road tiles in the ground mesh in its order, so hills in front cover them; bridges two diagonals after their tile; no trees, fields or farms on them | As #40 |
+| Cars | One per 30 tiles of country road (`COUNTRY_CAR`) on top of the town's one per 9; at the road's height (ramps, decks); hidden where higher ground in front covers the road | Owner's choice; the town stays the busy part |
+| Bank roads | The cost decides whether they follow the town river or turn away; `art/terrain_sketch.mjs` reports which | Owner's choice |
+| Harbour | Moved to #45 | Owner's choice: no island world yet |
+
+Big recording, 13 seeds: Kenney 5–6 roads out, 83–177 tiles, 2–22 ramps, 1–7
+bridge tiles; Metropolis 4–6 roads, 239–820 tiles. Both widths: every road
+reaches the map's edge or joins one that does, one road network, no step
+without a ramp, no ramp on a turn, water only under bridges of 1–2 tiles,
+every #39–#43 check still passes. Towns of one and of four namespaces (6
+seeds each): the same. The roads take 15–115 ms more on a busy machine
+(terrain alone 60–340 ms there); not measured quiet.
 
 **Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
 out like SimCity or Cities: Skylines (houses, shops, towers).
