@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### Added
 
@@ -11,8 +11,25 @@
   picks the first time it shows a context and keeps in the browser for it
   (one for the demo and one for replays); the **World** section of the
   details panel shows it, takes a typed one and rolls a new one with
-  **New world**. For now the seed places the trees on the grass; the
-  terrain will grow from it (#38).
+  **New world**. The trees, terrain, water and land cover all grow from the
+  seed (#38).
+- Terrain round the town from the world seed: rolling hills, mountain
+  ranges and a flat town site, drawn at their height in both looks (#39,
+  #40).
+- Sea, coast and lakes: on about half the worlds the land sinks into the
+  sea on one side, with beaches, bays and headlands; hollows become lakes;
+  the water glints (#41).
+- Forests, woods, fields with farms, rock and snow cover the land outside
+  the town (#43).
+- The town's river runs on outside it, down to the sea and up into the
+  hills, cutting small valleys; side rivers join it, with waterfalls where
+  they drop (#42).
+- Zones: branch namespaces (`feature-`, `bugfix-`) are suburbs,
+  infrastructure is an industrial quarter and the rest is the town centre,
+  each with its own ground and a **Zones** row in the legend (#36).
+- `#tour` after the page's address plays a 15-second camera loop round the
+  city until you pan, zoom or press a key; the README opens with a GIF of
+  it.
 
 ### Changed
 
@@ -21,7 +38,6 @@
   for size; `cargo install` builds are stripped too (#22).
 - The city appears sooner: the sprites come inside the page instead of in
   144 requests, and a live city connects while the sprites load (#22).
-
 - The city is laid out by cutting it in two again and again, each cut a
   road, instead of in rows: no more long straight roads across the whole
   city, blocks of their own proportions, main roads lined with trees,
