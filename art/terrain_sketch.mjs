@@ -11,7 +11,8 @@
 //
 // Map: # the town (its river too), 0–9 and a–c the ground level (the town
 // stands on 1), ~ sea, = lake, . beach, F forest, f woods, : field, h farm,
-// ^ rock, * snow, % river (the town's river and side rivers); meadow shows its level.
+// ^ rock, * snow, % river (the town's river and side rivers), + country road,
+// / its ramps, H its bridges; meadow shows its level.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -150,6 +151,85 @@ for (let n = 0; n < drains.length && !townDrains; n++) for (const nk of nearOf(d
   reached[nk] = 1; drains.push(nk);
 }
 
+// Roads out of town (#44). Every road out reaches the map's edge or joins
+// one that does; a road's tiles never step more than a level, and only on a
+// ramp, which is straight and climbs exactly one; water only under a bridge,
+// of one or two tiles across a river; one road network with the town. A
+// bank road of the town river follows it if most of its first 20 tiles lie
+// within 3 tiles of the river.
+const { road, ramp, roadLevel, routes } = t;
+const isRoadTile = k => (road[k] & 16) > 0;
+let stepBad = 0, rampBad = 0, wetBad = 0, roadTiles = 0, rampTiles = 0, bridgeTiles = 0, onTown = 0;
+const offset = [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]];
+for (let k = 0; k < N; k++) {
+  if (!isRoadTile(k)) continue;
+  roadTiles++;
+  if (isTown(k)) onTown++;
+  if (ramp[k]) rampTiles++;
+  if (isWater(cover[k])) { bridgeTiles++; if (cover[k] !== COVER.river) wetBad++; }
+  const i = k % W, j = (k / W) | 0;
+  for (const [di, dj, bit] of offset) {
+    const ni = i + di, nj = j + dj;
+    if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
+    const nk = nj * W + ni;
+    if (!isRoadTile(nk)) continue;
+    // The height of the shared edge, seen from either side.
+    const edgeZ = (q, b) => roadLevel[q] + (ramp[q] === b ? 1 : 0);
+    if (edgeZ(k, bit) !== edgeZ(nk, offset[(offset.findIndex(o => o[2] === bit) + 2) % 4][2])) {
+      // Side by side across the road (a two-tile road's lanes) both ramps may rise the same way.
+      if (!(ramp[k] && ramp[k] === ramp[nk])) stepBad++;
+    }
+  }
+  if (ramp[k]) {
+    const ri = offset.find(o => o[2] === ramp[k]), up = (j + ri[1]) * W + i + ri[0], downK = (j - ri[1]) * W + i - ri[0];
+    const off = (q, di, dj) => { const a = k % W + di, b = ((k / W) | 0) + dj; return a < 0 || b < 0 || a >= W || b >= H; };
+    if (off(k, ri[0], ri[1]) || off(k, -ri[0], -ri[1])) { /* at the map's edge */ }
+    else if (!isRoadTile(up) || !isRoadTile(downK)) rampBad++;
+    else if (roadLevel[up] + (ramp[up] === ramp[k] ? 0 : 0) !== roadLevel[k] + 1) rampBad++;
+  }
+}
+// Bridges: runs of water under a road, along it, one or two tiles.
+let longBridge = 0;
+for (let k = 0; k < N; k++) {
+  if (!isRoadTile(k) || !isWater(cover[k])) continue;
+  for (const [di, dj] of [[1, 0], [0, 1]]) {
+    let n = 0, i = k % W, j = (k / W) | 0;
+    while (i < W && j < H && isRoadTile(j * W + i) && isWater(cover[j * W + i])) { n++; i += di; j += dj; }
+    const pi = k % W - di, pj = ((k / W) | 0) - dj;
+    const startsRun = pi < 0 || pj < 0 || !(isRoadTile(pj * W + pi) && isWater(cover[pj * W + pi]));
+    if (startsRun && n > 2 && t.along[k] === (di ? 2 : 1)) longBridge++;
+  }
+}
+// One network: town roads and country roads, joined side to side.
+const townRoadSet = new Set(), allRoad = new Uint8Array(N);
+for (const r of plan.roads) {
+  const half = gap / 2;
+  for (let j = Math.min(r.j0, r.j1) - half; j < Math.max(r.j0, r.j1) + half; j++)
+    for (let i = Math.min(r.i0, r.i1) - half; i < Math.max(r.i0, r.i1) + half; i++) {
+      const a = i - t.x0, b = j - t.y0;
+      if (a >= 0 && b >= 0 && a < W && b < H) allRoad[b * W + a] = 1;
+    }
+}
+for (let k = 0; k < N; k++) if (isRoadTile(k)) allRoad[k] = 1;
+const net = new Uint8Array(N), stack = [allRoad.findIndex(v => v)];
+let pieces = 0;
+for (let k0 = 0; k0 < N; k0++) {
+  if (!allRoad[k0] || net[k0]) continue;
+  pieces++;
+  const q = [k0]; net[k0] = 1;
+  for (let n = 0; n < q.length; n++) for (const nk of nearOf(q[n])) if (allRoad[nk] && !net[nk]) { net[nk] = 1; q.push(nk); }
+}
+const hows = routes.reduce((m, r) => (m[r.how] = (m[r.how] || 0) + 1, m), {});
+// Bank roads: the routes that start beside the town river.
+const toMain = new Float32Array(N).fill(Infinity), mq = [];
+for (let k = 0; k < N; k++) if (main[k]) { toMain[k] = 0; mq.push(k); }
+for (let n = 0; n < mq.length; n++) for (const nk of nearOf(mq[n])) if (toMain[nk] === Infinity) { toMain[nk] = toMain[mq[n]] + 1; mq.push(nk); }
+const banks = routes.filter(r => r.tiles.length && toMain[r.tiles[0]] <= 2).map(r => {
+  const first = r.tiles.slice(0, 20);
+  return first.filter(k => toMain[k] <= 3).length >= first.length / 2 ? "follows" : "turns away";
+});
+const roadTimes = [];
+
 // Drawing (#40): the town's ground is drawn over the terrain and buildings
 // stand in the city layer, which is only right where no higher ground in
 // front reaches over them: every town tile, and every block tile with a 200 px
@@ -215,7 +295,7 @@ for (let n = 0; n < 6; n++) {
 
 for (let j = 0; j < H; j++) {
   let row = "";
-  for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : farms.has(k) ? "h" : ["", "~", "=", ".", "F", "f", ":", "^", "*", "%"][cover[k]] || level[k].toString(13); }
+  for (let i = 0; i < W; i++) { const k = j * W + i; row += isTown(k) ? "#" : isRoadTile(k) ? (isWater(cover[k]) ? "H" : ramp[k] ? "/" : "+") : farms.has(k) ? "h" : ["", "~", "=", ".", "F", "f", ":", "^", "*", "%"][cover[k]] || level[k].toString(13); }
   console.log(row);
 }
 console.log();
@@ -227,6 +307,7 @@ console.log(`town and ${FLAT} tiles round it flat: ${flatOk ? "yes" : "NO"}; pea
 console.log(`same terrain twice: ${same ? "yes" : "NO"}; another seed, other terrain: ${differs ? "yes" : "NO"}`);
 console.log(`sea ${share(COVER.sea)} %, ${lakes} lakes (${share(COVER.lake)} %), beach ${share(COVER.beach)} %; smallest sea or lake ${smallest === Infinity ? "–" : smallest} tiles (at least ${LAKE_MIN}: ${smallest >= LAKE_MIN ? "yes" : "NO"}); each one flat: ${flatWater ? "yes" : "NO"}; hollows left: ${hollows ? hollows + " tiles, NO" : "none"}; town and its flat ground dry: ${dryTown ? "yes" : "NO"}`);
 console.log(`town river: ${!plan.river ? "none (no cut)" : `${mainTiles} tiles, ${mouths.length ? "reaches the sea or the map's edge" : "NO mouth"}, uphill tiles ${mainUphill}${mainUphill ? " NO" : ""}, rises at level ${mainTop} (hills ${HILLS}+: ${mainTop >= HILLS ? "yes" : "NO"})`}; side rivers: ${sideTiles} tiles from ${sources} sources (${forks} next to the town river), uphill ${sideUphill}${sideUphill ? " NO" : ""}, ending on dry land ${sideLost}${sideLost ? " NO" : ""}; town drains: ${townDrains ? "yes" : "NO"}`);
+console.log(`roads out of town: ${routes.length} (${Object.entries(hows).map(([h, n]) => `${n} ${h}`).join(", ")}${hows["dead end"] ? " NO" : ""}), ${roadTiles} tiles, ${rampTiles} ramp, ${bridgeTiles} bridge; steps without a ramp ${stepBad}${stepBad ? " NO" : ""}, bad ramps ${rampBad}${rampBad ? " NO" : ""}, over lakes or sea ${wetBad}${wetBad ? " NO" : ""}, bridges over 2 tiles ${longBridge}${longBridge ? " NO" : ""}, on the town ${onTown}${onTown ? " NO" : ""}; road network in ${pieces} piece${pieces === 1 ? "" : "s NO"}; bank roads: ${banks.join(", ") || "none"}`);
 console.log(`hidden by higher ground in front: town tiles ${townHidden}, buildings ${buildingsHidden}, trees next to the town ${treesHidden} of ${treesNear}`);
 console.log(`land outside town ${land} tiles: meadow ${ofLand(COVER.grass)} %, forest ${ofLand(COVER.forest)} %, woods ${ofLand(COVER.woods)} %, fields ${ofLand(COVER.field)} % (${farms.size} farms), rock ${ofLand(COVER.rock)} %, snow ${ofLand(COVER.snow)} % (from level ${snowLow === Infinity ? "–" : snowLow}, rock up to ${rockHigh}); ${trees.length} trees, ${pines} pines`);
 console.log(`cover where it belongs: ${coverOk && (snowLow === Infinity || snowLow > rockHigh) ? "yes" : "NO"}`);
@@ -257,7 +338,7 @@ const plan = ${JSON.stringify(plan)};
 const COLOURS = ["#7fae5a", "#9cc865", "#93bf5c", "#8ab456", "#a3ad5c", "#b3a462", "#a99266", "#9a8a72", "#8f877e", "#a19c95", "#c3c0bb", "#e2e1de", "#f6f7f8"];
 // Ground cover (#43): forest, woods, fields, rock, snow.
 const COVERS = { [COVER.forest]: "#5f9a4c", [COVER.woods]: "#7fb35e", [COVER.field]: "#d8c46a", [COVER.rock]: "#a39d93", [COVER.snow]: "#f2f4f6" };
-const TOWN = "#b9b5ae", WATER = "#4f9fd8", SHALLOW = "#6fb4e0", DEEP = "#2f77b5", BEACH = "#e8d9a2", T = 16;
+const ROAD = "#6f6a62", BRIDGE = "#a3794f", TOWN = "#b9b5ae", WATER = "#4f9fd8", SHALLOW = "#6fb4e0", DEEP = "#2f77b5", BEACH = "#e8d9a2", T = 16;
 const shade = (hex, f) => "#" + [1, 3, 5].map(n => Math.round(parseInt(hex.slice(n, n + 2), 16) * f).toString(16).padStart(2, "0")).join("");
 function draw() {
   const seed = document.getElementById("seed").value, lift = Number(document.getElementById("relief").value);
@@ -270,7 +351,7 @@ function draw() {
   for (let s = 0; s < W + H - 1; s++) for (let i = Math.max(0, s - H + 1); i <= Math.min(W - 1, s); i++) {
     const j = s - i, k = j * W + i, wet = isWater(t.cover[k]), z = level[k] * lift - (wet ? 2 : 0);
     const sea = t.depth[k] < 2 ? SHALLOW : t.depth[k] < 6 ? WATER : DEEP;
-    const colour = inRiver(plan.river, i + t.x0, j + t.y0) ? WATER : toTown[k] === 0 ? TOWN : wet ? sea : t.cover[k] === COVER.beach ? BEACH : COVERS[t.cover[k]] || COLOURS[level[k]];
+    const colour = t.road[k] & 16 ? (wet ? BRIDGE : ROAD) : inRiver(plan.river, i + t.x0, j + t.y0) ? WATER : toTown[k] === 0 ? TOWN : wet ? sea : t.cover[k] === COVER.beach ? BEACH : COVERS[t.cover[k]] || COLOURS[level[k]];
     poly(shade(colour, 0.78), [at(i, j + 1, z), at(i + 1, j + 1, z), at(i + 1, j + 1, 0), at(i, j + 1, 0)]);
     poly(shade(colour, 0.62), [at(i + 1, j, z), at(i + 1, j + 1, z), at(i + 1, j + 1, 0), at(i + 1, j, 0)]);
     poly(colour, [at(i, j, z), at(i + 1, j, z), at(i + 1, j + 1, z), at(i, j + 1, z)]);

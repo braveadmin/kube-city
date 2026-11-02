@@ -1426,16 +1426,289 @@ function planTerrain(plan, seed) {
     else if (damp > t.forest) cover[k] = COVER.forest;
     else if (damp > t.woods) cover[k] = COVER.woods;
   }
-  return { x0, y0, W, H, level, height, toTown, cover, depth, crop, farms, main, down: downTo };
+  const terrain = { x0, y0, W, H, level, height, toTown, cover, depth, crop, farms, main, down: downTo };
+  return Object.assign(terrain, countryRoads(plan, terrain));
+}
+
+// Roads out of town: every road that runs out to the edge of the margin goes
+// on across the land to the map's edge along the cheapest way, or to a
+// country road laid before it, which it then shares. A road climbs at most a
+// level a tile, on a ramp: a straight tile whose top rises a level, never one
+// where it turns or meets another road. It crosses a river of one or two
+// tiles straight on a bridge, its banks at the same level; never a lake or
+// the sea. Roads are plan.gap tiles wide; the search runs on squares of that
+// size (a lead is a square's back corner), and a step's level is the level of
+// the row of tiles it adds. The ground under a road of two tiles is filled up
+// to the higher one's level. Returns per tile `road` (16 plus the neighbours
+// a one-tile road joins: 1 north (j - 1), 2 east, 4 south, 8 west; town roads
+// count), `ramp` (the side a ramp rises to, same bits), `roadLevel` (a
+// bridge's: its deck's) and `along` (1: the road runs along j, 2: along i),
+// `roads` as centre lines for the cars ({ i0, j0, i1, j1 }, i0 ≤ i1, j0 ≤ j1)
+// and `routes`, per road out of town how it ended: "edge", "joined" or "dead
+// end", with its tiles.
+const CLIMB = 4;       // what a ramp costs, in tiles of road
+const TURN = 1.5;      // what a turn costs: roads run straight where they can
+const BRIDGE = 6;      // what a tile of bridge costs
+const NEAR_ROAD = 6;   // what a tile next to another road costs (it may only meet one at a junction)
+const RING_ROAD = 2;   // what a tile of the town's flat ring costs: roads leave the town
+const SHARE = 0.5;     // what a tile of a road laid before costs, once joined
+const DIRS = [[0, -1, 1], [1, 0, 2], [0, 1, 4], [-1, 0, 8]];   // north, east, south, west: di, dj, bit
+function countryRoads(plan, t) {
+  const { x0, y0, W, H, level, cover, toTown, farms } = t, N = W * H, s = plan.gap, half = s / 2;
+  const at = (i, j) => (j - y0) * W + (i - x0), inMap = (i, j) => i >= x0 && j >= y0 && i < x0 + W && j < y0 + H;
+  const road = new Uint8Array(N), ramp = new Uint8Array(N), roadLevel = new Int8Array(N), along = new Uint8Array(N);
+  const roads = [], routes = [];
+  // Town roads, and the tiles on or next to a road.
+  const townRoad = new Uint8Array(N), near = new Uint8Array(N);
+  const markNear = k => { near[k] = 1; const i = k % W; if (i > 0) near[k - 1] = 1; if (i < W - 1) near[k + 1] = 1; if (k >= W) near[k - W] = 1; if (k + W < N) near[k + W] = 1; };
+  for (const key of roadTiles(plan).keys()) {
+    const [i, j] = key.split("/").map(Number);
+    if (inMap(i, j)) { townRoad[at(i, j)] = 1; markNear(at(i, j)); }
+  }
+  const square = k => s === 1 ? [k] : [k, k + 1, k + W, k + W + 1];
+  // The row of tiles a step towards d onto lead k adds.
+  const rowOf = (k, d) => s === 1 ? [k] : d === 0 ? [k, k + 1] : d === 1 ? [k + 1, k + 1 + W] : d === 2 ? [k + W, k + W + 1] : [k, k + W];
+  const next = (k, d) => {
+    const i = k % W + DIRS[d][0], j = ((k / W) | 0) + DIRS[d][1];
+    return i >= 0 && j >= 0 && i <= W - s && j <= H - s ? j * W + i : -1;
+  };
+  const toEdge = k => { const i = k % W, j = (k / W) | 0; return Math.min(i, j, W - s - i, H - s - j); };
+  const rough = c => c === COVER.forest || c === COVER.beach ? 0.5 : c === COVER.woods ? 0.3 : c === COVER.rock ? 2 : c === COVER.snow ? 3 : 0;
+  const river = k => cover[k] === COVER.river && toTown[k] > 0;
+  // A row's level (its higher tile's), or -1 where it cannot carry a road.
+  const rowLevel = row => {
+    let lo = Infinity, hi = -Infinity;
+    for (const q of row) { if (toTown[q] === 0 || isWater(cover[q])) return -1; lo = Math.min(lo, level[q]); hi = Math.max(hi, level[q]); }
+    return hi - lo > 1 ? -1 : hi;
+  };
+  // Leads of the roads laid so far: how many leads on to their end (-1: none)
+  // and whether a road may join there (flat, on land, away from the town).
+  const rest = new Float32Array(N).fill(-1), joinable = new Uint8Array(N);
+
+  // The roads that run out to the margin's edge, and the first lead past each end.
+  const starts = [];
+  for (const r of plan.roads) {
+    if (r.bridge) continue;
+    const down = r.i0 === r.i1;
+    const ends = down
+      ? [[r.j0 === -MARGIN + half, 0, r.i0, r.j0, r.i0 - half, -MARGIN - s], [r.j1 === plan.H + MARGIN - half, 2, r.i1, r.j1, r.i1 - half, plan.H + MARGIN]]
+      : [[r.i0 === -MARGIN + half, 3, r.i0, r.j0, -MARGIN - s, r.j0 - half], [r.i1 === plan.W + MARGIN - half, 1, r.i1, r.j1, plan.W + MARGIN, r.j1 - half]];
+    for (const [free, d, ei, ej, li, lj] of ends) if (free && inMap(li, lj) && inMap(li + s - 1, lj + s - 1)) starts.push({ d, end: [ei, ej], lead: at(li, lj) });
+  }
+
+  const S = 20 * N, spent = new Float64Array(S), back = new Int32Array(S), done = new Uint8Array(S), via = new Map();
+  for (const start of starts) {
+    const k0 = start.lead, lv0 = rowLevel(square(k0));
+    if (lv0 < 0) continue;
+    if (square(k0).some(q => road[q] & 16)) {
+      // A road laid before already runs past this end: join it there.
+      if (s === 1) { const e = at(Math.floor(start.end[0]), Math.floor(start.end[1])); road[k0] |= DIRS[start.d ^ 2][2]; road[e] |= DIRS[start.d][2]; }
+      const c = [k0 % W + x0 + half, ((k0 / W) | 0) + y0 + half], [a, b] = [start.end, c];
+      roads.push({ i0: Math.min(a[0], b[0]), j0: Math.min(a[1], b[1]), i1: Math.max(a[0], b[0]), j1: Math.max(a[1], b[1]) });
+      routes.push({ how: "joined", tiles: [], from: start.end });
+      continue;
+    }
+    spent.fill(Infinity); back.fill(-1); done.fill(0); via.clear();
+    const share = routes.length ? SHARE : 1;
+    // A heap of states (lead * 20 + heading * 5 + lock), by cost so far plus
+    // the least it can still cost. A ramp's row may be no part of a turn or a
+    // junction, so after one the road goes on straight for a while; the lock
+    // says how: 0 free, 1 level for a step (it just turned), 2
+    // straight for a step, 3 straight for a step and no climb (just ramped
+    // down, one tile wide), 4 straight for two steps and no climb (just
+    // ramped down, two tiles wide).
+    const heap = [], key = new Float64Array(S);
+    const less = (a, b) => key[heap[a]] < key[heap[b]];
+    const swap = (a, b) => { const x = heap[a]; heap[a] = heap[b]; heap[b] = x; };
+    const push = (x, c) => {
+      spent[x] = c; key[x] = c + share * toEdge((x / 20) | 0); heap.push(x);
+      for (let n = heap.length - 1; n > 0 && less(n, (n - 1) >> 1); n = (n - 1) >> 1) swap(n, (n - 1) >> 1);
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        for (let n = 0; ;) {
+          const a = 2 * n + 1, b = a + 1;
+          let m = n;
+          if (a < heap.length && less(a, m)) m = a;
+          if (b < heap.length && less(b, m)) m = b;
+          if (m === n) break;
+          swap(m, n); n = m;
+        }
+      }
+      return top;
+    };
+    // A state's level: its lead's, which depends on how it was entered.
+    const lvOf = new Int8Array(S);
+    const relax = (x, c, from, lv, path) => {
+      if (c >= spent[x]) return;
+      back[x] = from; lvOf[x] = lv; push(x, c);
+      if (path) via.set(x, path); else via.delete(x);
+    };
+    const state = (k, d, lock) => k * 20 + d * 5 + lock, first = state(k0, start.d, 0);
+    lvOf[first] = lv0; push(first, 0);
+    let best = -1, bestCost = Infinity, far = first, how = "dead end";
+    while (heap.length) {
+      const x = pop();
+      if (done[x]) continue;
+      done[x] = 1;
+      const c = spent[x];
+      if (key[x] >= bestCost) break;
+      const k = (x / 20) | 0, d = ((x / 5) | 0) % 4, locked = x % 5, lv = lvOf[x];
+      if (rest[k] >= 0 && x !== first) {
+        const total = c + SHARE * rest[k];
+        if (total < bestCost) { bestCost = total; best = x; how = "joined"; }
+        continue;
+      }
+      if (toEdge(k) === 0) { if (c < bestCost) { bestCost = c; best = x; how = "edge"; } continue; }
+      if (toTown[k] > toTown[far >> 3]) far = x;
+      for (let nd = 0; nd < 4; nd++) {
+        if (nd === (d ^ 2) || (locked >= 2 && nd !== d)) continue;
+        const turn = nd !== d, nk = next(k, nd);
+        if (nk < 0) continue;
+        const row = rowOf(nk, nd);
+        // A bridge: one or two rows of river straight ahead, then land at this level.
+        if (row.every(river)) {
+          if (turn) continue;
+          const leads = [nk];
+          let m = next(nk, nd);
+          while (m >= 0 && leads.length < 3 && rowOf(m, nd).every(river)) { leads.push(m); m = next(m, nd); }
+          const span = leads.length;
+          if (span > 2 || m < 0) continue;
+          let ok = true;
+          for (let n = 0; n < s && ok; n++) {
+            if (n) m = next(m, nd);
+            ok = m >= 0 && rowLevel(rowOf(m, nd)) === lv && !rowOf(m, nd).some(q => near[q]);
+            if (ok) leads.push(m);
+          }
+          if (!ok) continue;
+          const land = leads.pop(), y = state(land, nd, 0);
+          const cost = c + leads.length + 1 + BRIDGE * span;
+          relax(y, cost, x, lv, leads);
+          continue;
+        }
+        const nlv = rowLevel(row);
+        if (nlv < 0) continue;
+        const onRoad = row.some(q => road[q] || townRoad[q]);
+        if (onRoad) {
+          // Only onto a lead of a road laid before, at a flat spot, as a
+          // junction. A two-tile road meets one across it a step further on,
+          // where its square lies on the other road's.
+          const jk = s === 1 ? nk : next(nk, nd);
+          if (jk < 0 || !joinable[jk] || nlv !== lv || x === first) continue;
+          relax(state(jk, nd, 0), c + s, x, nlv, null);
+          continue;
+        }
+        const dl = nlv - lv;
+        if (Math.abs(dl) > 1 || (dl && (turn || x === first || locked === 1)) || (dl > 0 && locked >= 3)) continue;
+        let cost = c + 1 + (dl ? CLIMB : 0) + (turn ? TURN : 0);
+        for (const q of row) cost += rough(cover[q]) + (near[q] ? NEAR_ROAD : 0) + (toTown[q] <= FLAT ? RING_ROAD : 0);
+        const y = state(nk, nd, dl < 0 ? (s === 1 ? 3 : 4) : dl > 0 ? (s === 1 ? 0 : 2) : turn ? 1 : locked === 4 ? 2 : 0);
+        relax(y, cost, x, nlv, null);
+      }
+    }
+    if (best < 0) best = far;
+    // The leads from the town out, with their heading and level.
+    const chain = [];
+    for (let x = best; x >= 0; x = back[x]) {
+      chain.push({ k: (x / 20) | 0, d: ((x / 5) | 0) % 4, lv: lvOf[x] });
+      const extra = via.get(x);
+      if (extra) for (let n = extra.length - 1; n >= 0; n--) chain.push({ k: extra[n], d: ((x / 5) | 0) % 4, lv: -1 });
+    }
+    chain.reverse();
+    // Bridge leads stand at the level of the land before them.
+    for (let n = 1; n < chain.length; n++) if (chain[n].lv < 0) chain[n].lv = chain[n - 1].lv;
+    const joined = how === "joined", own = joined ? chain.slice(0, -1) : chain, tiles = [];
+    const mine = new Set();
+    own.forEach((l, n) => {
+      const fresh = (n === 0 ? square(l.k) : rowOf(l.k, l.d)).filter(q => !mine.has(q));
+      for (const q of fresh) {
+        mine.add(q); tiles.push(q);
+        road[q] |= 16; roadLevel[q] = l.lv; along[q] = l.d & 1 ? 2 : 1;
+        if (!isWater(cover[q])) { level[q] = l.lv; cover[q] = COVER.grass; t.crop[q] = 0; }
+        farms.delete(q);
+      }
+      l.fresh = fresh;
+    });
+    // Ramps: where the next lead (straight on) stands a level higher, this
+    // lead's row rises towards it; where it stands lower, its row rises back.
+    for (let n = 0; n + 1 < chain.length; n++) {
+      const a = chain[n], b = chain[n + 1];
+      if (b.lv === a.lv + 1 && a.fresh) for (const q of a.fresh) ramp[q] = DIRS[b.d][2];
+      if (b.lv === a.lv - 1 && b.fresh) for (const q of b.fresh) ramp[q] = DIRS[b.d ^ 2][2];
+    }
+    // Which neighbours a one-tile road joins: along the chain, the town road
+    // it leaves, the road it joins.
+    if (s === 1) {
+      const link = (p, q, d) => { road[p] |= DIRS[d][2]; road[q] |= DIRS[d ^ 2][2]; };
+      const endTile = at(Math.floor(start.end[0]), Math.floor(start.end[1]));
+      link(chain[0].k, endTile, start.d ^ 2);
+      for (let n = 0; n + 1 < chain.length; n++) link(chain[n].k, chain[n + 1].k, chain[n + 1].d);
+    }
+    for (const q of tiles) markNear(q);
+    // Ground filled up under a road keeps the taper: land beside it no more
+    // than SLOPE levels below, raised where it was.
+    const raise = [...tiles];
+    for (let n = 0; n < raise.length; n++) {
+      const q = raise[n], i = q % W;
+      for (const nq of [i > 0 ? q - 1 : -1, i < W - 1 ? q + 1 : -1, q - W, q + W]) {
+        if (nq < 0 || nq >= N || road[nq] & 16 || isWater(cover[nq]) || toTown[nq] === 0 || level[nq] >= level[q] - SLOPE) continue;
+        level[nq] = level[q] - SLOPE;
+        if (cover[nq] === COVER.field && level[nq] > 2) { cover[nq] = COVER.grass; t.crop[nq] = 0; farms.delete(nq); }
+        raise.push(nq);
+      }
+    }
+    // This road's leads, for the roads after it, if it reaches the edge.
+    const tail = joined ? rest[chain[chain.length - 1].k] : 0;
+    if (how !== "dead end") own.forEach((l, n) => {
+      rest[l.k] = own.length - 1 - n + (joined ? 1 + tail : 0);
+      joinable[l.k] = n > 1 && n < own.length - 1 && square(l.k).every(q => !ramp[q] && !isWater(cover[q]));
+    });
+    // Centre lines for the cars: from the town road's end through every bend.
+    const pts = [start.end, ...chain.map(l => [l.k % W + x0 + half, ((l.k / W) | 0) + y0 + half])];
+    const bends = [pts[0]];
+    for (let n = 1; n < pts.length; n++) {
+      const a = bends[bends.length - 1], b = pts[n], c = pts[n + 1];
+      if (!c || (a[0] === b[0]) !== (b[0] === c[0]) || (a[1] === b[1]) !== (b[1] === c[1])) bends.push(b);
+    }
+    for (let n = 1; n < bends.length; n++) {
+      const [a, b] = [bends[n - 1], bends[n]];
+      roads.push({ i0: Math.min(a[0], b[0]), j0: Math.min(a[1], b[1]), i1: Math.max(a[0], b[0]), j1: Math.max(a[1], b[1]) });
+    }
+    routes.push({ how, tiles, from: start.end });
+  }
+  // Ground filled up under a road may dam a dry hollow: it is filled in to
+  // its rim, as planTerrain fills hollows (a flood from the map's edges, the
+  // town and its river; a bucket per level).
+  const rim = new Int8Array(N).fill(-1), buckets = Array.from({ length: LEVELS }, () => []);
+  for (let k = 0; k < N; k++) {
+    const i = k % W, j = (k / W) | 0;
+    if (i === 0 || j === 0 || i === W - 1 || j === H - 1 || toTown[k] === 0 || t.main[k]) { rim[k] = level[k]; buckets[level[k]].push(k); }
+  }
+  for (let l = 0; l < LEVELS; l++) for (let n = 0; n < buckets[l].length; n++) {
+    const k = buckets[l][n], i = k % W;
+    for (const nk of [i > 0 ? k - 1 : -1, i < W - 1 ? k + 1 : -1, k - W, k + W]) {
+      if (nk < 0 || nk >= N || rim[nk] >= 0) continue;
+      rim[nk] = Math.max(level[nk], l); buckets[rim[nk]].push(nk);
+    }
+  }
+  for (let k = 0; k < N; k++) {
+    if (rim[k] <= level[k] || isWater(cover[k]) || road[k] & 16) continue;
+    level[k] = rim[k];
+    if (cover[k] === COVER.field && level[k] > 2) { cover[k] = COVER.grass; t.crop[k] = 0; farms.delete(k); }
+  }
+  return { road, ramp, roadLevel, along, roads, routes };
 }
 
 // The trees the ground cover grows: two or three a tile in a forest, about
 // one in woods, now and then one in a meadow, each at its own spot on the
-// tile, by position and the world's seed. Pines from PINES up. Back to front.
+// tile, by position and the world's seed; none on a road. Pines from PINES up. Back to front.
 // [i, j, size, seed, pine]
 function coverTrees(t, seed) {
   const trees = [];
   for (let k = 0; k < t.W * t.H; k++) {
+    if (t.road[k] & 16) continue;   // none on a country road
     const c = t.cover[k], i = k % t.W + t.x0, j = ((k / t.W) | 0) + t.y0, h = hash(`${seed} trees ${i}/${j}`);
     const n = c === COVER.forest ? 2 + (h % 2) : c === COVER.woods ? (h % 5 < 3 ? 1 : h % 5 === 3 ? 2 : 0) : c === COVER.grass && t.toTown[k] > 0 && h % 14 === 0 ? 1 : 0;
     const r = rng(h);
@@ -1630,6 +1903,14 @@ function groundZ(i, j) {
   const t = terrain, a = Math.floor(i) - (t?.x0 ?? 0), b = Math.floor(j) - (t?.y0 ?? 0);
   return t && a >= 0 && b >= 0 && a < t.W && b < t.H ? zOfLevel(t.level[b * t.W + a]) : 0;
 }
+// How high a car on a road at (i, j) drives, in pixels: on a country road
+// its surface (up a ramp, over a bridge), elsewhere the ground.
+function roadZ(i, j) {
+  const t = terrain, a = Math.floor(i) - (t?.x0 ?? 0), b = Math.floor(j) - (t?.y0 ?? 0);
+  if (!t || a < 0 || b < 0 || a >= t.W || b >= t.H || !(t.road[b * t.W + a] & 16)) return groundZ(i, j);
+  const k = b * t.W + a;
+  return zOfLevel(t.roadLevel[k]) + rampLift(t.ramp[k], i - Math.floor(i), j - Math.floor(j));
+}
 // What covers the terrain at tile (i, j) (COVER).
 function coverAt(i, j) {
   const t = terrain, a = i - (t?.x0 ?? 0), b = j - (t?.y0 ?? 0);
@@ -1688,12 +1969,14 @@ class GroundPen {
   }
   drawCircle(x, y, r) { return this.drawEllipse(x, y, r, r); }
   // A texture of the same base texture, anchored at (ax, ay) on (x, y).
-  sprite(tex, x, y, ax, ay, scale, tint = 0xffffff) {
+  // `lift(x, y)`, if given, raises each corner by that many pixels (a ramp's tile).
+  sprite(tex, x, y, ax, ay, scale, tint = 0xffffff, lift = null) {
     const f = tex.frame, w = f.width * scale, h = f.height * scale, left = x - ax * w, top = y - ay * h;
     const u0 = f.x / this.base.width, v0 = f.y / this.base.height, u1 = (f.x + f.width) / this.base.width, v1 = (f.y + f.height) / this.base.height;
-    const n = this.xy.length / 2;
-    this.vertex(left, top, u0, v0, tint, 1); this.vertex(left + w, top, u1, v0, tint, 1);
-    this.vertex(left + w, top + h, u1, v1, tint, 1); this.vertex(left, top + h, u0, v1, tint, 1);
+    const n = this.xy.length / 2, up = lift || (() => 0);
+    const corner = (px, py, u, v) => this.vertex(px, py - up(px, py), u, v, tint, 1);
+    corner(left, top, u0, v0); corner(left + w, top, u1, v0);
+    corner(left + w, top + h, u1, v1); corner(left, top + h, u0, v1);
     this.index.push(n, n + 1, n + 2, n, n + 2, n + 3);
   }
   mesh() {
@@ -1814,6 +2097,45 @@ const landColour = (color, z) => shade(color, 1 + 0.012 * z / LEVEL_H);
 // A tile's top, standing z pixels up.
 const tileTop = (i, j, z) => [iso(i, j), iso(i + 1, j), iso(i + 1, j + 1), iso(i, j + 1)].map(([x, y]) => [x, y - z]);
 
+// Country roads (countryRoads). How far a ramp rising towards side r (1
+// north, 2 east, 4 south, 8 west) stands above its tile at (u, v) on it, in
+// pixels; its top; and its two front sides above the tile's own faces, where
+// the rise shows the earth under it.
+const rampLift = (r, u, v) => LEVEL_H * (r === 1 ? 1 - v : r === 2 ? u : r === 4 ? v : r === 8 ? 1 - u : 0);
+const rampTop = (i, j, z, r) => [[0, 0], [1, 0], [1, 1], [0, 1]].map(([u, v]) => { const [x, y] = iso(i + u, j + v); return [x, y - z - rampLift(r, u, v)]; });
+function rampSides(g, i, j, z, r, colors) {
+  const pt = ([u, v], h) => { const [x, y] = iso(i + u, j + v); return [x, y - z - h]; };
+  const face = (a, b, color) => {
+    const la = rampLift(r, ...a), lb = rampLift(r, ...b);
+    if (la || lb) poly(g, color, [pt(a, 0), pt(b, 0), pt(b, lb), pt(a, la)]);
+  };
+  face([0, 1], [1, 1], colors[0]); face([1, 1], [1, 0], colors[1]);
+}
+// The lift a ramp's tile sprite needs at screen point (x, y), the tile standing z up.
+const spriteLift = (i, j, z, r) => {
+  const [ox, oy] = iso(i, j);
+  return (x, y) => {
+    const X = (x - ox) / (TW / 2), Y = (y + z - oy) / (TH / 2);
+    return rampLift(r, (X + Y) / 2, (Y - X) / 2);
+  };
+};
+// Bridges of country roads go into the ground two diagonals after their own
+// tile, once the water just in front of them is down and before higher
+// ground further in front, which hides them.
+function laterBridges(draw) {
+  const pending = [];
+  return {
+    add: (i, j, ...rest) => pending.push([i + j, i, j, ...rest]),
+    upTo: d => { while (pending.length && pending[0][0] <= d - 2) draw(...pending.shift().slice(1)); },
+    rest: () => { for (const p of pending.splice(0)) draw(...p.slice(1)); },
+  };
+}
+// A pier under a deck standing high above its water.
+function pier(g, i, j, zDeck, zWater, color) {
+  if (zDeck - zWater < 8) return;
+  g.dy = -zWater; shadedBox(g, i + 0.5, j + 0.5, 0.1, 0.1, zDeck - zWater, color); g.dy = 0;
+}
+
 // A tile of sea or lake standing z pixels up: the water shallow along the
 // shore, deep far out (`c`: shallows, water, deep and the glint's colour),
 // and on about one tile in two a glint that drifts and fades with a phase of
@@ -1864,16 +2186,43 @@ function drawGround() {
     const snowSides = [0xdfe6ee, 0xc3ccd6];
     const water = { shallows: ART.shallows, water: ART.water, deep: ART.deep, ripple: ART.ripple };
     const tops = { [COVER.grass]: ART.grass, [COVER.forest]: ART.forest, [COVER.woods]: ART.woods };
+    const deckSides = [shade(ART.concrete, 0.72), shade(ART.concrete, 0.6)], parapetSides = [shade(ART.parapet, 0.72), shade(ART.parapet, 0.6)];
+    const bridge = (i, j, k) => (i >= terrain.x0 && j >= terrain.y0 && i < terrain.x0 + terrain.W && j < terrain.y0 + terrain.H) && (terrain.road[k] & 16) && isWater(terrain.cover[k]);
+    // A country road's deck over a river: a pier if it stands high, the
+    // deck's edge, the deck, and a parapet on each side that is not more deck.
+    const decks = laterBridges((i, j, k) => {
+      const zd = zOfLevel(terrain.roadLevel[k]), alongI = terrain.along[k] === 2;
+      pier(pen, i, j, zd, zOfTile(terrain, k), ART.concrete);
+      groundFaces(pen, i, j, zd, 3, 3, deckSides, deckSides);
+      poly(pen, ART.asphalt, tileTop(i, j, zd));
+      const sides = alongI ? [[0, -1, k - terrain.W], [0, 1, k + terrain.W]] : [[-1, 0, k - 1], [1, 0, k + 1]];
+      for (const [di, dj, nk] of sides) {
+        if (bridge(i + di, j + dj, nk)) continue;
+        const a = di + dj < 0 ? 0 : 0.88, box = alongI ? [i, j + a, 1, 0.12] : [i + a, j, 0.12, 1];
+        const [bi, bj, bw, bh] = box, at = (u, v, h) => { const [x, y] = iso(u, v); return [x, y - zd - h]; };
+        poly(pen, parapetSides[0], [at(bi, bj + bh, 5), at(bi + bw, bj + bh, 5), at(bi + bw, bj + bh, 0), at(bi, bj + bh, 0)]);
+        poly(pen, parapetSides[1], [at(bi + bw, bj + bh, 5), at(bi + bw, bj, 5), at(bi + bw, bj, 0), at(bi + bw, bj + bh, 0)]);
+        poly(pen, ART.parapet, [at(bi, bj, 5), at(bi + bw, bj, 5), at(bi + bw, bj + bh, 5), at(bi, bj + bh, 5)]);
+      }
+    });
     eachGroundTile(terrain, (i, j, z, left, right, k) => {
+      decks.upTo(i + j);
       const cover = terrain.cover[k], high = cover === COVER.rock || cover === COVER.snow, f = falls(terrain, k);
       const sides = isWater(cover) ? waterSides : cover === COVER.beach ? sandSides : cover === COVER.rock ? rockSides : cover === COVER.snow ? snowSides : upper;
       groundFaces(pen, i, j, z, left, right, foamed(sides, f), foamed(high ? rockLower : lower, f));
-      if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], water); return; }
+      if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], water); if (terrain.road[k] & 16) decks.add(i, j, k); return; }
+      if (terrain.road[k] & 16) {
+        const r = terrain.ramp[k];
+        if (r) rampSides(pen, i, j, z, r, upper);
+        poly(pen, ART.asphalt, r ? rampTop(i, j, z, r) : tileTop(i, j, z));
+        return;
+      }
       const top = cover === COVER.beach ? ART.sand : cover === COVER.field ? ART.crops[terrain.crop[k]] : cover === COVER.rock ? ART.rock
         : cover === COVER.snow ? ART.snow : landColour(tops[cover], z);
       poly(pen, top, tileTop(i, j, z));
       coverDetails(pen, terrain, k, i, j, z, inGround, ([x, y, size, seed, conifer]) => (conifer ? pine : tree)(pen, x, y, size, seed, true));
     });
+    decks.rest();
     groundLayer.addChild(pen.mesh());
   }
   const g = new PIXI.Graphics();
@@ -2293,15 +2642,29 @@ const KENNEY = {
     // The river's water sinks below the banks, with a wall where a bank lies
     // behind it (1: towards -i, 2: towards -j), not where it flows in from upstream.
     const pen = new GroundPen(TEX.white), water = (i, j) => inRiver(plan.river, i, j) || isWater(coverAt(i, j)), bridges = [];
-    const tile = (name, x, y, tint) => pen.sprite(TEX[name], x, y, 0.5, tileAnchor(name), KS, tint);
+    const tile = (name, x, y, tint, lift) => pen.sprite(TEX[name], x, y, 0.5, tileAnchor(name), KS, tint, lift);
     const drawn = (draw, x, y) => { pen.dx = x; pen.dy = y; draw(); pen.dx = pen.dy = 0; };
+    // A country road's bridge: a pier if it stands high, then as in town.
+    const decks = laterBridges((i, j, k) => {
+      const n = terrain.along[k] === 1 ? 5 : 10, zd = zOfLevel(terrain.roadLevel[k]), [x, y] = iso(i + 0.5, j + 0.5);
+      pier(pen, i, j, zd, zOfTile(terrain, k), KIT.water.wall[0]);
+      drawn(() => deckShadow(pen, n), x, y - zd);
+      tile(KIT.decks[n], x, y - zd);
+      drawn(() => deckRails(pen, n), x, y - zd);
+    });
     if (terrain) eachGroundTile(terrain, (i, j, z, left, right, k) => {
-      const cover = terrain.cover[k], f = falls(terrain, k);
+      decks.upTo(i + j);
+      const cover = terrain.cover[k], f = falls(terrain, k), country = terrain.road[k] & 16;
       const high = cover === COVER.rock || cover === COVER.snow;
       groundFaces(pen, i, j, z, left, right, foamed(isWater(cover) ? KIT.water.side : high ? KIT.rock : KIT.earth, f), foamed(high ? KIT.rock : KIT.earth, f));
       const name = nameAt(i, j), [x, y] = iso(i + 0.5, j + 0.5);
-      if (isWater(cover)) openWater(pen, i, j, z, terrain.depth[k], KIT.open);
-      else if (cover === COVER.beach) tile(KIT.grass, x, y - z, KIT.sandTint);
+      if (isWater(cover)) { openWater(pen, i, j, z, terrain.depth[k], KIT.open); if (country) decks.add(i, j, k); }
+      else if (country) {
+        // A ramp is the straight tile, tilted.
+        const r = terrain.ramp[k];
+        if (r) rampSides(pen, i, j, z, r, KIT.earth);
+        tile(r ? KIT.roads[r & 5 ? 5 : 10] : KIT.roads[terrain.road[k] & 15] || KIT.road, x, y - z, 0xffffff, r ? spriteLift(i, j, z, r) : null);
+      } else if (cover === COVER.beach) tile(KIT.grass, x, y - z, KIT.sandTint);
       else if (name === WATER) {
         drawn(() => kenneyWater(pen, (water(i - 1, j) ? 0 : 1) | (water(i, j - 1) ? 0 : 2), hash(`ripple ${i}/${j}`) % 4), x, y - z);
         if (isRoad(i, j)) bridges.push([i, j]);
@@ -2316,6 +2679,7 @@ const KENNEY = {
         });
       }
     });
+    decks.rest();
     // Bridges on top, once the water in front of them is down: the deck's
     // shadow on the water, the deck, railings along both sides. They stand
     // in the flat town, where no ground in front rises over them.
@@ -2388,7 +2752,7 @@ function setSeed(seed) {
   document.getElementById("seed-note").textContent = worldSeed.kept
     ? `Kept in this browser for ${where}; the same seed always grows the same land.`
     : "This browser keeps no site data here, so every visit is a new world.";
-  if (changed && !planDirty && groundLayer.children.length) { terrain = planTerrain(plan, seed); rebuildGround(); }
+  if (changed && !planDirty && groundLayer.children.length) { terrain = planTerrain(plan, seed); rebuildGround(); makeCars(); }
 }
 seedInput.addEventListener("change", () => {
   const seed = seedInput.value.trim();
@@ -3307,14 +3671,18 @@ function tourBuilding(d, from, wanted) {
 
 // ---------------------------------------------------------------- cars
 
-// Cars drive the roads: along a road to the next junction, then on in a
-// direction picked at random, back only where a road ends.
+// Cars drive the roads, the country roads too: along a road to the next
+// junction, then on in a direction picked at random, back only where a road
+// ends. Up ramps and over bridges at the road's height; out of sight where
+// the ground in front hides the road.
 const cars = [];
+const COUNTRY_CAR = 30;   // tiles of country road per car (a town gets one per 9 tiles of its roads)
+let carHidden = new Set();
 function roadNetwork() {
-  const points = new Map();
+  const points = new Map(), all = [...plan.roads, ...(terrain?.roads || [])];
   const point = (i, j) => points.get(`${i},${j}`) || points.set(`${i},${j}`, { i, j, next: [] }).get(`${i},${j}`);
-  for (const r of plan.roads) { point(r.i0, r.j0); point(r.i1, r.j1); }
-  for (const r of plan.roads) {
+  for (const r of all) { point(r.i0, r.j0); point(r.i1, r.j1); }
+  for (const r of all) {
     const on = [...points.values()].filter(p => p.i >= r.i0 && p.i <= r.i1 && p.j >= r.j0 && p.j <= r.j1).sort((a, b) => a.i - b.i || a.j - b.j);
     for (let k = 1; k < on.length; k++) { on[k - 1].next.push(on[k]); on[k].next.push(on[k - 1]); }
   }
@@ -3325,8 +3693,16 @@ function makeCars() {
   cars.length = 0;
   const colors = [0xd8453a, 0x2f6fb5, 0xf2c14e, 0xf4f4f0, 0x3b8f5a, 0x333a40];
   const points = roadNetwork();
-  const length = plan.roads.reduce((s, r) => s + r.i1 - r.i0 + r.j1 - r.j0, 0);
-  for (let k = 0; points.length && k < Math.max(2, Math.round(length / 9)); k++) {
+  const length = rs => rs.reduce((s, r) => s + r.i1 - r.i0 + r.j1 - r.j0, 0);
+  const count = Math.max(2, Math.round(length(plan.roads) / 9)) + Math.round(length(terrain?.roads || []) / COUNTRY_CAR);
+  // The country road tiles that higher ground in front hides a car on.
+  carHidden = new Set();
+  const t = terrain;
+  if (t) for (let k = 0; k < t.W * t.H; k++) {
+    const i = k % t.W + t.x0, j = ((k / t.W) | 0) + t.y0;
+    if ((t.road[k] & 16) && hiddenBy(t, i, j, 12, 24)) carHidden.add(`${i}/${j}`);
+  }
+  for (let k = 0; points.length && k < count; k++) {
     const color = k % colors.length, g = new PIXI.Container();
     for (const turned of [false, true]) g.addChild(new PIXI.Graphics(geometry(`car:${color}:${turned}`, gg => (car(gg, colors[color], turned), 10)).geometry));
     const from = points[Math.floor(Math.random() * points.length)], to = from.next[Math.floor(Math.random() * from.next.length)];
@@ -3350,8 +3726,9 @@ function moveCars(now) {
     const i = c.from.i + di * c.t - dj * theme.lane, j = c.from.j + dj * c.t + di * theme.lane;
     c.g.children[0].visible = di !== 0; c.g.children[1].visible = di === 0;
     const [x, y] = iso(i, j);
-    c.g.position.set(x, y);
+    c.g.position.set(x, y - roadZ(i, j));
     c.g.zIndex = (i + j) * 10;
+    c.g.visible = !carHidden.has(`${Math.floor(i)}/${Math.floor(j)}`);
   }
 }
 
