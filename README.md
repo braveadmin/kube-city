@@ -22,7 +22,7 @@ grow, burn and rebuild, live.
 
 ## Install
 
-Linux and macOS:
+Linux (macOS builds are paused, see #80):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/braveadmin/kube-city/releases/latest/download/kube-city-installer.sh | sh
@@ -34,7 +34,7 @@ Windows (PowerShell):
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/braveadmin/kube-city/releases/latest/download/kube-city-installer.ps1 | iex"
 ```
 
-Homebrew (macOS and Linux):
+Homebrew (Linux):
 
 ```bash
 brew install braveadmin/tap/kube-city
@@ -52,9 +52,8 @@ ln -s "$(command -v kube-city)" ~/.local/bin/kubectl-city
 Or download an archive for your platform from the
 [releases page](https://github.com/braveadmin/kube-city/releases).
 
-The binaries are not signed. On macOS, if Gatekeeper refuses to open a
-downloaded binary, run `xattr -d com.apple.quarantine kube-city` once
-(Homebrew installs do not need this).
+The binaries are not signed. On macOS, `cargo install kube-city` works
+until macOS builds return (#80).
 
 ## Use
 
