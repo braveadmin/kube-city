@@ -4,7 +4,11 @@
 // 2 tiles apart and quarters 4 tiles apart. Prints a map and the land per
 // building against today's layout. Sizes only, no names.
 //
-//   node art/quarters_sketch.mjs recordings/big-cluster.jsonl [gap] [--live]
+//   node art/quarters_sketch.mjs recordings/big-cluster.jsonl [gap] [--live] [--zone-loners] [--html]
+//
+// --zone-loners puts the namespaces that are on their own into one quarter
+// per zone (2 tiles apart) instead of a quarter each. --html also writes an
+// isometric render to art/out/quarters.html (or quarters-zone-loners.html).
 //
 // Map: a lot (l centre, i industry, u suburb), p courtyard, g park, r road,
 // s sidewalk, : the gap between neighbourhoods, # the belt between quarters,
@@ -13,11 +17,13 @@
 import { readFileSync } from "node:fs";
 
 const args = process.argv.slice(2), live = args.includes("--live");
-const [file, gapArg] = args.filter(a => a !== "--live");
+const html = args.includes("--html"), zoneLoners = args.includes("--zone-loners");
+const [file, gapArg] = args.filter(a => !a.startsWith("--"));
 if (!file) { console.error("usage: node art/quarters_sketch.mjs RECORDING.jsonl [gap] [--live]"); process.exit(2); }
 const gap = Number(gapArg || 1);
 const NEIGHBOURS = 2, BELT = 4;   // decided in #47 (2A)
 
+const RENDER = readFileSync(new URL("quarters_render.html", import.meta.url), "utf8");
 const page = readFileSync(new URL("city.template.html", import.meta.url), "utf8");
 const MARK = "// ---------------------------------------------------------------- ";
 const from = page.indexOf(`${MARK}layout\n`), to = page.indexOf(MARK, from + MARK.length);
@@ -49,7 +55,11 @@ for (let a = 0; a < names.length; a++) for (let b = a + 1; b < names.length; b++
 }
 const byRoot = new Map();
 names.forEach((_, k) => { const r = find(k); if (!byRoot.has(r)) byRoot.set(r, []); byRoot.get(r).push(k); });
-const quarters = [...byRoot.values()];
+const all = [...byRoot.values()], quarters = zoneLoners ? all.filter(q => q.length > 1) : all;
+if (zoneLoners) for (const z of ["industry", "centre", "suburb"]) {
+  const loners = all.filter(q => q.length === 1 && zones[q[0]] === z).flat();
+  if (loners.length) quarters.push(loners);
+}
 
 // A neighbourhood: one namespace laid out as a town of its own.
 function neighbourhood(k) {
@@ -109,10 +119,12 @@ for (const [zp, zx, zy] of city.place) for (const [q, qx, qy] of zp.place) {
     if (i >= 0 && j >= 0 && i < n.w && j < n.h) at.set(`${zx + qx + nx + i}/${zy + qy + ny + j}`, c);
   }
 }
+const rows = [];
 for (let j = 0; j < city.h; j++) {
   let row = "";
   for (let i = 0; i < city.w; i++) { const t = `${i}/${j}`; row += at.get(t) || (qAt.has(t) ? ":" : "#"); }
-  console.log(row);
+  rows.push(row);
+  if (!html) console.log(row);
 }
 
 const buildings = sizes.reduce((s, n) => s + n, 0);
@@ -130,3 +142,12 @@ console.log(`quarters: ${qs.filter(q => q.ks.length > 1).map(q => `${q.ks.length
 console.log(`city ${city.w} × ${city.h}, today ${today.W} × ${today.H}`);
 console.log(`rectangle per building: ${(city.w * city.h / buildings).toFixed(2)} (today ${(today.W * today.H / buildings).toFixed(2)}, ${(city.w * city.h / (today.W * today.H)).toFixed(2)} ×)`);
 console.log(`built land per building (gaps and belts not counted): ${(used / buildings).toFixed(2)} (today ${(todayUsed / buildings).toFixed(2)})`);
+
+if (html) {
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const out = new URL(`out/quarters${zoneLoners ? "-zone-loners" : ""}.html`, import.meta.url);
+  mkdirSync(new URL("out/", import.meta.url), { recursive: true });
+  const title = `#47 sketch: ${zoneLoners ? "loners of a zone as one quarter" : "every loner its own quarter"}, ${(city.w * city.h / (today.W * today.H)).toFixed(2)} × today's land`;
+  writeFileSync(out, RENDER.replace("/*ROWS*/null", JSON.stringify(rows)).replace(/TITLE/g, title));
+  console.log(`wrote ${out.pathname}`);
+}

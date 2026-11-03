@@ -1,0 +1,54 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Quarters sketch</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #8fb36a; overflow: hidden; font: 14px system-ui, sans-serif; }
+  #info { position: fixed; left: 12px; top: 10px; background: #fffd; padding: 8px 12px; border-radius: 6px; }
+  #info span { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin: 0 4px 0 10px; border-radius: 2px; }
+  canvas { display: block; cursor: grab; }
+</style></head>
+<body>
+<div id="info"><b>TITLE</b><br>
+  <span style="background:#c98b4a"></span>industry<span style="background:#e8d9b0"></span>suburb<span style="background:#d9776a"></span>centre
+  <span style="background:#7fb85a"></span>park / courtyard<span style="background:#5aa04a"></span>gap between neighbourhoods
+  <span style="background:#3f7d3a"></span>belt between quarters<span style="background:#555"></span>road<br>
+  drag to move, wheel to zoom</div>
+<canvas id="c"></canvas>
+<script>
+const ROWS = /*ROWS*/null;
+const H = ROWS.length, W = ROWS[0].length, TW = 32, TH = 16;
+const TOP = { s: "#bdbdb5", r: "#555", R: "#444", p: "#7fb85a", g: "#7fb85a", ":": "#5aa04a", "#": "#3f7d3a" };
+const LOT = { i: ["#c98b4a", 2.2], u: ["#e8d9b0", 1.0], l: ["#d9776a", 2.8] };
+const shade = (hex, f) => "#" + [1, 3, 5].map(k => Math.round(parseInt(hex.slice(k, k + 2), 16) * f).toString(16).padStart(2, "0")).join("");
+const hash = (i, j) => { let h = i * 374761393 + j * 668265263; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+const c = document.getElementById("c"), g = c.getContext("2d");
+let zoom = Math.min(innerWidth / ((W + H) * TW / 2), innerHeight / ((W + H) * TH / 2 + 60)) * 0.92, ox = 0, oy = 0;
+function iso(i, j) { return [(i - j) * TW / 2, (i + j) * TH / 2]; }
+function diamond(x, y, col) {
+  g.beginPath(); g.moveTo(x, y); g.lineTo(x + TW / 2, y + TH / 2); g.lineTo(x, y + TH); g.lineTo(x - TW / 2, y + TH / 2); g.closePath();
+  g.fillStyle = col; g.fill();
+}
+function box(x, y, col, h) {
+  const z = h * TH;
+  g.fillStyle = shade(col, 0.7); g.beginPath(); g.moveTo(x - TW / 2 + 3, y + TH / 2); g.lineTo(x, y + TH - 1.5); g.lineTo(x, y + TH - 1.5 - z); g.lineTo(x - TW / 2 + 3, y + TH / 2 - z); g.fill();
+  g.fillStyle = shade(col, 0.85); g.beginPath(); g.moveTo(x + TW / 2 - 3, y + TH / 2); g.lineTo(x, y + TH - 1.5); g.lineTo(x, y + TH - 1.5 - z); g.lineTo(x + TW / 2 - 3, y + TH / 2 - z); g.fill();
+  g.fillStyle = col; g.beginPath(); g.moveTo(x, y + 1.5 - z); g.lineTo(x + TW / 2 - 3, y + TH / 2 - z); g.lineTo(x, y + TH - 1.5 - z); g.lineTo(x - TW / 2 + 3, y + TH / 2 - z); g.fill();
+}
+function tree(x, y) { g.fillStyle = "#2f6a2c"; g.beginPath(); g.arc(x, y + TH / 2 - 6, 5, 0, 7); g.fill(); }
+function draw() {
+  c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio; c.style.width = innerWidth + "px"; c.style.height = innerHeight + "px";
+  g.setTransform(zoom * devicePixelRatio, 0, 0, zoom * devicePixelRatio, (innerWidth / 2 + ox) * devicePixelRatio, (40 + oy) * devicePixelRatio);
+  g.translate((H - W) * TW / 4, 0);
+  for (let s = 0; s < W + H; s++) for (let j = 0; j < H; j++) {
+    const i = s - j; if (i < 0 || i >= W) continue;
+    const t = ROWS[j][i], [x, y] = iso(i, j);
+    if (LOT[t]) { diamond(x, y, "#bdbdb5"); box(x, y, LOT[t][0], LOT[t][1] * (0.7 + 0.6 * hash(i, j))); }
+    else { diamond(x, y, TOP[t] || "#8fb36a"); if ((t === "#" || t === "g") && hash(i, j) < 0.25) tree(x, y); }
+  }
+}
+let drag = null;
+c.onmousedown = e => drag = [e.clientX - ox, e.clientY - oy];
+onmouseup = () => drag = null;
+onmousemove = e => { if (drag) { ox = e.clientX - drag[0]; oy = e.clientY - drag[1]; draw(); } };
+c.onwheel = e => { e.preventDefault(); zoom *= e.deltaY < 0 ? 1.15 : 1 / 1.15; draw(); };
+onresize = draw; draw();
+</script></body></html>
