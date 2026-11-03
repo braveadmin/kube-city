@@ -717,8 +717,9 @@ function blockArea(n, gap) {
 // lines ({ i0, j0, i1, j1, main }, the lanes and bridges included, a bridge
 // with bridge: true); the river's water ({ x, y, w, h }, across the margin
 // too, or null) and the size of the town (W × H tiles, from 0; the margin
-// lies round it).
-function planCity(needs, gap) {
+// lies round it). edge false leaves the edge as cut (no raggedEdge): a
+// neighbourhood's edge is decided by the town round it (planTown).
+function planCity(needs, gap, edge = true) {
   if (!needs.length) return { districts: [], parks: [], roads: [], river: null, W: 0, H: 0 };
   // Each group of districts splits into two halves of about equal weight,
   // biggest district first into the lighter half, so big and small districts
@@ -928,14 +929,17 @@ function planCity(needs, gap) {
     }
   }
   delete best.crossroads;
-  raggedEdge(best, needs, gap);
+  if (edge) raggedEdge(best, needs, gap);
   if (best.river) bridges(best, gap);
-  for (const d of best.districts) {
-    const x = Math.min(...d.blocks.map(b => b.x)), y = Math.min(...d.blocks.map(b => b.y));
-    const w = Math.max(...d.blocks.map(b => b.x + b.w)) - x, h = Math.max(...d.blocks.map(b => b.y + b.h)) - y;
-    Object.assign(d, { x, y, w, h, cells: lotOrder(d.blocks) });
-  }
+  for (const d of best.districts) frameDistrict(d);
   return best;
+}
+
+// A district's rectangle round its blocks and its lots in order.
+function frameDistrict(d) {
+  const x = Math.min(...d.blocks.map(b => b.x)), y = Math.min(...d.blocks.map(b => b.y));
+  const w = Math.max(...d.blocks.map(b => b.x + b.w)) - x, h = Math.max(...d.blocks.map(b => b.y + b.h)) - y;
+  return Object.assign(d, { x, y, w, h, cells: lotOrder(d.blocks) });
 }
 
 // The town has no ring road: it thins out into the grass round it. A block
@@ -944,12 +948,17 @@ function planCity(needs, gap) {
 // pocket park on the edge goes back to grass, roads that ran out to the edge
 // stop where the land beside them ends, and main roads run on across the
 // margin. A town without roads gets a country road along its front.
-function raggedEdge(city, needs, gap) {
+// In a town of neighbourhoods (planTown) `town` says which sides of the
+// neighbourhood face open country ({ north, west, south, east }) and which
+// road ends stay as they are (keep(road, end), end 0 or 1: they meet a town
+// road); there is no country road, and only open sides thin out.
+function raggedEdge(city, needs, gap, town) {
   const { W, H } = city, half = gap / 2;
+  const open = side => !town || town[side];
   city.districts.forEach((d, k) => d.blocks.forEach((b, at) => {
     for (const side of ["north", "west", "south", "east"]) {
       const along = side === "north" || side === "south";
-      if (!(side === "north" ? b.y === 0 : side === "west" ? b.x === 0 : side === "south" ? b.y + b.h === H : b.x + b.w === W)) continue;
+      if (!open(side) || !(side === "north" ? b.y === 0 : side === "west" ? b.x === 0 : side === "south" ? b.y + b.h === H : b.x + b.w === W)) continue;
       const across = (along ? b.w : b.h) - 2, deep = (along ? b.h : b.w) - 2;
       const most = deep - Math.max(2, Math.ceil(b.n / across));
       if (most <= 0) continue;
@@ -958,14 +967,14 @@ function raggedEdge(city, needs, gap) {
       else if (side === "west") { b.x += rows; b.w -= rows; } else b.w -= rows;
     }
   }));
-  city.parks = city.parks.filter(p => p.x > 0 && p.y > 0 && p.x + p.w < W && p.y + p.h < H);
+  city.parks = city.parks.filter(p => !(open("west") && p.x === 0) && !(open("north") && p.y === 0) && !(open("east") && p.x + p.w === W) && !(open("south") && p.y + p.h === H));
   // The land beside a road: blocks and parks whose side runs along it.
   const land = [...city.districts.flatMap(d => d.blocks), ...city.parks];
   const roads = city.roads;
   city.roads = roads.flatMap(r => {
     const down = r.i0 === r.i1, c = down ? r.i0 : r.j0;
     const [lo0, hi0] = down ? [r.j0, r.j1] : [r.i0, r.i1], far = down ? H : W;
-    const freeLo = lo0 === -half, freeHi = hi0 === far + half;
+    const freeLo = lo0 === -half && !town?.keep(r, 0), freeHi = hi0 === far + half && !town?.keep(r, 1);
     if (!freeLo && !freeHi) return [r];
     let lo = lo0, hi = hi0;
     if (r.main) {
@@ -991,7 +1000,7 @@ function raggedEdge(city, needs, gap) {
     }
     return [down ? { ...r, j0: lo, j1: hi } : { ...r, i0: lo, i1: hi }];
   });
-  if (!city.roads.length) {
+  if (!city.roads.length && !town) {
     // Along the longer of the two sides that face the viewer.
     city.roads.push(W >= H
       ? { i0: -MARGIN + half, j0: H + half, i1: W + MARGIN - half, j1: H + half, main: false }
@@ -1064,6 +1073,392 @@ function lotOrder(blocks) {
   });
   lots.sort((a, b) => a.t - b.t || a.k - b.k || a.at - b.at);
   return lots.map(l => [l.i, l.j]);
+}
+
+// A town of neighbourhoods (#47). Namespaces that share at least half of
+// each one's workloads are related; the groups they link are quarters.
+// Every namespace is a neighbourhood, laid out on its own by planCity();
+// neighbourhoods of a quarter stand NEIGHBOURS tiles apart, quarters BELT
+// tiles. The river runs straight between the two halves of the town, a bank
+// road either side. Roads to every neighbourhood are found through the gaps
+// (the cheapest path from the roads laid so far to where a neighbourhood's
+// lanes end, or to its side when it has none); roads between quarters are
+// main roads. What is left of the gaps is park.
+//
+// The town stays put: `was` (the `placed` of the last plan) keeps every
+// neighbourhood where it stood; a neighbourhood that grew keeps a corner if
+// it can, and a new one goes on free land on its quarter's side of the river,
+// near its quarter. Only when that takes more than REPACK times the land of a
+// fresh pack does the town pack again.
+
+const NEIGHBOURS = 2;     // tiles between the neighbourhoods of a quarter
+const BELT = 4;           // tiles between quarters
+const BEND = 3;           // a turn costs a town road as much as this many tiles
+const BESIDE = 3;         // and a step beside another road this many more
+const REPACK = 1.3;       // the town packs again when keeping everything in place takes this many times a fresh pack's land
+const ZONE_ORDER = { industry: 0, centre: 1, suburb: 2 };
+
+// Per namespace its quarter: the lowest namespace index in it. sets: per
+// namespace its workloads (any ids, the same id for the same workload).
+function quartersOf(sets) {
+  const top = sets.map((_, k) => k), find = k => (top[k] === k ? k : (top[k] = find(top[k])));
+  const s = sets.map(x => new Set(x));
+  for (let a = 0; a < s.length; a++) for (let b = a + 1; b < s.length; b++) {
+    const [small, big] = s[a].size <= s[b].size ? [s[a], s[b]] : [s[b], s[a]];
+    if (!small.size || 2 * small.size < big.size) continue;
+    let shared = 0;
+    for (const w of small) if (big.has(w)) shared++;
+    if (2 * shared >= big.size) { const [x, y] = [find(a), find(b)]; if (x !== y) top[Math.max(x, y)] = Math.min(x, y); }
+  }
+  return sets.map((_, k) => find(k));
+}
+
+// Land, made dearer the less square it is.
+const squarish = (w, h) => w * h * Math.max(1, Math.max(w / h, h / w) / 2) ** 2;
+
+// Rectangles ({ w, h }) packed bottom-left on a skyline, in the order key
+// gives and biggest first, for every width from the widest up; the squarest
+// small result wins (score says what is small). space is kept to the right
+// of and below each one.
+function packRects(items, space, key = () => 0, score = squarish) {
+  const order = [...items].sort((a, b) => key(a) - key(b) || b.h * b.w - a.h * a.w);
+  const minW = Math.max(...items.map(r => r.w)), total = items.reduce((s, r) => s + (r.w + space) * (r.h + space), 0);
+  let best = null;
+  for (let W = minW; W <= Math.max(minW, Math.ceil(2 * Math.sqrt(total))) + space; W++) {
+    const sky = new Array(W + space).fill(0), place = [];
+    for (const r of order) {
+      let bx = 0, by = Infinity;
+      for (let x = 0; x + r.w <= W; x++) {
+        let y = 0;
+        for (let i = x; i < x + r.w + space && i < sky.length; i++) y = Math.max(y, sky[i]);
+        if (y < by) { by = y; bx = x; }
+      }
+      for (let i = bx; i < bx + r.w + space && i < sky.length; i++) sky[i] = by + r.h + space;
+      place.push([r, bx, by]);
+    }
+    const w = Math.max(...place.map(([r, x]) => x + r.w)), h = Math.max(...place.map(([r, , y]) => y + r.h));
+    const cost = score(w, h);
+    if (!best || cost < best.cost) best = { w, h, place, cost };
+  }
+  return best;
+}
+
+// needs as planCity's, each with wl: its workloads (see quartersOf). was:
+// the last plan's `placed`. Returns what planCity does, plus quarters
+// ([{ q, hoods: [namespace index] }]), placed (keep it for the next plan) and
+// shift: how far everything moved ([di, dj]) since `was`, or null when the
+// town was packed afresh.
+function planTown(needs, gap, was) {
+  if (needs.length < 2) return { ...planCity(needs, gap), quarters: needs.map((_, k) => ({ q: k, hoods: [k] })), placed: null, shift: [0, 0] };
+  const half = gap / 2, quarter = quartersOf(needs.map(d => d.wl || []));
+  const hoods = needs.map((d, k) => {
+    const c = planCity([d], gap, false);
+    return { k, name: d.name, q: quarter[k], zone: ZONE_ORDER[d.zone || "centre"], w: c.W, h: c.H, blocks: c.districts[0].blocks, parks: c.parks, lanes: c.roads };
+  });
+  const band = 2 + 2 * gap + RIVER;   // grass, bank road, water, bank road, grass
+  const fresh = freshTown(hoods, band);
+  let placed = was && was.gap === gap && keepTown(hoods, band, was, fresh.W * fresh.H * REPACK);
+  if (!placed) placed = fresh;
+  const { down, bandAt } = placed;
+  hoods.forEach((h, k) => Object.assign(h, placed.pos[k]));
+
+  // The search grid: the town and P tiles round it.
+  const P = gap + 1;
+  let tw = Math.max(...hoods.map(h => h.x + h.w)), th = Math.max(...hoods.map(h => h.y + h.h));
+  if (down) tw = Math.max(tw, bandAt + band); else th = Math.max(th, bandAt + band);
+  const GW = tw + 2 * P, GH = th + 2 * P, GN = GW * GH;
+  const g = (i, j) => (j + P) * GW + (i + P);
+  const blocked = new Uint8Array(GN), roadAt = new Uint8Array(GN);
+  hoods.forEach(h => { for (let j = h.y; j < h.y + h.h; j++) for (let i = h.x; i < h.x + h.w; i++) blocked[g(i, j)] = 1; });
+  const water0 = bandAt + 1 + gap;
+  for (let a = 0; a < (down ? GH : GW); a++) for (let b = water0; b < water0 + RIVER; b++) blocked[down ? a * GW + b + P : (b + P) * GW + a] = 2;
+  // A square: the s × s tiles from its back corner (i, j), kept at the grid
+  // index of (i, j). open: a road may run there; its step costs 1, 3 outside
+  // the town, BESIDE more beside another road (near).
+  const open = new Uint8Array(GN), near = new Uint8Array(GN);
+  for (let j = -P; j + gap <= th + P; j++) for (let i = -P; i + gap <= tw + P; i++) {
+    let ok = 1;
+    for (let dj = 0; dj < gap && ok; dj++) for (let di = 0; di < gap; di++) if (blocked[g(i + di, j + dj)]) { ok = 0; break; }
+    open[g(i, j)] = ok;
+  }
+  const fits = (i, j) => i >= -P && j >= -P && i < tw + P && j < th + P && open[g(i, j)] === 1;
+  // Squares on a road laid so far, with the quarter it was laid for (-1 the river's banks).
+  const net = new Int32Array(GN).fill(-2), paved = new Uint8Array(GN);
+  const lay = (i, j, q, road = true) => {
+    if (net[g(i, j)] === -2) net[g(i, j)] = q;
+    if (road) { paved[g(i, j)] = 1; for (let dj = 0; dj < gap; dj++) for (let di = 0; di < gap; di++) roadAt[g(i + di, j + dj)] = 1; }
+    for (let dj = 1 - gap; dj < gap; dj++) for (let di = 1 - gap; di < gap; di++) if (i + di >= -P && j + dj >= -P && i + di < tw + P && j + dj < th + P) near[g(i + di, j + dj)] = 1;
+  };
+  for (const bank of [water0 - gap, water0 + RIVER]) for (let a = -P; a <= (down ? th : tw) + P - gap; a++) down ? lay(bank, a, -1) : lay(a, bank, -1);
+  // Doors: where a neighbourhood's lanes end at its edge, or along its sides.
+  for (const h of hoods) {
+    h.doors = [];
+    for (const r of h.lanes) [[r.i0, r.j0], [r.i1, r.j1]].forEach(([i, j], end) => {
+      if (i === -half || j === -half || i === h.w + half || j === h.h + half) h.doors.push({ i: h.x + i - half, j: h.y + j - half, r, end });
+    });
+    if (!h.lanes.length) {
+      for (let u = 0; u + gap <= h.w; u++) h.doors.push({ i: h.x + u, j: h.y - gap }, { i: h.x + u, j: h.y + h.h });
+      for (let v = 0; v + gap <= h.h; v++) h.doors.push({ i: h.x - gap, j: h.y + v }, { i: h.x + h.w, j: h.y + v });
+    }
+    h.doors = h.doors.filter(d => fits(d.i, d.j));
+  }
+  // Roads to the neighbourhoods, biggest first, each from the roads laid so far.
+  const roads = [], doorOf = new Int32Array(GN).fill(-1);
+  hoods.forEach((h, n) => { for (const d of h.doors) if (doorOf[g(d.i, d.j)] < 0) doorOf[g(d.i, d.j)] = n; });
+  // A linked neighbourhood's lanes carry the network on to its other doors.
+  const linked = new Set();
+  const link = h => { linked.add(h); for (const d of h.doors) if (d.r) lay(d.i, d.j, h.q, false); };
+  const spent = new Float64Array(GN * 4), back = new Int32Array(GN * 4);
+  for (;;) {
+    // A door on the network already (a road, or another neighbourhood's
+    // lane ending on the same square) links the neighbourhood there.
+    for (const h of hoods) {
+      const d = linked.has(h) ? null : h.doors.find(d => net[g(d.i, d.j)] !== -2);
+      if (d) { lay(d.i, d.j, h.q); link(h); }
+    }
+    if (linked.size === hoods.length) break;
+    spent.fill(Infinity); back.fill(-1);
+    const heap = new MinHeap();
+    for (let k = 0; k < GN; k++) if (net[k] !== -2) for (let d = 0; d < 4; d++) { spent[k * 4 + d] = 0; heap.push(0, k * 4 + d); }
+    let found = -1;
+    while (heap.size) {
+      const [c, s] = heap.pop();
+      if (c > spent[s]) continue;
+      const k = s >> 2;
+      if (doorOf[k] >= 0 && !linked.has(hoods[doorOf[k]])) { found = s; break; }
+      const i = k % GW - P, j = Math.floor(k / GW) - P;
+      for (let d = 0; d < 4; d++) {
+        const ni = i + DIRS4[d][0], nj = j + DIRS4[d][1];
+        if (!fits(ni, nj)) continue;
+        const nk = g(ni, nj);
+        if (net[nk] !== -2) continue;
+        const out = ni < 0 || nj < 0 || ni + gap > tw || nj + gap > th;
+        const cost = c + 1 + (d !== (s & 3) && net[k] === -2 ? BEND : 0) + (near[nk] ? BESIDE : 0) + (out ? 2 : 0);
+        if (cost < spent[nk * 4 + d]) { spent[nk * 4 + d] = cost; back[nk * 4 + d] = s; heap.push(cost, nk * 4 + d); }
+      }
+    }
+    if (found < 0) break;   // nothing left to reach (should not happen: the gaps join up)
+    const path = [];
+    for (let s = found; s >= 0; s = back[s]) path.push(s >> 2);
+    path.reverse();
+    const h = hoods[doorOf[found >> 2]], from = net[path[0]], main = from !== h.q;
+    const at = k => [k % GW - P + half, Math.floor(k / GW) - P + half];
+    for (let a = 0; a + 1 < path.length;) {
+      let b = a + 1;
+      const step = path[b] - path[a];
+      while (b + 1 < path.length && path[b + 1] - path[b] === step) b++;
+      const [p, q] = [at(path[a]), at(path[b])];
+      roads.push({ i0: Math.min(p[0], q[0]), j0: Math.min(p[1], q[1]), i1: Math.max(p[0], q[0]), j1: Math.max(p[1], q[1]), main });
+      a = b;
+    }
+    for (const k of path) lay(k % GW - P, Math.floor(k / GW) - P, h.q);
+    link(h);
+  }
+
+  // Each neighbourhood thins out on the sides that face open country; lanes
+  // that meet no town road stop where the land beside them does.
+  const districts = [], parks = [];
+  for (const h of hoods) {
+    const clear = (x0, y0, x1, y1) => {
+      for (let j = Math.max(y0, -P); j < Math.min(y1, th + P); j++) for (let i = Math.max(x0, -P); i < Math.min(x1, tw + P); i++)
+        if (blocked[g(i, j)] || roadAt[g(i, j)]) return false;
+      return true;
+    };
+    const { x, y, w, h: hh } = h;
+    const sides = {
+      north: clear(x, y - BELT, x + w, y), south: clear(x, y + hh, x + w, y + hh + BELT),
+      west: clear(x - BELT, y, x, y + hh), east: clear(x + w, y, x + w + BELT, y + hh),
+    };
+    const met = new Set(h.doors.filter(d => d.r && paved[g(d.i, d.j)]).map(d => `${h.lanes.indexOf(d.r)} ${d.end}`));
+    const city = { districts: [{ blocks: h.blocks }], parks: h.parks, roads: h.lanes, W: w, H: hh };
+    raggedEdge(city, [needs[h.k]], gap, { ...sides, keep: (r, end) => met.has(`${h.lanes.indexOf(r)} ${end}`) });
+    const d = { blocks: city.districts[0].blocks.map(b => ({ ...b, x: b.x + x, y: b.y + y })) };
+    districts.push(d);
+    for (const p of city.parks) parks.push({ ...p, x: p.x + x, y: p.y + y });
+    for (const r of city.roads) roads.push({ ...r, i0: r.i0 + x, i1: r.i1 + x, j0: r.j0 + y, j1: r.j1 + y });
+  }
+
+  // The town's frame: from its first tile; roads may have gone round the outside.
+  const tiles = roadTiles({ roads, gap });
+  let x0 = 0, y0 = 0, W = tw, H = th;
+  for (const t of tiles.keys()) {
+    const [i, j] = t.split("/").map(Number);
+    x0 = Math.min(x0, i); y0 = Math.min(y0, j); W = Math.max(W, i + 1); H = Math.max(H, j + 1);
+  }
+  const dx = -x0, dy = -y0;
+  W += dx; H += dy;
+  const move = o => Object.assign(o, { x: o.x + dx, y: o.y + dy });
+  for (const d of districts) { d.blocks.forEach(move); frameDistrict(d); }
+  parks.forEach(move);
+  for (const r of roads) { r.i0 += dx; r.i1 += dx; r.j0 += dy; r.j1 += dy; }
+  const at = down ? bandAt + dx : bandAt + dy, wet = at + 1 + gap;
+  // The river and its bank roads, on across the margin.
+  const river = down ? { x: wet, y: -MARGIN, w: RIVER, h: H + 2 * MARGIN } : { x: -MARGIN, y: wet, w: W + 2 * MARGIN, h: RIVER };
+  for (const c of [wet - half, wet + RIVER + half])
+    roads.push(down ? { i0: c, j0: -MARGIN + half, i1: c, j1: H + MARGIN - half, main: true } : { i0: -MARGIN + half, j0: c, i1: W + MARGIN - half, j1: c, main: true });
+  const town = { districts, parks, roads, river, W, H };
+  bridges(town, gap);
+
+  // Park on what is left of the gaps: a tile with town on both sides, within a belt.
+  const solid = new Uint8Array(W * H);
+  const fill = (r, v) => { for (let j = Math.max(0, r.y); j < Math.min(H, r.y + r.h); j++) for (let i = Math.max(0, r.x); i < Math.min(W, r.x + r.w); i++) solid[j * W + i] = v; };
+  for (const d of districts) d.blocks.forEach(b => fill(b, 1));
+  parks.forEach(p => fill(p, 1));
+  fill(river, 1);
+  for (const t of roadTiles({ roads, gap }).keys()) { const [i, j] = t.split("/").map(Number); if (i >= 0 && j >= 0 && i < W && j < H) solid[j * W + i] = 1; }
+  const green = new Uint8Array(W * H);
+  for (const [n, m, k] of [[H, W, (a, b) => a * W + b], [W, H, (a, b) => b * W + a]])
+    for (let a = 0; a < n; a++) {
+      let last = -1;
+      for (let b = 0; b < m; b++) {
+        if (!solid[k(a, b)]) continue;
+        if (last >= 0 && b - last - 1 <= BELT) for (let c = last + 1; c < b; c++) green[k(a, c)] = 1;
+        last = b;
+      }
+    }
+  // As rectangles: runs along each row, joined with the same run in the row above.
+  const going = new Map();
+  for (let j = 0; j <= H; j++) {
+    const runs = new Map();
+    for (let i = 0; j < H && i < W; i++) {
+      if (!green[j * W + i]) continue;
+      let e = i;
+      while (e + 1 < W && green[j * W + e + 1]) e++;
+      runs.set(`${i},${e}`, going.get(`${i},${e}`) || { x: i, y: j, w: e - i + 1, h: 0 });
+      i = e;
+    }
+    for (const [key, p] of going) if (!runs.has(key)) parks.push(p);
+    for (const p of runs.values()) p.h++;
+    going.clear();
+    for (const [key, p] of runs) going.set(key, p);
+  }
+
+  // Quarters, and where everything stands for the next plan.
+  const quarters = [];
+  hoods.forEach((h, k) => { let qq = quarters.find(q => q.q === h.q); if (!qq) quarters.push(qq = { q: h.q, hoods: [] }); qq.hoods.push(k); });
+  const pos = hoods.map(h => ({ name: needs[h.k].name, x: h.x + dx, y: h.y + dy, w: h.w, h: h.h, q: h.q }));
+  return { ...town, quarters, placed: { gap, down, bandAt: at, pos: new Map(pos.map(p => [p.name, p])) }, shift: placed === fresh ? null : [dx, dy] };
+}
+const DIRS4 = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+
+// A binary heap of [cost, value], cheapest first.
+class MinHeap {
+  constructor() { this.c = []; this.v = []; }
+  get size() { return this.c.length; }
+  push(c, v) {
+    const C = this.c, V = this.v;
+    let k = C.length;
+    C.push(c); V.push(v);
+    while (k > 0) { const p = (k - 1) >> 1; if (C[p] <= c) break; C[k] = C[p]; V[k] = V[p]; k = p; }
+    C[k] = c; V[k] = v;
+  }
+  pop() {
+    const C = this.c, V = this.v, top = [C[0], V[0]], c = C.pop(), v = V.pop();
+    if (C.length) {
+      let k = 0;
+      for (;;) {
+        let m = 2 * k + 1;
+        if (m >= C.length) break;
+        if (m + 1 < C.length && C[m + 1] < C[m]) m++;
+        if (C[m] >= c) break;
+        C[k] = C[m]; V[k] = V[m]; k = m;
+      }
+      C[k] = c; V[k] = v;
+    }
+    return top;
+  }
+}
+
+// The first pack: each quarter's neighbourhoods packed, the quarters in two
+// halves of about equal land (biggest first into the lighter one), packed in
+// zone order, either side of the river: side by side or one above the other,
+// whichever is squarer. A town of one quarter splits that quarter.
+function freshTown(hoods, band) {
+  const byQ = new Map();
+  for (const h of hoods) { if (!byQ.has(h.q)) byQ.set(h.q, []); byQ.get(h.q).push(h); }
+  const area = hs => hs.reduce((s, h) => s + h.w * h.h, 0);
+  let groups = [...byQ.values()];
+  if (groups.length === 1) {
+    const halves = [[], []];
+    for (const h of [...groups[0]].sort((a, b) => b.w * b.h - a.w * a.h || a.k - b.k)) halves[area(halves[0]) <= area(halves[1]) ? 0 : 1].push(h);
+    groups = halves;
+  }
+  const sides = [[], []];
+  for (const grp of groups.sort((a, b) => area(b) - area(a) || a[0].k - b[0].k)) sides[area(sides[0].flat()) <= area(sides[1].flat()) ? 0 : 1].push(grp);
+  // A side: each zone's quarters packed together, then the zones, biggest
+  // first. The second side is packed to suit the first: the town is what
+  // should come out square.
+  const unitsOf = side => side.map(hs => ({ hs, zone: Math.min(...hs.map(h => h.zone)), ...packRects(hs, NEIGHBOURS) }));
+  const byZone = u => u.zone;
+  const a = packRects(unitsOf(sides[0]), BELT, byZone), bu = unitsOf(sides[1]);
+  let best = null;
+  for (const down of [true, false]) {
+    const size = (w, h) => down ? [a.w + band + w, Math.max(a.h, h)] : [Math.max(a.w, w), a.h + band + h];
+    const b = packRects(bu, BELT, byZone, (w, h) => squarish(...size(w, h)));
+    const [W, H] = size(b.w, b.h), cost = squarish(W, H);
+    if (!best || cost < best.cost) best = { cost, down, bandAt: down ? a.w : a.h, W, H, packed: [a, b] };
+  }
+  const packed = best.packed;
+  const pos = [];
+  packed.forEach((side, s) => {
+    const ox = best.down && s ? best.bandAt + band : 0, oy = !best.down && s ? best.bandAt + band : 0;
+    for (const [u, ux, uy] of side.place) for (const [h, hx, hy] of u.place) pos[h.k] = { x: ox + ux + hx, y: oy + uy + hy };
+  });
+  return { down: best.down, bandAt: best.bandAt, pos, W: best.W, H: best.H };
+}
+
+// Every neighbourhood where `was` had it, if it still fits there (one that
+// grew keeps one of its corners if it can); the rest on free land: on their
+// quarter's side of the river (a new quarter: the side with less land), as
+// near their quarter as they can without the town growing much. null when
+// that takes more than `most` tiles of land.
+function keepTown(hoods, band, was, most) {
+  const { down, bandAt } = was, placed = [];
+  const sideOf = r => ((down ? r.x : r.y) < bandAt ? 0 : 1);
+  const free = (h, x, y, side) => {
+    if (x < 0 || y < 0) return false;
+    if (down ? x < bandAt + band && x + h.w > bandAt : y < bandAt + band && y + h.h > bandAt) return false;
+    if (side !== undefined && sideOf({ x, y }) !== side) return false;
+    return placed.every(r => { const s = r.q === h.q ? NEIGHBOURS : BELT; return x >= r.x + r.w + s || r.x >= x + h.w + s || y >= r.y + r.h + s || r.y >= y + h.h + s; });
+  };
+  const put = (h, x, y) => { placed.push({ k: h.k, q: h.q, x, y, w: h.w, h: h.h }); };
+  const bySize = (a, b) => b.w * b.h - a.w * a.h || a.k - b.k;
+  // Those of the same size first: they fit where they were.
+  const left = [], same = h => { const o = was.pos.get(h.name); return o && o.w === h.w && o.h === h.h; };
+  for (const h of [...hoods].sort((a, b) => same(b) - same(a) || bySize(a, b))) {
+    const o = was.pos.get(h.name);
+    if (!o) { left.push(h); continue; }
+    const spot = [[o.x, o.y], [o.x + o.w - h.w, o.y], [o.x, o.y + o.h - h.h], [o.x + o.w - h.w, o.y + o.h - h.h]].find(([x, y]) => free(h, x, y));
+    if (spot) put(h, ...spot); else left.push(h);
+  }
+  for (const h of left) {
+    const mates = placed.filter(r => r.q === h.q);
+    const sideLand = [0, 1].map(s => placed.filter(r => sideOf(r) === s).reduce((n, r) => n + r.w * r.h, 0));
+    const side = mates.length ? (mates.filter(r => sideOf(r) === 1).length * 2 > mates.length ? 1 : 0) : (sideLand[0] <= sideLand[1] ? 0 : 1);
+    const cx = mates.length ? mates.reduce((s, r) => s + r.x + r.w / 2, 0) / mates.length : 0;
+    const cy = mates.length ? mates.reduce((s, r) => s + r.y + r.h / 2, 0) / mates.length : 0;
+    const extent = rs => [Math.max(down ? bandAt + band : 0, ...rs.map(r => r.x + r.w)), Math.max(down ? 0 : bandAt + band, ...rs.map(r => r.y + r.h))];
+    const [W0, H0] = extent(placed);
+    const xs = new Set([0, down ? bandAt + band : 0, down ? bandAt - h.w : 0]), ys = new Set([0, down ? 0 : bandAt + band, down ? 0 : bandAt - h.h]);
+    for (const r of placed) {
+      const s = r.q === h.q ? NEIGHBOURS : BELT;
+      xs.add(r.x + r.w + s); xs.add(r.x - h.w - s); xs.add(r.x); ys.add(r.y + r.h + s); ys.add(r.y - h.h - s); ys.add(r.y);
+    }
+    let best = null;
+    for (const x of xs) for (const y of ys) {
+      if (!free(h, x, y, side)) continue;
+      const W1 = Math.max(W0, x + h.w), H1 = Math.max(H0, y + h.h);
+      const cost = squarish(W1, H1) - squarish(W0, H0) + (mates.length ? 4 * Math.hypot(x + h.w / 2 - cx, y + h.h / 2 - cy) : 0);
+      if (!best || cost < best.cost) best = { cost, x, y };
+    }
+    if (!best) return null;
+    put(h, best.x, best.y);
+  }
+  const [W, H] = (rs => [Math.max(down ? bandAt + band : 0, ...rs.map(r => r.x + r.w)), Math.max(down ? 0 : bandAt + band, ...rs.map(r => r.y + r.h))])(placed);
+  if (W * H > most) return null;
+  const pos = [];
+  for (const r of placed) pos[r.k] = { x: r.x, y: r.y };
+  return { down, bandAt, pos, W, H };
 }
 
 // Every road tile, key "i/j", with whether it belongs to a main road. Roads
@@ -2004,12 +2399,18 @@ function registerBatch(events) {
 }
 
 // A namespace's zone is looked at again only when the city re-packs, so a
-// DaemonSet coming along does not move a district on its own.
+// DaemonSet coming along does not move a district on its own. Each plan
+// keeps the neighbourhoods where the last one put them (planTown's `was`).
+let townPlaced = null;
 function planDistricts() {
-  const needs = DATA.ns.map((name, idx) => ({ name, n: lotsFor((registry[idx] || new Map()).size, SPARE), zone: zoneOf(name, daemons.has(idx)) }));
-  const city = planCity(needs, theme.gap);
+  const needs = DATA.ns.map((name, idx) => {
+    const lots = registry[idx] || new Map();
+    return { name, n: lotsFor(lots.size, SPARE), zone: zoneOf(name, daemons.has(idx)), wl: [...lots.keys()] };
+  });
+  const city = planTown(needs, theme.gap, townPlaced);
+  townPlaced = city.placed;
   const districts = DATA.ns.map((name, idx) => ({ idx, name, zone: needs[idx].zone, ...city.districts[idx], lots: registry[idx] || new Map(), stats: null, health: "ok" }));
-  return { districts, parks: city.parks, roads: city.roads, river: city.river, W: city.W, H: city.H, gap: theme.gap };
+  return { districts, parks: city.parks, roads: city.roads, river: city.river, W: city.W, H: city.H, gap: theme.gap, quarters: city.quarters, shift: city.shift };
 }
 
 
@@ -2991,6 +3392,11 @@ document.getElementById("new-world").addEventListener("click", () => { if (world
 function replan() {
   planDirty = false;
   Object.assign(plan, planDistricts());
+  // The town kept its places but its first tile moved: the camera moves with it.
+  if (plan.shift && (plan.shift[0] || plan.shift[1])) {
+    const [dx, dy] = iso(...plan.shift);
+    cam.fly = null; cam.x += dx; cam.y += dy;
+  }
   terrain = planTerrain(plan, worldSeed.seed, currentStyle());
   world.districts = plan.districts;
   bounds = computeBounds();

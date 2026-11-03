@@ -569,6 +569,55 @@ structure to stay readable.
 Order: #33, #34, #35, #37 first; the terrain (#38–#46) and neighbourhoods
 (#47–#50) are planned again once those are in and the owner has seen them.
 
+Decided for #47 (owner, 2026-11-03): related means sharing half of each
+namespace's workloads (1B); 2 tiles between neighbourhoods, 4 between
+quarters (2A); every namespace on its own is its own quarter (3A, kept
+after PR #85's sketch at 1.53 × today's land); one river between two parts
+of the town, kept when the city grows (4A).
+
+Built (#47, layout, 2026-11-03): `planTown()` after `planCity()` in the
+page's layout section, with `quartersOf()`, `freshTown()` and `keepTown()`;
+`art/layout_sketch.mjs` prints it (`--grow` adds the namespaces one at a
+time).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Neighbourhood | Each namespace laid out on its own by `planCity()` (blocks, lanes, courtyards as #33–#35), without its ragged edge; the town decides that | One namespace's layout no longer depends on the others, so it can stay put |
+| First pack | Each quarter's neighbourhoods packed on a skyline (`packRects`, 2 tiles apart), the quarters split into two halves of about equal land, each half packed in zone order (4 tiles apart), the two halves either side of the river, side by side or one above the other; the second half is packed to make the town squarest | The sketch's packing; packing zones as separate blocks first made the halves' heights differ (1.77 ×) |
+| Shape | Land counts as more the further the town is from square, but only past twice as long as wide | A square town took 1.77 ×; strips took 1.40 × at 15 × 247 |
+| River | A straight band across the whole town between the two halves: a tile of grass, bank road, 2 tiles of water, bank road, grass; bridges as #37 (`bridges()`); the bank roads are main roads and run on across the margin, so #42 and #44 carry on as before | Decision 4A; bending round neighbourhoods is left for later (below) |
+| Roads | Every neighbourhood joined to the roads laid so far, biggest first: the cheapest path through the gaps (a step 1, a turn `BEND` 3, beside another road `BESIDE` 3 more, outside the town 2 more) to a square where one of its lanes ends, or anywhere along its side when it has no lanes; a road between quarters (or from the river) is a main road; lanes that meet no road stop where the land beside them does | One road network without a grid of streets round every neighbourhood; the search is #44's, on the town's gaps |
+| Edge | A neighbourhood thins out (#35) only on sides with nothing within 4 tiles; a pocket park on such a side goes back to grass | Sides facing a gap keep their full rows |
+| Parks | Grass between two pieces of town (blocks, roads, parks, water) at most 4 tiles apart, along a row or a column, is park | The gaps read as parks and green belts; the outside stays country for the terrain |
+| Stability | The next plan keeps each neighbourhood where the last one put it (`placed`, kept by the page): those of the same size first, then one that changed size at one of its old corners, then the rest (new ones) on free land on their quarter's side of the river, near their quarter, where the town grows least; it packs afresh only when that takes more than `REPACK` (1.3) times a fresh pack's land, or the road width changed | The issue's "without moving the others" |
+| Frame | Roads may run round the outside of the town; the town's tiles then start further out and everything moves with them, the camera too (`shift`) | The terrain and the drawing expect the town from tile 0 |
+| One namespace | Laid out as before (`planCity()`) | Nothing to place |
+
+Big recording, rectangle against the town cut in two (#33–#37): Kenney 93 ×
+47, 1.65 × (3.89 tiles of town per building against 3.41); Metropolis 1.66 ×;
+live 1.87 × and 1.85 ×. Over the 1.5 × target: the sketch's 1.53 × had no
+river and no roads; the river band alone is about 6 %. 17 quarters (6 and 6
+neighbourhoods, 15 on their own), one road network, 0 crossroads, 19 dead
+ends, 3 bridges. Added one namespace at a time: 2 fresh packs, no
+neighbourhood moved, the town at most 1.23 × a fresh pack. 50–130 ms a plan
+in Node (planCity alone 15–40 ms).
+
+250 random clusters (1–40 namespaces, up to three shared stacks, random
+zones, both road widths, live or not), each grown one namespace at a time
+and then one namespace after another growing by half: the road network
+always one piece, no neighbourhoods closer than their gap, no road on a
+block, every lot in place, and no neighbourhood ever moved for another one
+(11 770 plans); a fresh pack on about 1 plan in 9 (the step from one namespace
+to two always is one). A namespace that grows by half moves to
+free land in most cases (there is rarely room for half as much again
+beside it); live districts keep spare lots, so that is rare. The terrain's
+checks (`art/terrain_sketch.mjs`, 7 seeds, both widths) all pass.
+
+Left for #47's next steps: the river bending round neighbourhoods, small
+towns without one, and a river that stays put when the town packs afresh;
+quarter labels and per-neighbourhood health at cluster zoom; fit framing
+the whole city.
+
 ## Roadmap
 
 The public roadmap is [`ROADMAP.md`](../ROADMAP.md); keep it up to date when

@@ -3,10 +3,13 @@
 // city as a map of tiles, with a few numbers to compare layouts by. Only the
 // sizes and zones of namespaces are used, so the output holds no names.
 //
-//   node art/layout_sketch.mjs recordings/big-cluster.jsonl [gap] [--live]
+//   node art/layout_sketch.mjs recordings/big-cluster.jsonl [gap] [--live] [--grow]
 //
 // gap is the road width: 1 for the Kenney look (the default), 2 for Metropolis.
 // --live keeps spare lots for new workloads, as a live city does.
+// --grow also adds the namespaces one at a time, as a cluster's first list
+// does, and counts how often the town packed again and how many
+// neighbourhoods moved.
 //
 // Map: R main road, r road, + crossroads, ~ river, = bridge, s sidewalk, a lot in the town
 // centre (l), the industrial quarter (i) or a suburb (u), p courtyard (a lot
@@ -15,8 +18,8 @@
 
 import { readFileSync } from "node:fs";
 
-const args = process.argv.slice(2), live = args.includes("--live");
-const [file, gapArg] = args.filter(a => a !== "--live");
+const args = process.argv.slice(2), live = args.includes("--live"), grow = args.includes("--grow");
+const [file, gapArg] = args.filter(a => !a.startsWith("--"));
 if (!file) { console.error("usage: node art/layout_sketch.mjs RECORDING.jsonl [gap] [--live]"); process.exit(2); }
 const gap = Number(gapArg || 1);
 
@@ -25,7 +28,7 @@ const page = readFileSync(new URL("city.template.html", import.meta.url), "utf8"
 const MARK = "// ---------------------------------------------------------------- ";
 const from = page.indexOf(`${MARK}layout\n`), to = page.indexOf(MARK, from + MARK.length);
 const hashFn = page.slice(page.indexOf("function hash("), page.indexOf("function rng("));
-const { planCity, roadTiles, inRiver, lotsFor, zoneOf, MARGIN } = new Function(`${hashFn}${page.slice(from, to)}\nreturn { planCity, roadTiles, inRiver, lotsFor, zoneOf, MARGIN };`)();
+const { planCity, planTown, roadTiles, inRiver, lotsFor, zoneOf, MARGIN, NEIGHBOURS, BELT } = new Function(`${hashFn}${page.slice(from, to)}\nreturn { planCity, planTown, roadTiles, inRiver, lotsFor, zoneOf, MARGIN, NEIGHBOURS, BELT };`)();
 
 // Workloads per namespace, as the page counts them: one building per workload.
 const workloads = new Map(), daemons = new Set();
@@ -39,11 +42,13 @@ for (const line of readFileSync(file, "utf8").split("\n")) {
 }
 const sizes = [...workloads.values()].map(s => s.size);
 const zones = [...workloads.keys()].map(name => zoneOf(name, daemons.has(name)));
-const needs = sizes.map((n, k) => ({ name: `ns-${String(k).padStart(3, "0")}`, n: lotsFor(n, live ? 0.3 : 0), zone: zones[k] }));
+const wls = [...workloads.values()].map(s => [...s]);
+const needs = sizes.map((n, k) => ({ name: `ns-${String(k).padStart(3, "0")}`, n: lotsFor(n, live ? 0.3 : 0), zone: zones[k], wl: wls[k] }));
 
 const t0 = performance.now();
-const city = planCity(needs, gap);
+const city = planTown(needs, gap, null);
 const ms = performance.now() - t0;
+const before = planCity(needs, gap);
 const plan = { ...city, gap };
 
 // Tiles.
@@ -99,10 +104,49 @@ console.log();
 console.log(`${needs.length} districts, ${buildings} buildings; town ${city.W} × ${city.H}; planned in ${ms.toFixed(1)} ms`);
 const zoneCount = z => `${zones.filter(x => x === z).length} (${sizes.filter((n, k) => zones[k] === z).reduce((s, n) => s + n, 0)} buildings)`;
 console.log(`zones: centre ${zoneCount("centre")}, industry ${zoneCount("industry")}, suburbs ${zoneCount("suburb")}`);
-console.log(`tiles per building: town ${(town / buildings).toFixed(2)}, its rectangle ${(city.W * city.H / buildings).toFixed(2)}`);
+let townBefore = 0;
+{ const s = new Set(roadTiles({ ...before, gap }).keys());
+  for (const d of before.districts) for (const b of d.blocks) for (let j = b.y; j < b.y + b.h; j++) for (let i = b.x; i < b.x + b.w; i++) s.add(`${i}/${j}`);
+  for (const p of [...before.parks, ...(before.river ? [before.river] : [])]) for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) s.add(`${i}/${j}`);
+  townBefore = [...s].filter(t => { const [i, j] = t.split("/").map(Number); return i >= 0 && j >= 0 && i < before.W && j < before.H; }).length; }
+console.log(`tiles per building: town ${(town / buildings).toFixed(2)}, its rectangle ${(city.W * city.H / buildings).toFixed(2)}; one town cut in two (#33–#37): ${(townBefore / buildings).toFixed(2)}, ${(before.W * before.H / buildings).toFixed(2)}; rectangle ${(city.W * city.H / (before.W * before.H)).toFixed(2)} ×`);
+if (city.quarters) {
+  const qs = city.quarters.filter(q => q.hoods.length > 1);
+  console.log(`quarters: ${city.quarters.length}, ${qs.map(q => `${q.hoods.length} neighbourhoods (${q.hoods.reduce((s, k) => s + sizes[k], 0)} buildings)`).join(", ")}, the rest one each`);
+  // Neighbourhoods apart: NEIGHBOURS tiles in a quarter, BELT between quarters.
+  const qOf = new Map(city.quarters.flatMap(q => q.hoods.map(k => [k, q.q])));
+  let close = 0;
+  city.districts.forEach((a, x) => city.districts.forEach((b, y) => {
+    if (x >= y) return;
+    const s = qOf.get(x) === qOf.get(y) ? NEIGHBOURS : BELT;
+    for (const p of a.blocks) for (const r of b.blocks)
+      if (p.x < r.x + r.w + s && r.x < p.x + p.w + s && p.y < r.y + r.h + s && r.y < p.y + p.h + s) close++;
+  }));
+  console.log(`blocks of different neighbourhoods closer than their gap: ${close}`);
+}
 const blocks = city.districts.reduce((s, d) => s + d.blocks.length, 0), lots = city.districts.reduce((s, d) => s + d.cells.length, 0);
 const bridges = inner.filter(r => r.bridge).length;
 console.log(`roads: ${inner.length - bridges} cuts (${inner.filter(r => r.main && !r.bridge).length} main), longest ${longest} tiles, ${pieces} piece${pieces === 1 ? "" : "s"}; pocket parks: ${city.parks.length}`);
 console.log(`river: ${city.river ? `${Math.max(city.river.w, city.river.h)} tiles long, ${bridges} bridge${bridges === 1 ? "" : "s"}` : "none"}`);
 console.log(`blocks: ${blocks} (${city.districts.filter(d => d.blocks.length > 1).length} quarters); lots: ${lots}, ${(100 * buildings / lots).toFixed(0)} % built on`);
 if (gap === 1) console.log(`junctions: ${count.t} T, ${count.cross} crossroads, ${count.dead} dead ends`);
+
+if (grow) {
+  // The namespaces one at a time; each plan keeps the last one's places.
+  let was = null, repacks = 0, moved = 0, worst = 0;
+  const t1 = performance.now();
+  for (let n = 2; n <= needs.length; n++) {
+    const next = planTown(needs.slice(0, n), gap, was);
+    if (was && !next.shift) repacks++;
+    else if (was) {
+      for (const [name, p] of next.placed.pos) {
+        const o = was.pos.get(name);
+        if (o && (o.x + next.shift[0] !== p.x || o.y + next.shift[1] !== p.y)) moved++;
+      }
+    }
+    was = next.placed;
+    worst = Math.max(worst, next.W * next.H / Math.max(1, planTown(needs.slice(0, n), gap, null).W * planTown(needs.slice(0, n), gap, null).H));
+  }
+  const last = planTown(needs, gap, was);
+  console.log(`grown one namespace at a time: ${repacks} re-packs, ${moved} neighbourhoods moved, land up to ${worst.toFixed(2)} × a fresh pack; ${((performance.now() - t1) / needs.length).toFixed(0)} ms per plan; at the end ${last.W} × ${last.H}`);
+}

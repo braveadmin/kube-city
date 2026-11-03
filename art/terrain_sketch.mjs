@@ -35,8 +35,8 @@ const block = start => page.slice(page.indexOf(start), page.indexOf("\n}", page.
 const art = [page.slice(page.indexOf("function shade("), page.indexOf("const cssColor")), block("const ART = {"), page.match(/^const P = .*$/m)[0],
   page.match(/^function shadedBox\(.*$/m)[0],
   ...["class GroundPen {", "function box(", "function tree(", "function pine(", "function gabled(", "function farm(", "function harbourShed(", "function quayPiece(", "function coverDetails("].map(block)].join("\n");
-const { planCity, lotsFor, zoneOf, planTerrain, worldStyle, STYLES, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, quayPiece, tree, pine } =
-  new Function(`${code}\n${art}\nreturn { planCity, lotsFor, zoneOf, planTerrain, worldStyle, STYLES, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, quayPiece, tree, pine };`)();
+const { planTown, lotsFor, zoneOf, planTerrain, worldStyle, STYLES, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, quayPiece, tree, pine } =
+  new Function(`${code}\n${art}\nreturn { planTown, lotsFor, zoneOf, planTerrain, worldStyle, STYLES, FRONT_LOW, FLAT, LEVELS, LAKE_MIN, HILLS, COVER, isWater, eachGroundTile, groundFaces, hiddenBy, iso, poly, GroundPen, coverTrees, coverDetails, quayPiece, tree, pine };`)();
 
 // Workloads per namespace, as the page counts them: one building per workload.
 const workloads = new Map(), daemons = new Set();
@@ -48,8 +48,8 @@ for (const line of readFileSync(file, "utf8").split("\n")) {
   workloads.get(p.namespace).add(`${p.kind}/${p.workload}`);
   if (p.kind === "DaemonSet") daemons.add(p.namespace);
 }
-const needs = [...workloads].map(([name, set], k) => ({ name: `ns-${String(k).padStart(3, "0")}`, n: lotsFor(set.size, 0), zone: zoneOf(name, daemons.has(name)) }));
-const city = planCity(needs, gap);
+const needs = [...workloads].map(([name, set], k) => ({ name: `ns-${String(k).padStart(3, "0")}`, n: lotsFor(set.size, 0), zone: zoneOf(name, daemons.has(name)), wl: [...set] }));
+const city = planTown(needs, gap, null);
 // What the terrain reads of a plan, and nothing more.
 if (styleArg && !STYLES[styleArg]) { console.error(`unknown style ${styleArg}: ${Object.keys(STYLES).join(", ")}`); process.exit(2); }
 const style = worldStyle(seed, styleArg);

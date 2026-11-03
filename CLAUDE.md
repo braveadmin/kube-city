@@ -21,15 +21,17 @@ Browser prototype from a recording (anonymised, writes `art/out/city.html`):
 python3 art/web_prototype.py recordings/big-cluster.jsonl art/out
 ```
 
-The city's layout as a map of tiles, with land per building and junction
-counts (sizes only, no names; `2` for Metropolis's road width):
+The city's layout (quarters of neighbourhoods, #47) as a map of tiles, with
+land per building and junction counts (sizes only, no names; `2` for
+Metropolis's road width; `--grow` adds the namespaces one at a time and
+counts what moved):
 
 ```bash
-node art/layout_sketch.mjs recordings/big-cluster.jsonl [2]
+node art/layout_sketch.mjs recordings/big-cluster.jsonl [2] [--live] [--grow]
 ```
 
-The city as quarters of related namespaces (#47's sketch): a map, and land
-against today's layout:
+#47's first sketch, the quarters without roads or river (kept for
+comparison):
 
 ```bash
 node art/quarters_sketch.mjs recordings/big-cluster.jsonl [2] [--live] [--zone-loners] [--html]
