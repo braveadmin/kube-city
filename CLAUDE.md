@@ -32,7 +32,7 @@ The city as quarters of related namespaces (#47's sketch): a map, and land
 against today's layout:
 
 ```bash
-node art/quarters_sketch.mjs recordings/big-cluster.jsonl [2] [--live]
+node art/quarters_sketch.mjs recordings/big-cluster.jsonl [2] [--live] [--zone-loners] [--html]
 ```
 
 The terrain round that layout for a seed: checks, a map of levels and
