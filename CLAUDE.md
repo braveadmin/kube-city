@@ -28,6 +28,13 @@ counts (sizes only, no names; `2` for Metropolis's road width):
 node art/layout_sketch.mjs recordings/big-cluster.jsonl [2]
 ```
 
+The city as quarters of related namespaces (#47's sketch): a map, and land
+against today's layout:
+
+```bash
+node art/quarters_sketch.mjs recordings/big-cluster.jsonl [2] [--live]
+```
+
 The terrain round that layout for a seed: checks, a map of levels and
 `art/out/terrain.html` (try other seeds there):
 
