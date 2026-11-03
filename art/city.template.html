@@ -2106,32 +2106,53 @@ function coverAt(i, j) {
 // plain white) as textured quads, and flat-coloured polygons from the calls
 // poly(), tree() and the water helpers make on a PIXI.Graphics; all in the
 // order they are added. (dx, dy) moves what is added next; a `wave` above 0
-// makes it a glint on the water, with that phase (see GLINT).
+// makes it a glint on the water, with that phase (see GLINT); `land` marks
+// what is added next as the town's ground (0), terrain (1) or a detail on
+// the terrain (2: trees, farms, furrows, stones; glints count too).
+//
+// The terrain steps back when the viewer looks for problems (#46): `uCalm`
+// pales it and fades its details out (at cluster zoom and in focus), `uFade`
+// blends it into the background `uSky` (in focus). The town never changes.
+const CALM_FADE = 0.8;   // how far focus blends the terrain into the background
 const GLINT = 7;   // seconds a glint takes to drift to and fro and fade out and in
 const GROUND_VERTEX = `
-attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; attribute vec4 aColor; attribute float aWave;
+attribute vec2 aVertexPosition; attribute vec2 aTextureCoord; attribute vec4 aColor; attribute float aWave; attribute float aLand;
 uniform mat3 projectionMatrix; uniform mat3 translationMatrix; uniform float uTime;
-varying vec2 vTextureCoord; varying vec4 vColor;
+varying vec2 vTextureCoord; varying vec4 vColor; varying float vLand; varying float vDetail;
 void main() {
   float glint = step(0.001, aWave), a = 6.2832 * (aWave + uTime / ${GLINT}.0);
   vec2 p = aVertexPosition + glint * vec2(3.0 * sin(a), 0.0);
   gl_Position = vec4((projectionMatrix * translationMatrix * vec3(p, 1.0)).xy, 0.0, 1.0);
   vTextureCoord = aTextureCoord; vColor = aColor * mix(1.0, 0.5 + 0.5 * cos(a), glint);
+  vLand = step(0.5, aLand); vDetail = max(step(1.5, aLand), glint * vLand);
 }`;
 const GROUND_FRAGMENT = `
 precision mediump float;
-varying vec2 vTextureCoord; varying vec4 vColor; uniform sampler2D uSampler;
-void main() { gl_FragColor = texture2D(uSampler, vTextureCoord) * vColor; }`;
+varying vec2 vTextureCoord; varying vec4 vColor; varying float vLand; varying float vDetail;
+uniform sampler2D uSampler; uniform float uCalm; uniform float uFade; uniform vec3 uSky;
+void main() {
+  vec4 c = texture2D(uSampler, vTextureCoord) * vColor;
+  if (vLand > 0.5 && c.a > 0.0) {
+    // Premultiplied: the colour itself, paled (a third of it, the rest grey
+    // and a light ground), then blended into the background.
+    vec3 rgb = c.rgb / c.a;
+    float grey = dot(rgb, vec3(1.0 / 3.0));
+    rgb = mix(rgb, rgb * 0.35 + grey * 0.45 + 0.157, uCalm);
+    rgb = mix(rgb, uSky, ${CALM_FADE} * uFade);
+    c = vec4(rgb * c.a, c.a) * (1.0 - uCalm * vDetail);
+  }
+  gl_FragColor = c;
+}`;
 const groundShaders = new Map();
 class GroundPen {
   // `white`: a texture of plain white in the same base texture, for the polygons.
   constructor(white) {
     const base = white.baseTexture, f = white.frame;
     this.base = base; this.white = [(f.x + f.width / 2) / base.width, (f.y + f.height / 2) / base.height];
-    this.xy = []; this.uv = []; this.rgba = []; this.waves = []; this.index = []; this.color = 0; this.alpha = 1; this.dx = 0; this.dy = 0; this.wave = 0;
+    this.xy = []; this.uv = []; this.rgba = []; this.waves = []; this.lands = []; this.index = []; this.color = 0; this.alpha = 1; this.dx = 0; this.dy = 0; this.wave = 0; this.land = 0;
   }
   vertex(x, y, u, v, color, alpha) {
-    this.xy.push(x + this.dx, y + this.dy); this.uv.push(u, v); this.waves.push(this.wave);
+    this.xy.push(x + this.dx, y + this.dy); this.uv.push(u, v); this.waves.push(this.wave); this.lands.push(this.land);
     // Premultiplied, as the textures are.
     this.rgba.push(((color >> 16) & 255) * alpha, ((color >> 8) & 255) * alpha, (color & 255) * alpha, 255 * alpha);
   }
@@ -2169,8 +2190,9 @@ class GroundPen {
       .addAttribute("aTextureCoord", new Float32Array(this.uv), 2)
       .addAttribute("aColor", new PIXI.Buffer(new Uint8Array(this.rgba), true), 4, true, PIXI.TYPES.UNSIGNED_BYTE)
       .addAttribute("aWave", new Float32Array(this.waves), 1)
+      .addAttribute("aLand", new Float32Array(this.lands), 1)
       .addIndex(new Uint32Array(this.index));
-    if (!groundShaders.has(this.base)) groundShaders.set(this.base, PIXI.Shader.from(GROUND_VERTEX, GROUND_FRAGMENT, { uSampler: new PIXI.Texture(this.base), uTime: 0 }));
+    if (!groundShaders.has(this.base)) groundShaders.set(this.base, PIXI.Shader.from(GROUND_VERTEX, GROUND_FRAGMENT, { uSampler: new PIXI.Texture(this.base), uTime: 0, uCalm: 0, uFade: 0, uSky: new Float32Array(3) }));
     const mesh = new PIXI.Mesh(geometry, groundShaders.get(this.base));
     mesh.eventMode = "none";
     return mesh;
@@ -2339,7 +2361,7 @@ function openWater(pen, i, j, z, depth, c) {
 // rock, a farm, then the tile's trees (`drawTree` draws one).
 function coverDetails(pen, t, k, i, j, z, trees, drawTree) {
   const cover = t.cover[k];
-  pen.dy = -z;
+  pen.dy = -z; pen.land = 2;
   if (cover === COVER.field && t.crop[k] !== 3) {
     // Each plot's furrows run one way, its neighbours' the other.
     const along = (Math.floor(i / PLOT[0]) + Math.floor(j / PLOT[1])) & 1;
@@ -2356,7 +2378,7 @@ function coverDetails(pen, t, k, i, j, z, trees, drawTree) {
   if (t.farms.has(k)) farm(pen, i + 0.5, j + 0.5, t.farms.get(k));
   if (t.harbour?.shed === k) harbourShed(pen, i + 0.5, j + 0.5, !(t.harbour.d & 1));
   for (const tree of trees.get(k) || []) drawTree(tree);
-  pen.dy = 0;
+  pen.dy = 0; pen.land = 1;
 }
 
 function drawGround() {
@@ -2376,6 +2398,7 @@ function drawGround() {
     // A country road's deck over a river: a pier if it stands high, the
     // deck's edge, the deck, and a parapet on each side that is not more deck.
     const decks = laterBridges((i, j, k) => {
+      pen.land = 1;
       if (terrain.quay[k]) return quayPiece(pen, terrain, i, j, k);
       const zd = zOfLevel(terrain.roadLevel[k]), alongI = terrain.along[k] === 2;
       pier(pen, i, j, zd, zOfTile(terrain, k), ART.concrete);
@@ -2393,6 +2416,7 @@ function drawGround() {
     });
     eachGroundTile(terrain, (i, j, z, left, right, k) => {
       decks.upTo(i + j);
+      pen.land = terrain.toTown[k] === 0 ? 0 : 1;
       const cover = terrain.cover[k], high = cover === COVER.rock || cover === COVER.snow, f = falls(terrain, k);
       const sides = isWater(cover) ? waterSides : cover === COVER.beach ? sandSides : cover === COVER.rock ? rockSides : cover === COVER.snow ? snowSides : upper;
       groundFaces(pen, i, j, z, left, right, foamed(sides, f), foamed(high ? rockLower : lower, f));
@@ -2832,6 +2856,7 @@ const KENNEY = {
     const drawn = (draw, x, y) => { pen.dx = x; pen.dy = y; draw(); pen.dx = pen.dy = 0; };
     // A country road's bridge: a pier if it stands high, then as in town.
     const decks = laterBridges((i, j, k) => {
+      pen.land = 1;
       if (terrain.quay[k]) return quayPiece(pen, terrain, i, j, k);
       const n = terrain.along[k] === 1 ? 5 : 10, zd = zOfLevel(terrain.roadLevel[k]), [x, y] = iso(i + 0.5, j + 0.5);
       pier(pen, i, j, zd, zOfTile(terrain, k), KIT.water.wall[0]);
@@ -2841,6 +2866,7 @@ const KENNEY = {
     });
     if (terrain) eachGroundTile(terrain, (i, j, z, left, right, k) => {
       decks.upTo(i + j);
+      pen.land = terrain.toTown[k] === 0 ? 0 : 1;
       const cover = terrain.cover[k], f = falls(terrain, k), country = terrain.road[k] & 16;
       const high = cover === COVER.rock || cover === COVER.snow;
       groundFaces(pen, i, j, z, left, right, foamed(isWater(cover) ? KIT.water.side : high ? KIT.rock : KIT.earth, f), foamed(high ? KIT.rock : KIT.earth, f));
@@ -2867,6 +2893,7 @@ const KENNEY = {
       }
     });
     decks.rest();
+    pen.land = 0;
     // Bridges on top, once the water in front of them is down: the deck's
     // shadow on the water, the deck, railings along both sides. They stand
     // in the flat town, where no ground in front rises over them.
@@ -3165,13 +3192,10 @@ function fitScale() {
   const [vw, vh] = viewSize();
   return Math.min((vw - inspectorWidth()) / (bounds.r - bounds.l), vh / (bounds.b - bounds.t)) * 0.94;
 }
-// The farthest zoom: the whole world (the town and its terrain) in view.
-function minScale(fit) {
-  if (!terrain) return fit * 0.55;
-  const { x0, y0, W, H } = terrain, [vw, vh] = viewSize();
-  const w = iso(x0 + W, y0)[0] - iso(x0, y0 + H)[0], h = iso(x0 + W, y0 + H)[1] - iso(x0, y0)[1] + zOfLevel(LEVELS - 1) + BASE;
-  return Math.min(fit * 0.55, Math.min(vw / w, vh / h));
-}
+// The farthest zoom: the town with a ring of country round it, not the
+// whole world, so the town stays the biggest thing on screen (#46).
+const FARTHEST = 0.75;
+function minScale(fit) { return fit * FARTHEST; }
 function fitCamera(animate, dur) {
   const s = fitScale();
   cam.fit = s; cam.min = minScale(s);
@@ -3748,6 +3772,7 @@ app.ticker.add(() => {
 
   // District overlay for the cluster level.
   const strength = overlayStrength(cam.s);
+  calmTerrain(strength);
   overlay.clear(); markers.clear();
   const colors = { ok: hexNum(cssColor("--ok")), warn: hexNum(cssColor("--warn")), bad: hexNum(cssColor("--bad")), empty: 0x999999 };
   if (strength > 0.01) {
@@ -3909,6 +3934,22 @@ function makeCars() {
     cityLayer.addChild(g);
   }
 }
+// The terrain steps back as the district overlay comes in and in focus
+// (#46): the ground shader's uCalm and uFade, and the cars out of town.
+const groundLook = { calm: 0, fade: 0 };
+function calmTerrain(strength) {
+  const calm = Math.max(strength, flags.focus ? 1 : 0), fade = flags.focus ? 1 : 0, k = reducedMotion ? 1 : 0.18;
+  groundLook.calm = lerp(groundLook.calm, calm, k); groundLook.fade = lerp(groundLook.fade, fade, k);
+  const sky = hexNum(cssColor("--sky"));
+  for (const s of groundShaders.values()) {
+    s.uniforms.uCalm = groundLook.calm; s.uniforms.uFade = groundLook.fade;
+    s.uniforms.uSky[0] = ((sky >> 16) & 255) / 255; s.uniforms.uSky[1] = ((sky >> 8) & 255) / 255; s.uniforms.uSky[2] = (sky & 255) / 255;
+  }
+  for (const c of cars) {
+    const out = c.i < 0 || c.j < 0 || c.i > plan.W || c.j > plan.H;
+    c.g.alpha = out ? 1 - groundLook.calm : 1;
+  }
+}
 let lastCars = 0;
 function moveCars(now) {
   const dt = lastCars ? Math.min(0.1, (now - lastCars) / 1000) : 0; lastCars = now;
@@ -3923,6 +3964,7 @@ function moveCars(now) {
     const i = c.from.i + di * c.t - dj * theme.lane, j = c.from.j + dj * c.t + di * theme.lane;
     c.g.children[0].visible = di !== 0; c.g.children[1].visible = di === 0;
     const [x, y] = iso(i, j);
+    c.i = i; c.j = j;
     c.g.position.set(x, y - roadZ(i, j));
     c.g.zIndex = (i + j) * 10;
     c.g.visible = !carHidden.has(`${Math.floor(i)}/${Math.floor(j)}`);
