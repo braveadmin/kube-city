@@ -585,7 +585,7 @@ time).
 | Neighbourhood | Each namespace laid out on its own by `planCity()` (blocks, lanes, courtyards as #33–#35), without its ragged edge; the town decides that | One namespace's layout no longer depends on the others, so it can stay put |
 | First pack | Each quarter's neighbourhoods packed on a skyline (`packRects`, 2 tiles apart), the quarters split into two halves of about equal land, each half packed in zone order (4 tiles apart), the two halves either side of the river, side by side or one above the other; the second half is packed to make the town squarest | The sketch's packing; packing zones as separate blocks first made the halves' heights differ (1.77 ×) |
 | Shape | Land counts as more the further the town is from square, but only past twice as long as wide | A square town took 1.77 ×; strips took 1.40 × at 15 × 247 |
-| River | A straight band across the whole town between the two halves: a tile of grass, bank road, 2 tiles of water, bank road, grass; bridges as #37 (`bridges()`); the bank roads are main roads and run on across the margin, so #42 and #44 carry on as before | Decision 4A; bending round neighbourhoods is left for later (below) |
+| River | A straight band across the whole town between the two halves: a tile of grass, bank road, 2 tiles of water, bank road, grass; bridges as #37 (`bridges()`); the bank roads are main roads and run on across the margin, so #42 and #44 carry on as before | Decision 4A; bends since, see "Built (#47, river)" below |
 | Roads | Every neighbourhood joined to the roads laid so far, biggest first: the cheapest path through the gaps (a step 1, a turn `BEND` 3, beside another road `BESIDE` 3 more, outside the town 2 more) to a square where one of its lanes ends, or anywhere along its side when it has no lanes; a road between quarters (or from the river) is a main road; lanes that meet no road stop where the land beside them does | One road network without a grid of streets round every neighbourhood; the search is #44's, on the town's gaps |
 | Edge | A neighbourhood thins out (#35) only on sides with nothing within 4 tiles; a pocket park on such a side goes back to grass | Sides facing a gap keep their full rows |
 | Parks | Grass between two pieces of town (blocks, roads, parks, water) at most 4 tiles apart, along a row or a column, is park | The gaps read as parks and green belts; the outside stays country for the terrain |
@@ -613,10 +613,47 @@ free land in most cases (there is rarely room for half as much again
 beside it); live districts keep spare lots, so that is rare. The terrain's
 checks (`art/terrain_sketch.mjs`, 7 seeds, both widths) all pass.
 
-Left for #47's next steps: the river bending round neighbourhoods, small
-towns without one, and a river that stays put when the town packs afresh;
-quarter labels and per-neighbourhood health at cluster zoom; fit framing
-the whole city.
+Decided for #47's last steps (owner, 2026-11-03, after PR #86): 1A the
+land of about 1.65 × today is accepted; 2A a small town's river runs past
+its side and the town crosses it as it grows; 3A through a fresh pack the
+river keeps its direction and where it enters and leaves the town, its bends
+following the new halves; 4A quarter labels by the namespaces' shared stem.
+
+Built (#47, river, 2026-11-03): `routeRiver()`, `riverOf()` and
+`riverLand()` in the page's layout section; `freshTown()`, `keepTown()` and
+`planTown()` use them; `art/town_check.mjs` checks random clusters.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Shape | Straight runs along the river joined by bends across it (`runs`: `{ a0, a1, c }`); each run keeps h tiles either side of its middle clear (grass, bank road, half the water: 3 in Kenney, 4 in Metropolis) and h past its ends, is at least 2h + 2 long, and a bend moves it at least `RIVER` + 1 | Decision 4A; the bank roads keep straight stretches between their corners |
+| Route | The cheapest way (a small DP over the rows along the river): a tile of river costs how far it runs from the middle of the gap between the two halves, a bend `JOG` (12), moving its way in or out `KEEP` (100) a tile | It runs between the neighbourhoods and bends only where that buys something |
+| Packing | The second half is packed into the first half's outline (`packRects` with a `base` skyline: past the river's land wherever a run can go); flat past the first half's widest point when no way fits | The land the straight band wasted between ragged halves |
+| Banks and bridges | The bank roads follow the bends (a corner further along on the outside of a bend); bridges as #37, but only on a run, `gap` tiles or more from its corners | No bridge on a bend |
+| Water | `river.parts`: rectangles (runs and bends), on across the margin; `river.head` and `river.mouth` tell the terrain (#42) where it comes from and goes | `inRiver()`, `planTerrain()`, both looks' drawing work from those |
+| Small town | Under twice `SMALL_TOWN` (400) tiles of neighbourhoods a fresh pack puts the town on one bank, the river past its side; new quarters stay on that bank until the town is that big, then go to the side with less land | Decision 2A; the river is always there, #42 always has a town river |
+| Fresh pack | Keeps the river's direction and each quarter's bank, and aims for the old way in and out (`KEEP`); used when it takes at most `KEEP_RIVER` (1.1) times the land of a pack without them, else that pack. `REPACK` compares with the pack without them | Decision 3A, as far as land allows (below) |
+| Kept town | The river stays exactly where it was; neighbourhoods keep clear of its land (`riverLand()`) and stay on their bank | As before |
+
+Big recording, rectangle against the town cut in two (#33–#37): Kenney 84 ×
+47, 1.49 × (was 1.65 ×), one bend; Metropolis 1.56 × (1.66 ×); live 1.68 ×
+and 1.63 × (1.87 ×, 1.85 ×), straight: the second half packs so close that
+the river has no room to wander. Added one namespace at a time: 3 fresh
+packs, no neighbourhood moved, at most 1.21 × a fresh pack.
+
+250 random clusters as for the layout (`art/town_check.mjs`, 11 072 plans,
+29–32 ms each in Node): every check passes (roads in one piece, gaps, no road
+or block on the water, bridges straight across a run, water in one piece,
+runs and bends wide enough, a small town on one bank, the river and every
+neighbourhood kept in a kept town). 7 243 bends; 5 neighbourhoods moved, each
+one that grew out of its quarter and needs a belt round it now.
+
+Through a fresh pack the river kept its direction 1 193 times of 1 421, but
+its way in and out only 95 times: the half that grows gets wider and pushes
+the river out. Keeping them every time would take bends outside the town
+(more land); left to the owner.
+
+Left for #47: quarter labels and per-neighbourhood health at cluster zoom;
+fit framing the whole city.
 
 ## Roadmap
 

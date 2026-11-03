@@ -715,9 +715,8 @@ function blockArea(n, gap) {
 // included), the rectangle around them and its lots in the order they are
 // handed out ([i, j], see lotOrder); the pocket parks; the roads as centre
 // lines ({ i0, j0, i1, j1, main }, the lanes and bridges included, a bridge
-// with bridge: true); the river's water ({ x, y, w, h }, across the margin
-// too, or null) and the size of the town (W × H tiles, from 0; the margin
-// lies round it). edge false leaves the edge as cut (no raggedEdge): a
+// with bridge: true); the river (riverOf, or null) and the size of the town
+// (W × H tiles, from 0; the margin lies round it). edge false leaves the edge as cut (no raggedEdge): a
 // neighbourhood's edge is decided by the town round it (planTown).
 function planCity(needs, gap, edge = true) {
   if (!needs.length) return { districts: [], parks: [], roads: [], river: null, W: 0, H: 0 };
@@ -914,7 +913,10 @@ function planCity(needs, gap, edge = true) {
     }
     let water = null;
     place(city, 0, 0, W, H, 0);
-    return { districts, parks, roads, river: water, W, H, crossroads };
+    const stream = water && (water.h > water.w
+      ? riverOf(true, [{ a0: -Infinity, a1: Infinity, c: water.x + RIVER / 2 }], H, gap)
+      : riverOf(false, [{ a0: -Infinity, a1: Infinity, c: water.y + RIVER / 2 }], W, gap));
+    return { districts, parks, roads, river: stream, W, H, crossroads };
   }
 
   // The smallest city, square at first, that every district fits into; a
@@ -1008,34 +1010,75 @@ function raggedEdge(city, needs, gap, town) {
   }
 }
 
+// The river from its runs (see routeRiver), L tiles of town along it: its
+// water as rectangles ({ x, y, w, h }, on across the margin), the centre
+// lines of its bank roads (main roads, round its bends and on across the
+// margin), and the back corners of the RIVER × RIVER squares just past its
+// ends (head: where it comes from, mouth: where it goes), for the terrain.
+function riverOf(down, runs, L, gap) {
+  const half = gap / 2, d = RIVER / 2 + half, w = RIVER / 2, lo = -MARGIN, hi = L + MARGIN, last = runs.length - 1;
+  const rect = (u0, u1, v0, v1) => (down ? { x: v0, y: u0, w: v1 - v0, h: u1 - u0 } : { x: u0, y: v0, w: u1 - u0, h: v1 - v0 });
+  const pt = (u, v) => (down ? [v, u] : [u, v]);
+  const seg = ([i0, j0], [i1, j1]) => ({ i0: Math.min(i0, i1), j0: Math.min(j0, j1), i1: Math.max(i0, i1), j1: Math.max(j0, j1), main: true });
+  const parts = [], banks = [];
+  runs.forEach((r, k) => {
+    parts.push(rect(k ? r.a0 - w : lo, k < last ? r.a1 + w : hi, r.c - w, r.c + w));
+    if (k < last) { const n = runs[k + 1]; parts.push(rect(r.a1 - w, r.a1 + w, Math.min(r.c, n.c) - w, Math.max(r.c, n.c) + w)); }
+  });
+  // s: the bank before the river (-1) or past it (1); a bank's corner lies
+  // further along on the outside of a bend.
+  for (const s of [-1, 1]) {
+    let at = pt(lo + half, runs[0].c + s * d);
+    for (let k = 0; k < last; k++) {
+      const r = runs[k], n = runs[k + 1], u = r.a1 - s * d * Math.sign(n.c - r.c);
+      const p = pt(u, r.c + s * d), q = pt(u, n.c + s * d);
+      banks.push(seg(at, p), seg(p, q));
+      at = q;
+    }
+    banks.push(seg(at, pt(hi - half, runs[last].c + s * d)));
+  }
+  return { down, runs, parts, banks, head: pt(lo - RIVER, runs[0].c - w), mouth: pt(hi, runs[last].c - w) };
+}
+
 // Bridges across the river, one per BRIDGE_EVERY tiles of it (one to three),
-// spread along it. A bridge joins the two bank roads where no road ends
-// close by on either bank, so both ends are T-junctions: carrying a road on
-// across would make a crossroads where it meets the bank road.
+// spread along it, each on a straight run, clear of the bends. A bridge joins
+// the two bank roads where no road ends close by on either bank, so both
+// ends are T-junctions: carrying a road on across would make a crossroads
+// where it meets the bank road.
 function bridges(city, gap) {
-  const r = city.river, down = r.h > r.w, half = gap / 2;
-  const banks = down ? [r.x - half, r.x + r.w + half] : [r.y - half, r.y + r.h + half];
+  const { down, runs } = city.river, half = gap / 2, d = RIVER / 2 + half;
   const far = down ? city.H : city.W;
+  const runAt = u => runs.find(r => u >= r.a0 + d + gap && u <= r.a1 - d - gap);
   // Where roads end on the banks, along them.
   const ends = [];
   for (const s of city.roads) {
     if (down ? s.i0 === s.i1 : s.j0 === s.j1) continue;
-    for (const [i, j] of [[s.i0, s.j0], [s.i1, s.j1]]) if (banks.includes(down ? i : j)) ends.push(down ? j : i);
+    for (const [i, j] of [[s.i0, s.j0], [s.i1, s.j1]]) {
+      const [u, v] = down ? [j, i] : [i, j];
+      if (runs.some(r => u >= r.a0 - d && u <= r.a1 + d && Math.abs(v - r.c) === d)) ends.push(u);
+    }
   }
-  const near = (list, v, d) => list.some(e => Math.abs(e - v) <= d);
+  const near = (list, v, dd) => list.some(e => Math.abs(e - v) <= dd);
   const n = Math.max(1, Math.min(3, Math.round(far / BRIDGE_EVERY))), chosen = [];
   for (let k = 0; k < n; k++) {
     // The free spot closest to this bridge's share of the river; the first
     // bridge takes the closest free spot anywhere.
     const aim = Math.floor((k + 0.5) * far / n - half) + half, reach = chosen.length ? far / n / 2 : far;
-    for (let d = 0; d <= reach; d++) {
-      const v = [aim - d, aim + d].find(v => v > 1 && v < far - 1 && !near(ends, v, gap) && !near(chosen, v, 4));
+    for (let dd = 0; dd <= reach; dd++) {
+      const v = [aim - dd, aim + dd].find(v => v > 1 && v < far - 1 && runAt(v) && !near(ends, v, gap) && !near(chosen, v, 4));
       if (v !== undefined) { chosen.push(v); break; }
     }
   }
-  if (!chosen.length) chosen.push(Math.floor(far / 2 - half) + half);
+  if (!chosen.length) {
+    // No spot clear of every road end: the straight run nearest the middle.
+    const spots = [];
+    for (let v = half; v < far; v++) if (runAt(v)) spots.push(v);
+    if (!spots.length) for (const r of runs) spots.push(Math.floor((Math.max(r.a0, 0) + Math.min(r.a1, far)) / 2 - half) + half);
+    chosen.push(spots.sort((a, b) => Math.abs(a - far / 2) - Math.abs(b - far / 2))[0]);
+  }
   for (const v of chosen) {
-    city.roads.push(down ? { i0: banks[0], j0: v, i1: banks[1], j1: v, main: true, bridge: true } : { i0: v, j0: banks[0], i1: v, j1: banks[1], main: true, bridge: true });
+    const c = (runAt(v) || runs.find(r => v < r.a1) || runs[runs.length - 1]).c;
+    city.roads.push(down ? { i0: c - d, j0: v, i1: c + d, j1: v, main: true, bridge: true } : { i0: v, j0: c - d, i1: v, j1: c + d, main: true, bridge: true });
   }
 }
 
@@ -1079,8 +1122,9 @@ function lotOrder(blocks) {
 // each one's workloads are related; the groups they link are quarters.
 // Every namespace is a neighbourhood, laid out on its own by planCity();
 // neighbourhoods of a quarter stand NEIGHBOURS tiles apart, quarters BELT
-// tiles. The river runs straight between the two halves of the town, a bank
-// road either side. Roads to every neighbourhood are found through the gaps
+// tiles. The river runs between the two halves of the town, round the
+// neighbourhoods, a bank road either side (a small town stands on one bank).
+// Roads to every neighbourhood are found through the gaps
 // (the cheapest path from the roads laid so far to where a neighbourhood's
 // lanes end, or to its side when it has none); roads between quarters are
 // main roads. What is left of the gaps is park.
@@ -1096,6 +1140,8 @@ const BELT = 4;           // tiles between quarters
 const BEND = 3;           // a turn costs a town road as much as this many tiles
 const BESIDE = 3;         // and a step beside another road this many more
 const REPACK = 1.3;       // the town packs again when keeping everything in place takes this many times a fresh pack's land
+const KEEP_RIVER = 1.1;   // a fresh pack keeps the river's way in and out of the town if that takes at most this many times the land
+const SMALL_TOWN = 400;   // a town with less than twice this many tiles of neighbourhoods keeps to one bank of the river
 const ZONE_ORDER = { industry: 0, centre: 1, suburb: 2 };
 
 // Per namespace its quarter: the lowest namespace index in it. sets: per
@@ -1119,13 +1165,13 @@ const squarish = (w, h) => w * h * Math.max(1, Math.max(w / h, h / w) / 2) ** 2;
 // Rectangles ({ w, h }) packed bottom-left on a skyline, in the order key
 // gives and biggest first, for every width from the widest up; the squarest
 // small result wins (score says what is small). space is kept to the right
-// of and below each one.
-function packRects(items, space, key = () => 0, score = squarish) {
+// of and below each one. base(x): where the skyline starts in column x (0).
+function packRects(items, space, key = () => 0, score = squarish, base = null) {
   const order = [...items].sort((a, b) => key(a) - key(b) || b.h * b.w - a.h * a.w);
   const minW = Math.max(...items.map(r => r.w)), total = items.reduce((s, r) => s + (r.w + space) * (r.h + space), 0);
   let best = null;
   for (let W = minW; W <= Math.max(minW, Math.ceil(2 * Math.sqrt(total))) + space; W++) {
-    const sky = new Array(W + space).fill(0), place = [];
+    const sky = Array.from({ length: W + space }, (_, x) => (base ? base(x) : 0)), place = [];
     for (const r of order) {
       let bx = 0, by = Infinity;
       for (let x = 0; x + r.w <= W; x++) {
@@ -1156,22 +1202,26 @@ function planTown(needs, gap, was) {
     return { k, name: d.name, q: quarter[k], zone: ZONE_ORDER[d.zone || "centre"], w: c.W, h: c.H, blocks: c.districts[0].blocks, parks: c.parks, lanes: c.roads };
   });
   const band = 2 + 2 * gap + RIVER;   // grass, bank road, water, bank road, grass
-  const fresh = freshTown(hoods, band);
-  let placed = was && was.gap === gap && keepTown(hoods, band, was, fresh.W * fresh.H * REPACK);
+  // A fresh pack keeps the river where it was when that takes little more land.
+  const free = freshTown(hoods, band, null), kept = was && freshTown(hoods, band, was);
+  const fresh = kept && kept.W * kept.H <= free.W * free.H * KEEP_RIVER ? kept : free;
+  let placed = was && was.gap === gap && keepTown(hoods, band, was, free.W * free.H * REPACK);
   if (!placed) placed = fresh;
-  const { down, bandAt } = placed;
+  const { down, runs } = placed;
   hoods.forEach((h, k) => Object.assign(h, placed.pos[k]));
 
   // The search grid: the town and P tiles round it.
   const P = gap + 1;
   let tw = Math.max(...hoods.map(h => h.x + h.w)), th = Math.max(...hoods.map(h => h.y + h.h));
-  if (down) tw = Math.max(tw, bandAt + band); else th = Math.max(th, bandAt + band);
+  const reach = Math.max(...runs.map(r => r.c + band / 2));
+  if (down) tw = Math.max(tw, reach); else th = Math.max(th, reach);
   const GW = tw + 2 * P, GH = th + 2 * P, GN = GW * GH;
   const g = (i, j) => (j + P) * GW + (i + P);
   const blocked = new Uint8Array(GN), roadAt = new Uint8Array(GN);
   hoods.forEach(h => { for (let j = h.y; j < h.y + h.h; j++) for (let i = h.x; i < h.x + h.w; i++) blocked[g(i, j)] = 1; });
-  const water0 = bandAt + 1 + gap;
-  for (let a = 0; a < (down ? GH : GW); a++) for (let b = water0; b < water0 + RIVER; b++) blocked[down ? a * GW + b + P : (b + P) * GW + a] = 2;
+  const shape = riverOf(down, runs, down ? th : tw, gap);
+  for (const p of shape.parts)
+    for (let j = Math.max(p.y, -P); j < Math.min(p.y + p.h, th + P); j++) for (let i = Math.max(p.x, -P); i < Math.min(p.x + p.w, tw + P); i++) blocked[g(i, j)] = 2;
   // A square: the s × s tiles from its back corner (i, j), kept at the grid
   // index of (i, j). open: a road may run there; its step costs 1, 3 outside
   // the town, BESIDE more beside another road (near).
@@ -1189,7 +1239,10 @@ function planTown(needs, gap, was) {
     if (road) { paved[g(i, j)] = 1; for (let dj = 0; dj < gap; dj++) for (let di = 0; di < gap; di++) roadAt[g(i + di, j + dj)] = 1; }
     for (let dj = 1 - gap; dj < gap; dj++) for (let di = 1 - gap; di < gap; di++) if (i + di >= -P && j + dj >= -P && i + di < tw + P && j + dj < th + P) near[g(i + di, j + dj)] = 1;
   };
-  for (const bank of [water0 - gap, water0 + RIVER]) for (let a = -P; a <= (down ? th : tw) + P - gap; a++) down ? lay(bank, a, -1) : lay(a, bank, -1);
+  for (const b of shape.banks) for (let j = b.j0; j <= b.j1; j++) for (let i = b.i0; i <= b.i1; i++) {
+    const si = i - half, sj = j - half;
+    if (si >= -P && sj >= -P && si + gap <= tw + P && sj + gap <= th + P) lay(si, sj, -1);
+  }
   // Doors: where a neighbourhood's lanes end at its edge, or along its sides.
   for (const h of hoods) {
     h.doors = [];
@@ -1291,11 +1344,11 @@ function planTown(needs, gap, was) {
   for (const d of districts) { d.blocks.forEach(move); frameDistrict(d); }
   parks.forEach(move);
   for (const r of roads) { r.i0 += dx; r.i1 += dx; r.j0 += dy; r.j1 += dy; }
-  const at = down ? bandAt + dx : bandAt + dy, wet = at + 1 + gap;
   // The river and its bank roads, on across the margin.
-  const river = down ? { x: wet, y: -MARGIN, w: RIVER, h: H + 2 * MARGIN } : { x: -MARGIN, y: wet, w: W + 2 * MARGIN, h: RIVER };
-  for (const c of [wet - half, wet + RIVER + half])
-    roads.push(down ? { i0: c, j0: -MARGIN + half, i1: c, j1: H + MARGIN - half, main: true } : { i0: -MARGIN + half, j0: c, i1: W + MARGIN - half, j1: c, main: true });
+  const al = down ? dy : dx, ac = down ? dx : dy;
+  const moved = runs.map(r => ({ a0: r.a0 + al, a1: r.a1 + al, c: r.c + ac }));
+  const river = riverOf(down, moved, down ? H : W, gap);
+  roads.push(...river.banks);
   const town = { districts, parks, roads, river, W, H };
   bridges(town, gap);
 
@@ -1304,7 +1357,7 @@ function planTown(needs, gap, was) {
   const fill = (r, v) => { for (let j = Math.max(0, r.y); j < Math.min(H, r.y + r.h); j++) for (let i = Math.max(0, r.x); i < Math.min(W, r.x + r.w); i++) solid[j * W + i] = v; };
   for (const d of districts) d.blocks.forEach(b => fill(b, 1));
   parks.forEach(p => fill(p, 1));
-  fill(river, 1);
+  river.parts.forEach(p => fill(p, 1));
   for (const t of roadTiles({ roads, gap }).keys()) { const [i, j] = t.split("/").map(Number); if (i >= 0 && j >= 0 && i < W && j < H) solid[j * W + i] = 1; }
   const green = new Uint8Array(W * H);
   for (const [n, m, k] of [[H, W, (a, b) => a * W + b], [W, H, (a, b) => b * W + a]])
@@ -1337,7 +1390,7 @@ function planTown(needs, gap, was) {
   const quarters = [];
   hoods.forEach((h, k) => { let qq = quarters.find(q => q.q === h.q); if (!qq) quarters.push(qq = { q: h.q, hoods: [] }); qq.hoods.push(k); });
   const pos = hoods.map(h => ({ name: needs[h.k].name, x: h.x + dx, y: h.y + dy, w: h.w, h: h.h, q: h.q }));
-  return { ...town, quarters, placed: { gap, down, bandAt: at, pos: new Map(pos.map(p => [p.name, p])) }, shift: placed === fresh ? null : [dx, dy] };
+  return { ...town, quarters, placed: { gap, down, runs: moved, pos: new Map(pos.map(p => [p.name, p])) }, shift: placed === fresh ? null : [dx, dy] };
 }
 const DIRS4 = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 
@@ -1372,57 +1425,238 @@ class MinHeap {
 // The first pack: each quarter's neighbourhoods packed, the quarters in two
 // halves of about equal land (biggest first into the lighter one), packed in
 // zone order, either side of the river: side by side or one above the other,
-// whichever is squarer. A town of one quarter splits that quarter.
-function freshTown(hoods, band) {
+// whichever is squarer. A town of one quarter splits that quarter; a small
+// town (under twice SMALL_TOWN tiles of neighbourhoods) keeps to one bank and
+// the river runs past it. The second half is packed into the first one's
+// outline, as close as the river between them lets it, and the river is
+// routed between the two (routeRiver). `was` (the last plan's `placed`, when
+// there is one) keeps the river's direction, the bank each quarter stood on
+// and, where they still fit, where the river enters and leaves the town.
+function freshTown(hoods, band, was) {
   const byQ = new Map();
   for (const h of hoods) { if (!byQ.has(h.q)) byQ.set(h.q, []); byQ.get(h.q).push(h); }
   const area = hs => hs.reduce((s, h) => s + h.w * h.h, 0);
+  const h = band / 2, minRun = 2 * h + 2;
   let groups = [...byQ.values()];
-  if (groups.length === 1) {
-    const halves = [[], []];
-    for (const h of [...groups[0]].sort((a, b) => b.w * b.h - a.w * a.h || a.k - b.k)) halves[area(halves[0]) <= area(halves[1]) ? 0 : 1].push(h);
-    groups = halves;
-  }
   const sides = [[], []];
-  for (const grp of groups.sort((a, b) => area(b) - area(a) || a[0].k - b[0].k)) sides[area(sides[0].flat()) <= area(sides[1].flat()) ? 0 : 1].push(grp);
-  // A side: each zone's quarters packed together, then the zones, biggest
-  // first. The second side is packed to suit the first: the town is what
-  // should come out square.
+  if (area(hoods) < 2 * SMALL_TOWN) sides[0] = groups;
+  else {
+    if (groups.length === 1) {
+      const halves = [[], []];
+      for (const h of [...groups[0]].sort((a, b) => b.w * b.h - a.w * a.h || a.k - b.k)) halves[area(halves[0]) <= area(halves[1]) ? 0 : 1].push(h);
+      groups = halves;
+    }
+    // A quarter stays on the bank most of its neighbourhoods stood on.
+    const bank = grp => {
+      if (!was) return -1;
+      const seen = grp.map(h => was.pos.get(h.name)).filter(Boolean);
+      if (!seen.length) return -1;
+      const far = seen.filter(r => sideOfRiver(was.down, was.runs, r) === 1).length;
+      return 2 * far > seen.length ? 1 : 0;
+    };
+    const ordered = groups.sort((a, b) => area(b) - area(a) || a[0].k - b[0].k);
+    for (const grp of ordered.filter(g => bank(g) >= 0)) sides[bank(grp)].push(grp);
+    for (const grp of ordered.filter(g => bank(g) < 0)) sides[area(sides[0].flat()) <= area(sides[1].flat()) ? 0 : 1].push(grp);
+    if (!sides[0].length) sides.reverse();
+  }
+  // A side: each zone's quarters packed together, then the zones, biggest first.
   const unitsOf = side => side.map(hs => ({ hs, zone: Math.min(...hs.map(h => h.zone)), ...packRects(hs, NEIGHBOURS) }));
   const byZone = u => u.zone;
   const a = packRects(unitsOf(sides[0]), BELT, byZone), bu = unitsOf(sides[1]);
+  const keep = was && [was.runs[0].c, was.runs[was.runs.length - 1].c];
   let best = null;
-  for (const down of [true, false]) {
-    const size = (w, h) => down ? [a.w + band + w, Math.max(a.h, h)] : [Math.max(a.w, w), a.h + band + h];
-    const b = packRects(bu, BELT, byZone, (w, h) => squarish(...size(w, h)));
-    const [W, H] = size(b.w, b.h), cost = squarish(W, H);
-    if (!best || cost < best.cost) best = { cost, down, bandAt: down ? a.w : a.h, W, H, packed: [a, b] };
+  for (const down of was ? [was.down] : [true, false]) {
+    const pos = [], rects = [[], []];
+    // Units packed as [unit, x, y]; flip: packed with x along the river.
+    const put = (s, place, flip) => {
+      for (const [u, px, py] of place) {
+        const [ux, uy] = flip ? [py, px] : [px, py];
+        for (const [hd, hx, hy] of u.place) { pos[hd.k] = { x: ux + hx, y: uy + hy }; rects[s].push({ ...pos[hd.k], w: hd.w, h: hd.h }); }
+      }
+    };
+    put(0, a.place, false);
+    const along0 = down ? a.h : a.w, across0 = down ? a.w : a.h;
+    if (bu.length) {
+      // Where the second side may start across the river, along it: past the
+      // river's land wherever the river can run (runs of minRun tiles, h
+      // tiles of land either side of its middle), or flat past the first
+      // side's widest point.
+      const reach = nearest(profile(rects[0], down, along0, true)).map(v => (isFinite(v) ? v : 0));
+      const at = (arr, u) => arr[Math.min(arr.length - 1, Math.max(0, u))];
+      const near = reach.map((_, u) => { let m = 0; for (let t = u - h; t < u + h; t++) m = Math.max(m, at(reach, t)); return m + h; });
+      const run = near.map((_, u) => {
+        let m = Infinity;
+        for (let t = u - minRun + 1; t <= u; t++) { let x = 0; for (let s = t; s < t + minRun; s++) x = Math.max(x, at(near, s)); m = Math.min(m, x); }
+        return m;
+      });
+      const bent = near.map((_, u) => { let m = 0; for (let t = u - h; t <= u + h; t++) m = Math.max(m, at(run, t)); return m + h; });
+      const size = (al, ac) => down ? [Math.max(across0 + band, ac), Math.max(along0, al)] : [Math.max(along0, al), Math.max(across0 + band, ac)];
+      const items = down ? bu.map(u => ({ ...u, w: u.h, h: u.w })) : bu;
+      for (const base of [u => at(bent, u), () => across0 + band]) {
+        const b = packRects(items, BELT, byZone, (w, hh) => squarish(...size(w, hh)), base);
+        rects[1] = [];
+        put(1, b.place, down);
+        const L = Math.max(...[...rects[0], ...rects[1]].map(r => down ? r.y + r.h : r.x + r.w));
+        const runs = routeRiver(rects, down, L, h, keep);
+        if (runs) { consider(down, runs, pos.slice(), rects); break; }
+      }
+    } else {
+      const runs = routeRiver(rects, down, along0, h, keep);
+      if (runs) consider(down, runs, pos, rects);
+    }
   }
-  const packed = best.packed;
-  const pos = [];
-  packed.forEach((side, s) => {
-    const ox = best.down && s ? best.bandAt + band : 0, oy = !best.down && s ? best.bandAt + band : 0;
-    for (const [u, ux, uy] of side.place) for (const [h, hx, hy] of u.place) pos[h.k] = { x: ox + ux + hx, y: oy + uy + hy };
+  function consider(down, runs, pos, rects) {
+    const reach = Math.max(...runs.map(r => r.c + h)), all = [...rects[0], ...rects[1]];
+    const W = Math.max(down ? reach : 0, ...all.map(r => r.x + r.w)), H = Math.max(down ? 0 : reach, ...all.map(r => r.y + r.h));
+    const cost = squarish(W, H);
+    if (!best || cost < best.cost) best = { cost, down, runs, pos, W, H };
+  }
+  return best;
+}
+
+// Along a river running down (along j) or across (along i), from 0 to L: how
+// far the rectangles reach across it (far: the most their far sides reach;
+// else where their near sides start, the least), ±Infinity where none is.
+function profile(rects, down, L, far) {
+  const out = new Array(L).fill(far ? -Infinity : Infinity);
+  for (const r of rects) {
+    const [u0, u1, v0, v1] = down ? [r.y, r.y + r.h, r.x, r.x + r.w] : [r.x, r.x + r.w, r.y, r.y + r.h];
+    for (let u = Math.max(0, u0); u < Math.min(L, u1); u++) out[u] = far ? Math.max(out[u], v1) : Math.min(out[u], v0);
+  }
+  return out;
+}
+// The gaps (±Infinity) filled with the nearest value either side.
+function nearest(values) {
+  const out = values.slice();
+  let last = NaN;
+  for (let u = 0; u < out.length; u++) if (isFinite(values[u])) last = values[u]; else if (!isNaN(last)) out[u] = last;
+  last = NaN;
+  for (let u = out.length - 1; u >= 0; u--) if (isFinite(values[u])) last = values[u]; else if (!isFinite(out[u]) && !isNaN(last)) out[u] = last;
+  return out;
+}
+
+// The river's way between the two sides of the town (rects: their
+// neighbourhoods): straight runs along it, joined by bends across. Each run
+// keeps h tiles of land either side of its middle clear of neighbourhoods
+// (grass, bank road and half the water) and h tiles past its ends, is at
+// least 2h + 2 tiles long (so the bank roads run straight between their
+// corners) and a bend moves it RIVER + 1 tiles or more. The cheapest way: a
+// tile of river costs how far it runs from the middle of the gap between the
+// sides (or from the first side's edge where there is no second one), a bend
+// JOG, and moving where it enters or leaves the town from `keep` ([c, c])
+// KEEP a tile. Returns the runs ({ a0, a1, c }: from a0 to a1 along the
+// river, the first from -Infinity and the last to Infinity; the middle of the
+// water at c across), or null when no way fits.
+const JOG = 12;           // a bend costs the river as much as this many tiles of it a tile off the middle of its gap
+const KEEP = 100;         // moving where the river enters or leaves the town costs it this much a tile
+function routeRiver(rects, down, L, h, keep) {
+  const minRun = 2 * h + 2, minJog = RIVER + 1;
+  const R0 = profile(rects[0], down, L, true), L1 = profile(rects[1], down, L, false);
+  const R0e = nearest(R0).map(v => (isFinite(v) ? v : 0)), L1e = nearest(L1);
+  const lo = R0.map(v => Math.max(h, v + h)), hi = L1.map(v => v - h);
+  const mid = R0e.map((r, u) => (isFinite(L1e[u]) ? (r + L1e[u]) / 2 : r + h));
+  const c0 = h, NC = Math.max(...lo, ...hi.filter(isFinite), ...(keep || [])) - c0 + 1;
+  // Per column, the last row up to u where the river may not run.
+  const bad = new Int32Array(NC * L), dev = new Float64Array(NC * (L + 1));
+  for (let c = 0; c < NC; c++) {
+    let last = -1;
+    for (let u = 0; u < L; u++) {
+      if (lo[u] > c + c0 || hi[u] < c + c0) last = u;
+      bad[c * L + u] = last;
+      dev[c * (L + 1) + u + 1] = dev[c * (L + 1) + u] + Math.abs(c + c0 - mid[u]);
+    }
+  }
+  const clear = (c, s, e) => { s = Math.max(0, s); e = Math.min(L, e); return e <= s || bad[c * L + e - 1] < s; };
+  const off = (c, s, e) => dev[c * (L + 1) + e] - dev[c * (L + 1) + s];
+  const ends = keep ? keep.map(t => c => KEEP * Math.abs(c + c0 - t)) : [() => 0, () => 0];
+  // dp: the least cost of a way to a bend at a (or the far end, L) whose
+  // last run is at column c; from: where that run starts (a0 * NC + its
+  // column before the bend, -1 for the first run). lowV/lowA, highV/highA:
+  // per bend, the cheapest way to it at a column up to c / from c on.
+  const S = (L + 1) * NC;
+  const dp = new Float64Array(S).fill(Infinity), from = new Int32Array(S).fill(-1);
+  const lowV = new Float64Array(S).fill(Infinity), lowA = new Int32Array(S), highV = new Float64Array(S).fill(Infinity), highA = new Int32Array(S);
+  const bends = [];
+  for (let a = h + 1; a <= L - h - 1; a++) bends.push(a);
+  for (const a1 of [...bends, L]) {
+    for (let c = 0; c < NC; c++) {
+      let best = Infinity, arg = -2;
+      if (clear(c, 0, a1 + h)) { best = ends[0](c) + off(c, 0, a1); arg = -1; }
+      for (let a0 = a1 - minRun; a0 >= h + 1; a0--) {
+        if (!clear(c, a0 - h, a1 + h)) break;
+        const k = a0 * NC;
+        let p = Infinity, pc = -1;
+        if (c - minJog >= 0 && lowV[k + c - minJog] < p) { p = lowV[k + c - minJog]; pc = lowA[k + c - minJog]; }
+        if (c + minJog < NC && highV[k + c + minJog] < p) { p = highV[k + c + minJog]; pc = highA[k + c + minJog]; }
+        if (p === Infinity) continue;
+        const v = p + JOG + off(c, a0, a1);
+        if (v < best) { best = v; arg = k + pc; }
+      }
+      if (a1 === L && best < Infinity) best += ends[1](c);
+      dp[a1 * NC + c] = best; from[a1 * NC + c] = arg;
+    }
+    if (a1 === L) break;
+    const k = a1 * NC;
+    for (let c = 0; c < NC; c++) {
+      const prev = c ? lowV[k + c - 1] : Infinity;
+      if (dp[k + c] < prev) { lowV[k + c] = dp[k + c]; lowA[k + c] = c; } else { lowV[k + c] = prev; lowA[k + c] = lowA[k + c - 1]; }
+    }
+    for (let c = NC - 1; c >= 0; c--) {
+      const next = c < NC - 1 ? highV[k + c + 1] : Infinity;
+      if (dp[k + c] < next) { highV[k + c] = dp[k + c]; highA[k + c] = c; } else { highV[k + c] = next; highA[k + c] = highA[k + c + 1]; }
+    }
+  }
+  let c = -1;
+  for (let x = 0; x < NC; x++) if (dp[L * NC + x] < Infinity && (c < 0 || dp[L * NC + x] < dp[L * NC + c])) c = x;
+  if (c < 0) return null;
+  const runs = [];
+  for (let a = L; ;) {
+    const f = from[a * NC + c], a0 = f < 0 ? -Infinity : Math.floor(f / NC);
+    runs.unshift({ a0, a1: a === L ? Infinity : a, c: c + c0 });
+    if (f < 0) break;
+    a = a0; c = f % NC;
+  }
+  return runs;
+}
+
+// The land the river takes (water, bank roads and a tile of grass either
+// side, h tiles from its middle), as rectangles that run on far past the town.
+function riverLand(down, runs, h) {
+  const BIG = 1e6, out = [], last = runs.length - 1;
+  const xy = (u0, u1, v0, v1) => (down ? { x: v0, y: u0, w: v1 - v0, h: u1 - u0 } : { x: u0, y: v0, w: u1 - u0, h: v1 - v0 });
+  runs.forEach((r, k) => {
+    out.push(xy(k ? r.a0 - h : -BIG, k < last ? r.a1 + h : BIG, r.c - h, r.c + h));
+    if (k < last) { const n = runs[k + 1]; out.push(xy(r.a1 - h, r.a1 + h, Math.min(r.c, n.c) - h, Math.max(r.c, n.c) + h)); }
   });
-  return { down: best.down, bandAt: best.bandAt, pos, W: best.W, H: best.H };
+  return out;
+}
+// Which bank a rectangle clear of the river's land stands on: 0 before it, 1 past it.
+function sideOfRiver(down, runs, r) {
+  const u = down ? r.y + r.h / 2 : r.x + r.w / 2, v = down ? r.x + r.w / 2 : r.y + r.h / 2;
+  return v < (runs.find(q => u < q.a1) || runs[runs.length - 1]).c ? 0 : 1;
 }
 
 // Every neighbourhood where `was` had it, if it still fits there (one that
 // grew keeps one of its corners if it can); the rest on free land: on their
-// quarter's side of the river (a new quarter: the side with less land), as
-// near their quarter as they can without the town growing much. null when
+// quarter's side of the river (a new quarter: the side with less land, or
+// the first while the town is small), as near their quarter as they can
+// without the town growing much. The river stays as it was. null when
 // that takes more than `most` tiles of land.
 function keepTown(hoods, band, was, most) {
-  const { down, bandAt } = was, placed = [];
-  const sideOf = r => ((down ? r.x : r.y) < bandAt ? 0 : 1);
+  const { down, runs } = was, placed = [], land = riverLand(down, runs, band / 2);
+  const reach = Math.max(...runs.map(r => r.c + band / 2));
+  const sideOf = r => sideOfRiver(down, runs, r);
+  const hits = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
   const free = (h, x, y, side) => {
     if (x < 0 || y < 0) return false;
-    if (down ? x < bandAt + band && x + h.w > bandAt : y < bandAt + band && y + h.h > bandAt) return false;
-    if (side !== undefined && sideOf({ x, y }) !== side) return false;
+    const r = { x, y, w: h.w, h: h.h };
+    if (land.some(l => hits(l, r))) return false;
+    if (side !== undefined && sideOf(r) !== side) return false;
     return placed.every(r => { const s = r.q === h.q ? NEIGHBOURS : BELT; return x >= r.x + r.w + s || r.x >= x + h.w + s || y >= r.y + r.h + s || r.y >= y + h.h + s; });
   };
   const put = (h, x, y) => { placed.push({ k: h.k, q: h.q, x, y, w: h.w, h: h.h }); };
   const bySize = (a, b) => b.w * b.h - a.w * a.h || a.k - b.k;
+  const extent = rs => [Math.max(down ? reach : 0, ...rs.map(r => r.x + r.w)), Math.max(down ? 0 : reach, ...rs.map(r => r.y + r.h))];
   // Those of the same size first: they fit where they were.
   const left = [], same = h => { const o = was.pos.get(h.name); return o && o.w === h.w && o.h === h.h; };
   for (const h of [...hoods].sort((a, b) => same(b) - same(a) || bySize(a, b))) {
@@ -1434,12 +1668,16 @@ function keepTown(hoods, band, was, most) {
   for (const h of left) {
     const mates = placed.filter(r => r.q === h.q);
     const sideLand = [0, 1].map(s => placed.filter(r => sideOf(r) === s).reduce((n, r) => n + r.w * r.h, 0));
-    const side = mates.length ? (mates.filter(r => sideOf(r) === 1).length * 2 > mates.length ? 1 : 0) : (sideLand[0] <= sideLand[1] ? 0 : 1);
+    const side = mates.length ? (mates.filter(r => sideOf(r) === 1).length * 2 > mates.length ? 1 : 0)
+      : !sideLand[1] && sideLand[0] + h.w * h.h < 2 * SMALL_TOWN ? 0 : sideLand[0] <= sideLand[1] ? 0 : 1;
     const cx = mates.length ? mates.reduce((s, r) => s + r.x + r.w / 2, 0) / mates.length : 0;
     const cy = mates.length ? mates.reduce((s, r) => s + r.y + r.h / 2, 0) / mates.length : 0;
-    const extent = rs => [Math.max(down ? bandAt + band : 0, ...rs.map(r => r.x + r.w)), Math.max(down ? 0 : bandAt + band, ...rs.map(r => r.y + r.h))];
     const [W0, H0] = extent(placed);
-    const xs = new Set([0, down ? bandAt + band : 0, down ? bandAt - h.w : 0]), ys = new Set([0, down ? 0 : bandAt + band, down ? 0 : bandAt - h.h]);
+    const xs = new Set([0]), ys = new Set([0]);
+    for (const r of land) {
+      for (const x of [r.x, r.x + r.w, r.x - h.w]) if (Math.abs(x) < 1e5) xs.add(x);
+      for (const y of [r.y, r.y + r.h, r.y - h.h]) if (Math.abs(y) < 1e5) ys.add(y);
+    }
     for (const r of placed) {
       const s = r.q === h.q ? NEIGHBOURS : BELT;
       xs.add(r.x + r.w + s); xs.add(r.x - h.w - s); xs.add(r.x); ys.add(r.y + r.h + s); ys.add(r.y - h.h - s); ys.add(r.y);
@@ -1454,11 +1692,11 @@ function keepTown(hoods, band, was, most) {
     if (!best) return null;
     put(h, best.x, best.y);
   }
-  const [W, H] = (rs => [Math.max(down ? bandAt + band : 0, ...rs.map(r => r.x + r.w)), Math.max(down ? 0 : bandAt + band, ...rs.map(r => r.y + r.h))])(placed);
+  const [W, H] = extent(placed);
   if (W * H > most) return null;
   const pos = [];
   for (const r of placed) pos[r.k] = { x: r.x, y: r.y };
-  return { down, bandAt, pos, W, H };
+  return { down, runs, pos, W, H };
 }
 
 // Every road tile, key "i/j", with whether it belongs to a main road. Roads
@@ -1476,7 +1714,7 @@ function roadTiles(plan) {
 }
 
 // Whether a tile is the river's water (bridges stand on it too).
-const inRiver = (river, i, j) => !!river && i >= river.x && i < river.x + river.w && j >= river.y && j < river.y + river.h;
+const inRiver = (river, i, j) => !!river && river.parts.some(r => i >= r.x && i < r.x + r.w && j >= r.y && j < r.y + r.h);
 
 // ---------------------------------------------------------------- terrain
 // The land round the town grows from the world's seed: rolling hills from
@@ -1571,7 +1809,7 @@ function planTerrain(plan, seed, style = worldStyle(seed)) {
   // The town: its blocks, pocket parks, river and roads.
   const toTown = new Float32Array(N).fill(Infinity), queue = [];
   const town = k => { if (toTown[k] === Infinity) { toTown[k] = 0; queue.push(k); } };
-  for (const r of [...plan.districts.flatMap(d => d.blocks), ...plan.parks, ...(plan.river ? [plan.river] : [])])
+  for (const r of [...plan.districts.flatMap(d => d.blocks), ...plan.parks, ...(plan.river ? plan.river.parts : [])])
     for (let j = Math.max(r.y, y0); j < Math.min(r.y + r.h, y0 + H); j++)
       for (let i = Math.max(r.x, x0); i < Math.min(r.x + r.w, x0 + W); i++) town(at(i, j));
   for (const key of roadTiles(plan).keys()) {
@@ -1660,7 +1898,7 @@ function planTerrain(plan, seed, style = worldStyle(seed)) {
   const near = (k, visit) => { const i = k % W; if (i > 0) visit(k - 1); if (i < W - 1) visit(k + 1); if (k >= W) visit(k - W); if (k + W < N) visit(k + W); };
   const edge = k => { const i = k % W, j = (k / W) | 0; return i === 0 || j === 0 || i === W - 1 || j === H - 1; };
   const main = new Uint8Array(N), r = plan.river, inMap = (i, j) => i >= x0 && j >= y0 && i < x0 + W && j < y0 + H;
-  if (r) for (let j = r.y; j < r.y + r.h; j++) for (let i = r.x; i < r.x + r.w; i++) if (inMap(i, j)) main[at(i, j)] = 1;
+  if (r) for (const p of r.parts) for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) if (inMap(i, j)) main[at(i, j)] = 1;
   // The flat ring by the river's own ends: closer to its water than to the rest of the town.
   const toRiver = new Float32Array(N).fill(Infinity), ends = [];
   for (let k = 0; k < N; k++) if (main[k]) { toRiver[k] = 0; ends.push(k); }
@@ -1742,10 +1980,8 @@ function planTerrain(plan, seed, style = worldStyle(seed)) {
     return 1 + tiles.reduce((c, q) => c + DIG * Math.max(0, level[q] - 1) + (ring(q) ? RING_COST : 0), 0);
   };
   if (r) {
-    const down = r.h > r.w;
     const lead = (i, j) => inMap(i, j) && inMap(i + RIVER - 1, j + RIVER - 1) ? [at(i, j)] : [];
-    const mouth = down ? lead(r.x, r.y + r.h) : lead(r.x + r.w, r.y);
-    const head = down ? lead(r.x, r.y - RIVER) : lead(r.x - RIVER, r.y);
+    const mouth = lead(...r.mouth), head = lead(...r.head);
     const below = cheapest(mouth, RIVER, downhill(RIVER), k => toSea(k, RIVER));
     for (const k of below) for (const q of square(k, RIVER)) { level[q] = 1; main[q] = 1; }
     // Up into the hills along the gentlest way: a lead whose square spans
@@ -2640,37 +2876,59 @@ function parkTrees(p) {
 }
 
 // The river in the Metropolis look: water between stone kerbs with the far
-// bank's wall showing above it, bridges with a parapet each side, and the
-// water on the front of the base where it leaves the town.
+// bank's wall showing above it (where a bank lies behind the water, towards
+// -i or -j), bridges with a parapet each side, and the water on the front of
+// the base where it leaves the town.
 function drawRiver(g) {
-  const r = plan.river, down = r.h > r.w, half = plan.gap / 2, kerb = 0.12;
-  // Along the river (u) and across it (v), in tiles; z in pixels up.
-  const pt = (u, v, z = 0) => { const [x, y] = down ? iso(v, u) : iso(u, v); return [x, y - z]; };
-  const area = (u, v, du, dv, z = 0) => [pt(u, v, z), pt(u + du, v, z), pt(u + du, v + dv, z), pt(u, v + dv, z)];
-  // A face standing on the line from (u0, v0) to (u1, v1), from z0 to z1.
-  const face = (u0, v0, u1, v1, z0, z1) => [pt(u0, v0, z0), pt(u1, v1, z0), pt(u1, v1, z1), pt(u0, v0, z1)];
-  const u0 = down ? r.y : r.x, len = down ? r.h : r.w, v0 = down ? r.x : r.y;
-  // Faces towards +u and +v, lit as a block's left side (towards +j) or right side (towards +i).
-  const [uFace, vFace] = down ? [0.72, 0.6] : [0.6, 0.72];
-  poly(g, ART.water, area(u0, v0, len, RIVER));
-  for (let u = u0; u < u0 + len; u++) for (let v = v0; v < v0 + RIVER; v++) {
-    const h = hash(`ripple ${u}/${v}`);
-    if (h % 3 === 0) poly(g, ART.ripple, area(u + 0.15 + ((h >>> 4) % 5) / 10, v + 0.25 + ((h >>> 8) % 5) / 10, 0.35, 0.05));
+  const river = plan.river, half = plan.gap / 2, kerb = 0.12;
+  const pt = (i, j, z = 0) => { const [x, y] = iso(i, j); return [x, y - z]; };
+  const area = (i, j, w, h, z = 0) => [pt(i, j, z), pt(i + w, j, z), pt(i + w, j + h, z), pt(i, j + h, z)];
+  const face = (i0, j0, i1, j1, z0, z1) => [pt(i0, j0, z0), pt(i1, j1, z0), pt(i1, j1, z1), pt(i0, j0, z1)];
+  const wet = new Set();
+  for (const p of river.parts) {
+    poly(g, ART.water, area(p.x, p.y, p.w, p.h));
+    for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) wet.add(`${i}/${j}`);
   }
-  poly(g, ART.sidewalk, area(u0, v0, len, kerb));
-  poly(g, ART.sidewalk, area(u0, v0 + RIVER - kerb, len, kerb));
-  poly(g, shade(ART.sidewalk, vFace), face(u0, v0 + kerb, u0 + len, v0 + kerb, 0, -3));
-  poly(g, shade(ART.water, uFace + 0.15), face(u0 + len, v0, u0 + len, v0 + RIVER, 0, -4));
+  // Past its ends the river runs on in the terrain: no kerb or wall across it.
+  const isWet = (i, j) => wet.has(`${i}/${j}`) || (river.down ? j < -MARGIN || j >= plan.H + MARGIN : i < -MARGIN || i >= plan.W + MARGIN);
+  // A face towards +i is lit as a block's right side, towards +j as its left.
+  for (const t of wet) {
+    const [i, j] = t.split("/").map(Number), hh = hash(`ripple ${i}/${j}`);
+    if (hh % 3 === 0) {
+      const a = 0.15 + ((hh >>> 4) % 5) / 10, b = 0.25 + ((hh >>> 8) % 5) / 10;
+      poly(g, ART.ripple, river.down ? area(i + b, j + a, 0.05, 0.35) : area(i + a, j + b, 0.35, 0.05));
+    }
+    if (!isWet(i - 1, j)) poly(g, ART.sidewalk, area(i, j, kerb, 1));
+    if (!isWet(i + 1, j)) poly(g, ART.sidewalk, area(i + 1 - kerb, j, kerb, 1));
+    if (!isWet(i, j - 1)) poly(g, ART.sidewalk, area(i, j, 1, kerb));
+    if (!isWet(i, j + 1)) poly(g, ART.sidewalk, area(i, j + 1 - kerb, 1, kerb));
+  }
+  for (const t of wet) {
+    const [i, j] = t.split("/").map(Number);
+    if (!isWet(i - 1, j)) poly(g, shade(ART.sidewalk, 0.6), face(i + kerb, j, i + kerb, j + 1, 0, -3));
+    if (!isWet(i, j - 1)) poly(g, shade(ART.sidewalk, 0.72), face(i, j + kerb, i + 1, j + kerb, 0, -3));
+  }
+  // Where it leaves the town's base, at its far end.
+  const last = river.parts[river.parts.length - 1];
+  poly(g, shade(ART.water, (river.down ? 0.72 : 0.6) + 0.15), river.down
+    ? face(last.x, last.y + last.h, last.x + last.w, last.y + last.h, 0, -4)
+    : face(last.x + last.w, last.y, last.x + last.w, last.y + last.h, 0, -4));
   for (const b of plan.roads) {
     if (!b.bridge) continue;
+    // Along the bridge's road (u) and across it (v): a bridge over water
+    // that runs down (along j) is a road along i.
+    const down = b.j0 === b.j1, c = down ? b.j0 : b.i0, v0 = (down ? b.i0 + b.i1 : b.j0 + b.j1) / 2 - RIVER / 2;
+    const q = (u, v, z = 0) => (down ? pt(v, u, z) : pt(u, v, z));
+    const ar = (u, v, du, dv, z = 0) => [q(u, v, z), q(u + du, v, z), q(u + du, v + dv, z), q(u, v + dv, z)];
+    const fc = (u0, w0, u1, w1, z0, z1) => [q(u0, w0, z0), q(u1, w1, z0), q(u1, w1, z1), q(u0, w0, z1)];
+    const uFace = down ? 0.72 : 0.6, lo = c - half, hi = c + half;
     // Its shadow on the water, the deck's edge, the deck, then the parapets.
-    const c = down ? b.j0 : b.i0, lo = c - half, hi = c + half;
-    poly(g, shade(ART.water, 0.8), area(hi, v0 + kerb, 0.3, RIVER - 2 * kerb));
-    poly(g, shade(ART.concrete, uFace), face(hi, v0, hi, v0 + RIVER, 0, -3));
-    poly(g, ART.asphalt, area(lo, v0, plan.gap, RIVER));
+    poly(g, shade(ART.water, 0.8), ar(hi, v0 + kerb, 0.3, RIVER - 2 * kerb));
+    poly(g, shade(ART.concrete, uFace), fc(hi, v0, hi, v0 + RIVER, 0, -3));
+    poly(g, ART.asphalt, ar(lo, v0, plan.gap, RIVER));
     for (const p of [lo, hi - 0.14]) {
-      poly(g, shade(ART.parapet, uFace), face(p + 0.14, v0 - 0.1, p + 0.14, v0 + RIVER + 0.1, 0, 5));
-      poly(g, ART.parapet, area(p, v0 - 0.1, 0.14, RIVER + 0.2, 5));
+      poly(g, shade(ART.parapet, uFace), fc(p + 0.14, v0 - 0.1, p + 0.14, v0 + RIVER + 0.1, 0, 5));
+      poly(g, ART.parapet, ar(p, v0 - 0.1, 0.14, RIVER + 0.2, 5));
     }
   }
 }
