@@ -410,7 +410,7 @@ Built (#40, 2026-10-29): the terrain drawn with its height in both looks.
 | Town and buildings | Stay as they were, at z 0, in front of the terrain (Metropolis's town drawn after it; buildings in the city layer) | #39 keeps the town flat and the land rising slowly round it, so higher ground in front never reaches over it; `hiddenBy()` checks every town tile and every block tile with a 200 px building, on every seed |
 | Trees | Stand at their tile's height; a tree that higher ground in front would partly hide (`hiddenBy()`) is drawn into the ground in order, the rest stay in the city layer and sort with the buildings. Still only on the 4 tiles round the town | In the ground they would no longer sort with buildings, but such trees are always 2 or more tiles from the town; forests are #43 |
 | Roads and river | Still end 4 tiles out of town | #42 and #44 carry them on (both built) |
-| Camera | Zooms out until the whole world is in view; "fit" still frames the town | #46 |
+| Camera | Zooms out until the whole world is in view; "fit" still frames the town | #46 narrowed it to the town |
 
 Big recording, 13 seeds, both road widths: no town tile or building is ever
 hidden; 0–40 trees go into the ground, none next to the town; the ground
@@ -535,6 +535,17 @@ four namespaces, 6 seeds each (120 runs): all pass but one dead end
 #44's ramps; a town of one namespace has no road out of town, so its island
 has no harbour. The terrain takes 130–450 ms on a busy machine (#44 alone:
 60–340 ms there); not measured quiet.
+
+Built (#46, 2026-11-03): the terrain steps back when the viewer looks for
+problems, in the ground shader (`GROUND_FRAGMENT`, `calmTerrain()`).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Calm | The terrain's colours a third their own, the rest grey and a light ground (`uCalm`), coming in with the district overlay (`overlayStrength`), so fully calm at cluster zoom; the town's ground never changes | The issue: district health stays the strongest colour on screen |
+| Details | Trees, farms, the harbour shed, furrows, stones and water glints outside the town fade out with the calm (a vertex's `aLand` 2), and so do cars on country roads | Owner's choice |
+| Focus | Calm at every zoom, and the terrain blended 80 % into the background (`uFade`, `CALM_FADE`) | Owner's choice: as strong as healthy buildings' fade |
+| Camera | The farthest zoom is 0.75 × fit (`FARTHEST`): the town and a ring of country, no longer the whole world; fit frames the town as before | Owner's choice |
+| Hit testing | Unchanged: hover, click and search only look at buildings and districts, the ground mesh takes no events, and #40's `hiddenBy()` checks keep terrain out of the town's way | Already true; verified |
 
 **Neighbourhoods and zones** (#47–#50): the owner asked for a city spread
 out like SimCity or Cities: Skylines (houses, shops, towers).
