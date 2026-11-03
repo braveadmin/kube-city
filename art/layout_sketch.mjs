@@ -107,7 +107,7 @@ console.log(`zones: centre ${zoneCount("centre")}, industry ${zoneCount("industr
 let townBefore = 0;
 { const s = new Set(roadTiles({ ...before, gap }).keys());
   for (const d of before.districts) for (const b of d.blocks) for (let j = b.y; j < b.y + b.h; j++) for (let i = b.x; i < b.x + b.w; i++) s.add(`${i}/${j}`);
-  for (const p of [...before.parks, ...(before.river ? [before.river] : [])]) for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) s.add(`${i}/${j}`);
+  for (const p of [...before.parks, ...(before.river ? before.river.parts : [])]) for (let j = p.y; j < p.y + p.h; j++) for (let i = p.x; i < p.x + p.w; i++) s.add(`${i}/${j}`);
   townBefore = [...s].filter(t => { const [i, j] = t.split("/").map(Number); return i >= 0 && j >= 0 && i < before.W && j < before.H; }).length; }
 console.log(`tiles per building: town ${(town / buildings).toFixed(2)}, its rectangle ${(city.W * city.H / buildings).toFixed(2)}; one town cut in two (#33–#37): ${(townBefore / buildings).toFixed(2)}, ${(before.W * before.H / buildings).toFixed(2)}; rectangle ${(city.W * city.H / (before.W * before.H)).toFixed(2)} ×`);
 if (city.quarters) {
@@ -127,7 +127,8 @@ if (city.quarters) {
 const blocks = city.districts.reduce((s, d) => s + d.blocks.length, 0), lots = city.districts.reduce((s, d) => s + d.cells.length, 0);
 const bridges = inner.filter(r => r.bridge).length;
 console.log(`roads: ${inner.length - bridges} cuts (${inner.filter(r => r.main && !r.bridge).length} main), longest ${longest} tiles, ${pieces} piece${pieces === 1 ? "" : "s"}; pocket parks: ${city.parks.length}`);
-console.log(`river: ${city.river ? `${Math.max(city.river.w, city.river.h)} tiles long, ${bridges} bridge${bridges === 1 ? "" : "s"}` : "none"}`);
+const runs = city.river ? city.river.runs : [];
+console.log(`river: ${city.river ? `${runs.length - 1} bend${runs.length === 2 ? "" : "s"} (runs at ${runs.map(r => r.c).join(", ")} across), ${bridges} bridge${bridges === 1 ? "" : "s"}` : "none"}`);
 console.log(`blocks: ${blocks} (${city.districts.filter(d => d.blocks.length > 1).length} quarters); lots: ${lots}, ${(100 * buildings / lots).toFixed(0)} % built on`);
 if (gap === 1) console.log(`junctions: ${count.t} T, ${count.cross} crossroads, ${count.dead} dead ends`);
 

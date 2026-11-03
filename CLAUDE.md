@@ -30,6 +30,13 @@ counts what moved):
 node art/layout_sketch.mjs recordings/big-cluster.jsonl [2] [--live] [--grow]
 ```
 
+The town's checks on random clusters (roads in one piece, gaps, the river,
+nothing moved; about 6 minutes for 250, exits 1 on a failure):
+
+```bash
+node art/town_check.mjs [clusters] [seed]
+```
+
 #47's first sketch, the quarters without roads or river (kept for
 comparison):
 
