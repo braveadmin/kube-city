@@ -2133,11 +2133,11 @@ uniform sampler2D uSampler; uniform float uCalm; uniform float uFade; uniform ve
 void main() {
   vec4 c = texture2D(uSampler, vTextureCoord) * vColor;
   if (vLand > 0.5 && c.a > 0.0) {
-    // Premultiplied: the colour itself, paled (a third of it, the rest grey
-    // and a light ground), then blended into the background.
+    // Premultiplied: the colour itself, paled (60 % of it, 30 % grey
+    // and 10 % a light ground), then blended into the background.
     vec3 rgb = c.rgb / c.a;
     float grey = dot(rgb, vec3(1.0 / 3.0));
-    rgb = mix(rgb, rgb * 0.35 + grey * 0.45 + 0.157, uCalm);
+    rgb = mix(rgb, rgb * 0.6 + grey * 0.3 + 0.078, uCalm);
     rgb = mix(rgb, uSky, ${CALM_FADE} * uFade);
     c = vec4(rgb * c.a, c.a) * (1.0 - uCalm * vDetail);
   }

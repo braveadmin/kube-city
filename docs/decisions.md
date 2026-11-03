@@ -541,7 +541,7 @@ problems, in the ground shader (`GROUND_FRAGMENT`, `calmTerrain()`).
 
 | Topic | Decision | Why |
 |---|---|---|
-| Calm | The terrain's colours a third their own, the rest grey and a light ground (`uCalm`), coming in with the district overlay (`overlayStrength`), so fully calm at cluster zoom; the town's ground never changes | The issue: district health stays the strongest colour on screen |
+| Calm | The terrain's colours 60 % their own, 30 % grey and 10 % a light ground (`uCalm`), coming in with the district overlay (`overlayStrength`), so fully calm at cluster zoom; the town's ground never changes | The issue: district health stays the strongest colour on screen |
 | Details | Trees, farms, the harbour shed, furrows, stones and water glints outside the town fade out with the calm (a vertex's `aLand` 2), and so do cars on country roads | Owner's choice |
 | Focus | Calm at every zoom, and the terrain blended 80 % into the background (`uFade`, `CALM_FADE`) | Owner's choice: as strong as healthy buildings' fade |
 | Camera | The farthest zoom is 0.75 × fit (`FARTHEST`): the town and a ring of country, no longer the whole world; fit frames the town as before | Owner's choice |
