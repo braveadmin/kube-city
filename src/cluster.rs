@@ -6,7 +6,7 @@ use std::{collections::HashSet, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use futures::{StreamExt, stream};
-use k8s_openapi::api::core::v1::{Pod, PodStatus};
+use k8s_openapi::api::core::v1::{Container, Pod, PodSpec, PodStatus};
 use kube::{
     Api, Client, Config,
     api::ListParams,
@@ -197,7 +197,63 @@ fn details_of(pod: &Pod) -> PodDetails {
             .as_ref()
             .and_then(|time| serde_json::to_value(time).ok()?.as_str().map(str::to_owned)),
         reason: reason_of(status),
+        cpu: spec.and_then(|spec| requested(spec, "cpu", 1000.0)),
+        memory: spec.and_then(|spec| requested(spec, "memory", 1.0)),
     }
+}
+
+/// What a pod requests of one resource, as the scheduler counts it: its
+/// containers and sidecars (init containers that keep running) together, or
+/// an init container plus the sidecars started before it, if that is more.
+/// In `unit`s of the resource (1000 for millicores); `None` for nothing.
+fn requested(spec: &PodSpec, resource: &str, unit: f64) -> Option<u64> {
+    let request = |container: &Container| {
+        let quantity = container.resources.as_ref()?.requests.as_ref()?.get(resource)?;
+        quantity_of(&quantity.0)
+    };
+    let mut sidecars = 0.0;
+    let mut init = 0.0_f64;
+    for container in spec.init_containers.iter().flatten() {
+        let amount = request(container).unwrap_or(0.0);
+        if container.restart_policy.as_deref() == Some("Always") {
+            sidecars += amount;
+        } else {
+            init = init.max(sidecars + amount);
+        }
+    }
+    let running: f64 = spec.containers.iter().filter_map(request).sum::<f64>() + sidecars;
+    let total = (running.max(init) * unit).round();
+    (total >= 1.0).then_some(total as u64)
+}
+
+/// A Kubernetes quantity (`500m`, `1.5`, `2Gi`, `512M`, `1e3`) as a number.
+fn quantity_of(text: &str) -> Option<f64> {
+    const SUFFIXES: [(&str, f64); 15] = [
+        ("Ki", 1024.0),
+        ("Mi", 1_048_576.0),
+        ("Gi", 1_073_741_824.0),
+        ("Ti", 1_099_511_627_776.0),
+        ("Pi", 1_125_899_906_842_624.0),
+        ("Ei", 1_152_921_504_606_846_976.0),
+        ("n", 1e-9),
+        ("u", 1e-6),
+        ("m", 1e-3),
+        ("k", 1e3),
+        ("M", 1e6),
+        ("G", 1e9),
+        ("T", 1e12),
+        ("P", 1e15),
+        ("E", 1e18),
+    ];
+    let text = text.trim();
+    // A plain number, or one with an exponent ("1e3", "1E3").
+    if let Ok(number) = text.parse::<f64>() {
+        return number.is_finite().then_some(number);
+    }
+    SUFFIXES.iter().find_map(|(suffix, scale)| {
+        let number: f64 = text.strip_suffix(suffix)?.parse().ok()?;
+        number.is_finite().then_some(number * scale)
+    })
 }
 
 /// The most telling reason a pod is not simply running: what a container is
@@ -406,6 +462,54 @@ mod tests {
         // The age kubectl shows counts from creation, not from the last start.
         assert_eq!(details.created.as_deref(), Some("2026-10-20T08:00:00Z"));
         assert_eq!(details.reason.as_deref(), Some("OOMKilled"));
+    }
+
+    #[test]
+    fn quantities_read_like_kubernetes_writes_them() {
+        let close = |text: &str, want: f64| {
+            let got = quantity_of(text).unwrap_or_else(|| panic!("{text} parses"));
+            assert!((got - want).abs() <= want.abs() * 1e-9, "{text}: {got} != {want}");
+        };
+        close("500m", 0.5);
+        close("1.5", 1.5);
+        close("2", 2.0);
+        close("2Gi", 2.0 * 1024.0 * 1024.0 * 1024.0);
+        close("512Mi", 512.0 * 1024.0 * 1024.0);
+        close("512M", 512e6);
+        close("1e3", 1000.0);
+        close("1E", 1e18);
+        close("100k", 1e5);
+        close("250000u", 0.25);
+        assert_eq!(quantity_of("lots"), None);
+        assert_eq!(quantity_of(""), None);
+    }
+
+    #[test]
+    fn requests_count_as_the_scheduler_counts_them() {
+        let resources = |cpu: &str, memory: &str| json!({ "requests": { "cpu": cpu, "memory": memory } });
+        let pod = pod(json!({
+            "metadata": { "uid": "u", "name": "p", "namespace": "shop" },
+            "spec": {
+                "initContainers": [
+                    { "name": "migrate", "resources": resources("2", "1Gi") },
+                    { "name": "mesh", "restartPolicy": "Always", "resources": resources("100m", "64Mi") },
+                    { "name": "warm", "resources": resources("200m", "3Gi") }
+                ],
+                "containers": [
+                    { "name": "app", "resources": resources("500m", "1Gi") },
+                    { "name": "log", "resources": { "requests": { "cpu": "50m" } } },
+                    { "name": "bare" }
+                ]
+            }
+        }));
+        let details = pod_info(&pod).expect("a pod").details;
+        // CPU: the first init container (2) beats the running ones with the sidecar (0.65).
+        assert_eq!(details.cpu, Some(2000));
+        // Memory: the last init container with the sidecar started before it (3Gi + 64Mi)
+        // beats the running ones (1Gi + 64Mi).
+        assert_eq!(details.memory, Some((3 * 1024 + 64) * 1024 * 1024));
+        let bare = pod_info(&running("lonely")).expect("a pod").details;
+        assert_eq!((bare.cpu, bare.memory), (None, None));
     }
 
     #[test]

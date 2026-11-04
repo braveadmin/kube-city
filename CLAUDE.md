@@ -37,6 +37,13 @@ nothing moved; about 6 minutes for 250, exits 1 on a failure):
 node art/town_check.mjs [clusters] [seed]
 ```
 
+The towers' checks (#49) on random towns: the height scale, and the
+heaviest workloads in the middle of each block (under a second):
+
+```bash
+node art/towers_check.mjs [clusters] [seed]
+```
+
 #47's first sketch, the quarters without roads or river (kept for
 comparison):
 

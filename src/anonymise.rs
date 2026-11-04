@@ -340,6 +340,8 @@ mod tests {
                 containers: 1,
                 created: Some("2026-10-22T08:00:00Z".into()),
                 reason: Some("CrashLoopBackOff".into()),
+                cpu: Some(250),
+                memory: Some(512 << 20),
             },
         }
     }
@@ -361,6 +363,8 @@ mod tests {
         assert_eq!((fake.kind, fake.state, fake.details.restarts), (real.kind, real.state, 4));
         // The role was worked out from the real images and is kept (#48).
         assert_eq!(fake.role, Some(Role::Data));
+        // Requests are plain numbers and stay (#49).
+        assert_eq!((fake.details.cpu, fake.details.memory), (Some(250), Some(512 << 20)));
         assert_eq!(fake.details.reason.as_deref(), Some("CrashLoopBackOff"));
         assert!(fake.details.name.starts_with(&format!("{}-", fake.workload)), "{text}");
         // Two versions of one image keep one name.
