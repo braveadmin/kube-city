@@ -650,10 +650,23 @@ one that grew out of its quarter and needs a belt round it now.
 Through a fresh pack the river kept its direction 1 193 times of 1 421, but
 its way in and out only 95 times: the half that grows gets wider and pushes
 the river out. Keeping them every time would take bends outside the town
-(more land); left to the owner.
+(more land). The owner merged PR #87 as it was (2026-11-04): 3A stays as
+built, the way in and out kept only where it fits.
 
-Left for #47: quarter labels and per-neighbourhood health at cluster zoom;
-fit framing the whole city.
+Built (#47, cluster zoom, 2026-11-04):
+
+| Topic | Decision | Why |
+|---|---|---|
+| Quarter labels | At cluster zoom a label over each quarter of two or more neighbourhoods with pods, at the middle of their bounding box: its name, and the pods, problems and pending pods of all of them; bigger than a neighbourhood's sign, with a double border | The issue: a quarter reads as one place from afar |
+| Name | `quarterName()`: the stem all its namespaces share at a word boundary (`-`, `.`, `_`), at least `STEM` (3) letters, at the start or the end, with how many there are ("feature-* · 6", "*-dev · 3"); else the biggest (most workloads) and how many more ("payments +2") | Decision 4A |
+| Order | Quarter labels are placed first, biggest quarter first; neighbourhood signs follow and give way where they overlap, as before | The plan on the issue |
+| Health | Each neighbourhood keeps its own colour and state bar (its own rectangle); the gaps between them stay park | Already so since PR #86 |
+| Fit | Frames the town's whole rectangle (both banks, the roads round its outside) with 2 tiles of margin, as before | Already so; nothing to change |
+| Demo | Two more branch namespaces of `feature-preview`'s stack (`feature-search`, `feature-login`) | So the demo shows a quarter |
+| Another cluster | Forgets the last town's places (`townPlaced`), so its river and namespaces of the same name do not carry over | A bug found on the way |
+
+On the big recording both quarters mix two families of names (3 and 3,
+2 and 4), so neither has a stem and both get "biggest +5".
 
 ## Roadmap
 

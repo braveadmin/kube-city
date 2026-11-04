@@ -13,7 +13,7 @@
 // piece; the river's runs are long enough and its bends wide enough; no
 // neighbourhood moved for another one (a plan that kept the town; one that
 // left its quarter may move, as it needs a belt round it now); a small
-// town keeps to one bank on a fresh pack.
+// town keeps to one bank on a fresh pack. Also the quarter labels' names.
 
 import { readFileSync } from "node:fs";
 
@@ -27,8 +27,22 @@ const page = readFileSync(new URL("city.template.html", import.meta.url), "utf8"
 const MARK = "// ---------------------------------------------------------------- ";
 const from = page.indexOf(`${MARK}layout\n`), to = page.indexOf(MARK, from + MARK.length);
 const hashFn = page.slice(page.indexOf("function hash("), page.indexOf("function rng("));
-const L = new Function(`${hashFn}${page.slice(from, to)}\nreturn { planTown, roadTiles, inRiver, lotsFor, MARGIN, NEIGHBOURS, BELT, RIVER, SMALL_TOWN };`)();
-const { planTown, roadTiles, inRiver, lotsFor, NEIGHBOURS, BELT, RIVER, SMALL_TOWN } = L;
+const L = new Function(`${hashFn}${page.slice(from, to)}\nreturn { planTown, roadTiles, inRiver, lotsFor, quarterName, MARGIN, NEIGHBOURS, BELT, RIVER, SMALL_TOWN };`)();
+const { planTown, roadTiles, inRiver, lotsFor, quarterName, NEIGHBOURS, BELT, RIVER, SMALL_TOWN } = L;
+
+// Quarter labels (decision 4A): a shared stem at a word boundary, else the
+// biggest namespace and how many more.
+const NAMES = [
+  [["feature-abc", "feature-abd", "feature-xyz"], [1, 1, 1], "feature-* · 3"],
+  [["app", "app-dev", "app-staging"], [1, 1, 1], "app-* · 3"],
+  [["shop-dev", "billing-dev", "auth-dev"], [1, 1, 1], "*-dev · 3"],
+  [["team.alpha.one", "team.alpha.two"], [1, 1], "team.alpha.* · 2"],
+  [["payments", "ledger", "invoices"], [3, 9, 2], "ledger +2"],
+  [["ab-x", "ab-y"], [1, 1], "ab-x +1"],
+  [["solo"], [1], "solo"],
+];
+const badNames = NAMES.filter(([n, s, want]) => quarterName(n, s) !== want);
+for (const [n, s, want] of badNames) console.log(`FAIL quarter name of ${JSON.stringify(n)}: ${quarterName(n, s)}, not ${want}`);
 
 // A random cluster: up to three stacks shared by branch namespaces, the rest
 // on their own.
@@ -162,5 +176,5 @@ console.log(`${COUNT} clusters, ${counts.plans} plans (${(ms / counts.plans).toF
 console.log(`neighbourhoods that left their quarter and moved: ${counts.leftQuarter}`);
 console.log(`a fresh pack after another plan kept the river's direction ${counts.keptDown} times of ${counts.freshWithWas}, its way in and out too ${counts.keptRiver} times`);
 for (const [what, { n, info }] of fails) console.log(`FAIL ${what}: ${n} (e.g. ${JSON.stringify(info)})`);
-if (!fails.size) console.log("all checks pass");
-process.exit(fails.size ? 1 : 0);
+if (!fails.size && !badNames.length) console.log("all checks pass");
+process.exit(fails.size || badNames.length ? 1 : 0);

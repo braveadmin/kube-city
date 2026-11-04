@@ -32,6 +32,9 @@ const CATALOGUE: &[(&str, &[Workload])] = &[
         "feature-preview",
         &[("console", DEP), ("middleware", DEP), ("core", DEP), ("debug-shell", WorkloadKind::Standalone)],
     ),
+    // Branch namespaces of the same stack: together a quarter of the city (#47).
+    ("feature-search", &[("console", DEP), ("middleware", DEP), ("core", DEP)]),
+    ("feature-login", &[("console", DEP), ("middleware", DEP), ("core", DEP)]),
 ];
 const JOB: Workload = ("report-job", WorkloadKind::Job);
 /// Scale-ups stop here; restarts and new namespaces may briefly exceed it.
