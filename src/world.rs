@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::roles::Role;
+
 /// What a pod is doing, reduced to what the city can show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PodState {
@@ -33,6 +35,11 @@ pub struct PodInfo {
     pub workload: String,
     pub kind: WorkloadKind,
     pub state: PodState,
+    /// What the workload does, from its images (#48); worked out by the
+    /// source, before anonymising. `None` only in recordings made before
+    /// kube-city sent it, until `recording::load` fills it in.
+    #[serde(default)]
+    pub role: Option<Role>,
     /// What the browser's inspector shows; empty in recordings made before
     /// kube-city collected it.
     #[serde(default)]
@@ -78,6 +85,7 @@ pub(crate) mod tests {
             workload: "web".to_owned(),
             kind: WorkloadKind::Deployment,
             state,
+            role: Some(Role::Other),
             details: PodDetails::default(),
         })
     }
@@ -94,5 +102,6 @@ pub(crate) mod tests {
         let WorldEvent::PodUpserted(info) = event else { panic!("an upsert") };
         assert_eq!(info.details, PodDetails::default());
         assert_eq!(info.state, PodState::Running);
+        assert_eq!(info.role, None);
     }
 }

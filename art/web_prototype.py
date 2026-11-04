@@ -27,6 +27,7 @@ SALT = "kube-city-web"
 
 KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "Standalone"]
 STATES = ["Pending", "Running", "CrashLoop", "Terminating", "Succeeded", "Failed"]
+ROLES = ["web", "other", "data", "messaging", "worker"]
 
 WORDS = """
 alder amber aspen basalt birch bramble brook cedar cinder clover cobalt coral
@@ -54,6 +55,37 @@ SUFFIXES = {
 KEPT_NAMESPACES = ["default", "kube-system", "kube-public", "kube-node-lease"]
 INFRA = "argo argocd calico cert-manager cilium crossplane external-dns external-secrets flux forgejo gatekeeper gitea gitlab grafana ingress istio jaeger keda kyverno linkerd logging loki longhorn metallb minio monitoring observability openbao prometheus rook tekton tigera traefik vault velero".split()
 INFRA_SUFFIXES = ["-system", "-operator", "-operators"]
+
+# A workload's role from its images (#48), as src/roles.rs works it out; the
+# same lists are there. Recordings without images use the workload's name.
+ROLE_IMAGES = [
+    ("data", "cassandra clickhouse cockroach couchdb dragonfly elasticsearch etcd influxdb keydb mariadb memcached minio mongo mysql neo4j opensearch postgis postgres redis scylla timescale valkey"),
+    ("messaging", "activemq artemis emqx kafka mosquitto nats pulsar rabbitmq redpanda zookeeper"),
+    ("web", "caddy envoy haproxy httpd kong nginx traefik"),
+]
+SIDECARS = "cloud-sql-proxy consul-dataplane fluent-bit istio-proxy kube-rbac-proxy linkerd-proxy linkerd2-proxy oauth2-proxy proxyv2 vault".split()
+
+
+def image_path(image):
+    parts = image.split("@")[0].split("/")
+    if len(parts) > 1 and (any(c in parts[0] for c in ".:") or parts[0] == "localhost"):
+        parts = parts[1:]
+    parts[-1] = parts[-1].split(":")[0]
+    return "/".join(parts).lower()
+
+
+def role_of(pod):
+    if pod.get("role"):
+        return pod["role"]
+    if pod["kind"] == "Job":
+        return "worker"
+    paths = [image_path(i) for i in pod.get("details", {}).get("images", [])]
+    main = next((p for p in paths if p.split("/")[-1] not in SIDECARS), paths[0] if paths else None)
+    words = re.split(r"[/\-_.]", (main or pod["workload"]).lower())
+    for role, names in ROLE_IMAGES:
+        if any(w.startswith(n) for w in words for n in names.split()):
+            return role
+    return "other"
 
 
 def digest(text):
@@ -130,7 +162,8 @@ def anonymise(lines):
             wl = index(wl_index, (pod["kind"], pod["workload"]), workloads,
                        lambda: workload_name(pod["workload"], pod["kind"], wl_names))
             uid = pod_index.setdefault(pod["uid"], len(pod_index))
-            events.append([at, uid, ns, wl, KINDS.index(pod["kind"]), STATES.index(pod["state"])])
+            events.append([at, uid, ns, wl, KINDS.index(pod["kind"]), STATES.index(pod["state"]),
+                           ROLES.index(role_of(pod))])
         elif "PodDeleted" in event:
             uid = pod_index.get(event["PodDeleted"]["uid"])
             if uid is not None:

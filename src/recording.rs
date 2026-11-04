@@ -18,7 +18,7 @@ use tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
 };
 
-use crate::world::WorldEvent;
+use crate::{roles::role_of, world::WorldEvent};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Entry {
@@ -63,8 +63,14 @@ pub fn load(path: &Path) -> Result<Vec<(Duration, WorldEvent)>> {
         .enumerate()
         .filter(|(_, line)| !line.trim().is_empty())
         .map(|(i, line)| {
-            let entry: Entry = serde_json::from_str(line)
+            let mut entry: Entry = serde_json::from_str(line)
                 .with_context(|| format!("{}, line {}: not a kube-city recording", path.display(), i + 1))?;
+            // Recordings made before roles were sent (#48).
+            if let WorldEvent::PodUpserted(pod) = &mut entry.event
+                && pod.role.is_none()
+            {
+                pod.role = Some(role_of(pod.kind, &pod.details.images, &pod.workload));
+            }
             Ok((Duration::from_millis(entry.at_ms), entry.event))
         })
         .collect()
@@ -86,9 +92,12 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
-    use crate::world::{
-        PodState,
-        tests::{delete, upsert},
+    use crate::{
+        roles::Role,
+        world::{
+            PodState,
+            tests::{delete, upsert},
+        },
     };
 
     fn scratch_file(name: &str) -> std::path::PathBuf {
@@ -124,6 +133,26 @@ mod tests {
             played.push(event);
         }
         assert_eq!(played, events);
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn recordings_without_roles_get_them_on_load() {
+        let path = scratch_file("roles");
+        let old = r#"{"at_ms":5,"event":{"PodUpserted":{"uid":"u","namespace":"ci","workload":"argocd-redis","kind":"Deployment","state":"Running"}}}
+{"at_ms":6,"event":{"PodUpserted":{"uid":"v","namespace":"ci","workload":"db","kind":"StatefulSet","state":"Running","details":{"images":["postgres:16"]}}}}
+{"at_ms":7,"event":{"PodUpserted":{"uid":"w","namespace":"ci","workload":"nginx","kind":"Deployment","state":"Running","role":"other"}}}"#;
+        fs::write(&path, old).expect("write recording");
+        let roles: Vec<_> = load(&path)
+            .expect("load recording")
+            .into_iter()
+            .map(|(_, event)| match event {
+                WorldEvent::PodUpserted(pod) => pod.role,
+                WorldEvent::PodDeleted { .. } => None,
+            })
+            .collect();
+        // From the name, from the images, and as recorded.
+        assert_eq!(roles, [Some(Role::Data), Some(Role::Data), Some(Role::Other)]);
         fs::remove_file(path).ok();
     }
 

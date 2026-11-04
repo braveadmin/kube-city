@@ -3,7 +3,7 @@
 What was decided while building kube-city, and why. Read this before
 changing direction; update it when a decision changes.
 
-Last updated: 2026-11-02.
+Last updated: 2026-11-04.
 
 ## The idea
 
@@ -667,6 +667,26 @@ Built (#47, cluster zoom, 2026-11-04):
 
 On the big recording both quarters mix two families of names (3 and 3,
 2 and 4), so neither has a stem and both get "biggest +5".
+
+Built (#48, 2026-11-04): `src/roles.rs`, `zonedLots()` and `frontOf()` in
+the page's layout section. Owner's answers on the issue: 1A, 2A, 3A, 4A.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Roles | web, other (offices), data, messaging, worker; every Job (CronJobs too) is a worker; the rest from a table of well-known image names, the start of a word anywhere in the image's path without its registry (`postgres` matches `bitnami/postgresql`, `nginx` matches `ingress-nginx/controller`) | The issue; public product names, easy to extend. `apache` left out: it would catch `apache/airflow` |
+| Sidecars | The first container whose image is not a well-known sidecar (`proxyv2`, `linkerd2-proxy`, `kube-rbac-proxy`, `vault`…) decides; the first container if all are | Decision 2A: an Istio sidecar would make every pod web |
+| Where | The source works it out (`role` on `PodInfo`), before `--anonymise`, which keeps it; recordings hold the word. Recordings without it get it on load, from the images or, without images, from the workload's name (`argocd-redis` → data) | Decision 1A: the big recording was made before images were kept. The same table is in `art/web_prototype.py` (a test keeps them equal) |
+| Lot order | A batch is sorted by role, then kind, then name (was kind, name) | The same component keeps the same spot in every namespace |
+| Zoning | A neighbourhood of several blocks hands out its lots block by block, from the block nearest the town's middle (front) to the farthest (working edge), each block only up to its lots / `YARD`, so each keeps a courtyard; then the rest in `lotOrder`. One block: `lotOrder` as before | Decision 4A. The order is kept per neighbourhood while its blocks stay the same (`fronts`), so a growing town does not swap its blocks |
+| Live | A workload that comes later takes the next spare lot, as before; zones are redone when the city re-packs | Decision 3A |
+| Look | Buildings keep their kind's shape; the role is in the hover tip and the inspector ("StatefulSet · data in …") and a legend row | Earlier decision |
+
+Big recording (roles from names): 731 workloads, 468 other, 109 messaging,
+95 data, 43 Jobs, 16 web. Its six two-block neighbourhoods all come out as a
+front block of web and offices and a back block of the last offices, data,
+messaging and Jobs. A web street only shows where a namespace runs several
+web servers. The demo's namespaces are one block each; they show the order
+(`ingress-nginx`, `postgres`, `kafka`) but not the blocks.
 
 ## Roadmap
 

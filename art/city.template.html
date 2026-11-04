@@ -306,6 +306,13 @@ const KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "Standalone"];
 const STATES = ["Pending", "Running", "CrashLoop", "Terminating", "Succeeded", "Failed"];
 const [PENDING, RUNNING, CRASH, TERMINATING, SUCCEEDED, FAILED] = [0, 1, 2, 3, 4, 5];
 const KIND_ORDER = { Deployment: 0, StatefulSet: 1, Job: 2, DaemonSet: 3, Standalone: 4 };
+// What a workload does, from its images (#48; worked out by the server, see
+// src/roles.rs). Its lots are handed out in this order: the web street at a
+// neighbourhood's front, offices, the utility block, the working edge.
+const ROLES = ["web", "other", "data", "messaging", "worker"];
+const OTHER = 1;
+const ROLE_WORDS = ["web", "offices", "data", "messaging", "worker"];
+const roleOf = e => (e[6] >= 0 && e[6] < ROLES.length ? e[6] : OTHER);
 const STATE_WORDS = ["pending", "running", "crashing", "terminating", "finished", "failed"];
 const ZONE_WORDS = { centre: "Town centre", industry: "Industrial quarter", suburb: "Suburb" };
 const ZONE_RULES = {
@@ -1119,6 +1126,27 @@ function lotOrder(blocks) {
   });
   lots.sort((a, b) => a.t - b.t || a.k - b.k || a.at - b.at);
   return lots.map(l => [l.i, l.j]);
+}
+
+// A district's lots zoned by role (#48): the lots of a district of several
+// blocks go block by block, from the block nearest the town's middle (its
+// front) to the farthest (its working edge), each block's ring by ring but
+// only its share (its lots / YARD), so every block keeps a courtyard; the
+// rest follow as lotOrder hands them out. Workloads get lots in role order,
+// so the web street comes first, the workers last. One block: lotOrder.
+// order: the blocks' indexes from front to back (frontOf).
+function zonedLots(blocks, order) {
+  if (blocks.length < 2) return lotOrder(blocks);
+  const first = [], rest = new Set();
+  for (const k of order) {
+    const lots = lotOrder([blocks[k]]), share = Math.ceil(lots.length / YARD);
+    lots.forEach((l, at) => (at < share ? first.push(l) : rest.add(`${l[0]}/${l[1]}`)));
+  }
+  return [...first, ...lotOrder(blocks).filter(l => rest.has(`${l[0]}/${l[1]}`))];
+}
+function frontOf(blocks, middle) {
+  const far = b => Math.hypot(b.x + b.w / 2 - middle[0], b.y + b.h / 2 - middle[1]);
+  return blocks.map((b, k) => k).sort((a, z) => far(blocks[a]) - far(blocks[z]) || a - z);
 }
 
 // A town of neighbourhoods (#47). Namespaces that share at least half of
@@ -2636,8 +2664,8 @@ const world = {
 };
 
 // A workload keeps the lot it got first. A batch of new workloads (a
-// recording, or a cluster's first list) is sorted by kind and name before it
-// gets lots, so the same component sits in the same spot in every namespace
+// recording, or a cluster's first list) is sorted by role, kind and name
+// before it gets lots (zonedLots puts the roles in their blocks), so the same component sits in the same spot in every namespace
 // that has it. Live districts keep spare lots, so a new workload rarely
 // makes the city re-pack.
 const registry = [];   // namespace index -> Map(workload index -> lot number)
@@ -2648,9 +2676,9 @@ function registerBatch(events) {
   const fresh = new Map();
   for (const e of events) {
     if (e.length < 3 || (registry[e[2]] && registry[e[2]].has(e[3]))) continue;
-    fresh.set(`${e[2]}/${e[3]}`, [e[2], e[3], KINDS[e[4]]]);
+    fresh.set(`${e[2]}/${e[3]}`, [e[2], e[3], KINDS[e[4]], roleOf(e)]);
   }
-  const order = [...fresh.values()].sort((a, b) => KIND_ORDER[a[2]] - KIND_ORDER[b[2]] || DATA.wl[a[1]].localeCompare(DATA.wl[b[1]]));
+  const order = [...fresh.values()].sort((a, b) => a[3] - b[3] || KIND_ORDER[a[2]] - KIND_ORDER[b[2]] || DATA.wl[a[1]].localeCompare(DATA.wl[b[1]]));
   for (const [ns, wl, kind] of order) {
     if (kind === "DaemonSet") daemons.add(ns);
     const lots = registry[ns] ||= new Map();
@@ -2664,6 +2692,9 @@ function registerBatch(events) {
 // DaemonSet coming along does not move a district on its own. Each plan
 // keeps the neighbourhoods where the last one put them (planTown's `was`).
 let townPlaced = null;
+// Per neighbourhood its blocks (as a shape) and their order from the front:
+// the order holds while the blocks do, though the town's middle moves.
+const fronts = new Map();
 function planDistricts() {
   const needs = DATA.ns.map((name, idx) => {
     const lots = registry[idx] || new Map();
@@ -2671,7 +2702,13 @@ function planDistricts() {
   });
   const city = planTown(needs, theme.gap, townPlaced);
   townPlaced = city.placed;
-  const districts = DATA.ns.map((name, idx) => ({ idx, name, zone: needs[idx].zone, ...city.districts[idx], lots: registry[idx] || new Map(), stats: null, health: "ok" }));
+  const middle = [city.W / 2, city.H / 2];
+  const districts = DATA.ns.map((name, idx) => {
+    const d = city.districts[idx], shape = JSON.stringify(d.blocks.map(b => [b.x - d.x, b.y - d.y, b.w, b.h]));
+    let front = fronts.get(name);
+    if (!front || front.shape !== shape) fronts.set(name, front = { shape, order: frontOf(d.blocks, middle) });
+    return { idx, name, zone: needs[idx].zone, ...d, cells: zonedLots(d.blocks, front.order), lots: registry[idx] || new Map(), stats: null, health: "ok" };
+  });
   return { districts, parks: city.parks, roads: city.roads, river: city.river, W: city.W, H: city.H, gap: theme.gap, quarters: city.quarters, shift: city.shift };
 }
 
@@ -3728,7 +3765,7 @@ async function setLook(name) {
 
 class Building {
   constructor(ns, wl, kind) {
-    this.ns = ns; this.wl = wl; this.kind = kind; this.name = DATA.wl[wl];
+    this.ns = ns; this.wl = wl; this.kind = kind; this.name = DATA.wl[wl]; this.role = OTHER;
     this.key = `${ns}/${wl}`;
     this.pods = new Map();
     this.variant = variantOf(this.name, kind);
@@ -3817,11 +3854,12 @@ function refresh(b) {
   } else b.look = look;
 }
 
-function upsertPod(id, ns, wl, kind, state) {
+function upsertPod(id, ns, wl, kind, state, role) {
   let pod = world.pods.get(id);
   const key = `${ns}/${wl}`;
   let b = world.buildings.get(key);
   if (!b) { b = new Building(ns, wl, KINDS[kind]); world.buildings.set(key, b); }
+  b.role = role;   // for the inspector; the lot stays where it was
   if (pod && pod.b !== b) { pod.b.pods.delete(id); dirty.add(pod.b); }
   pod = { id, b, state };
   world.pods.set(id, pod);
@@ -3840,7 +3878,7 @@ function deletePod(id) {
   dirty.add(pod.b);
 }
 // One event in the format of a recording line (and of a future WebSocket feed).
-function apply(e) { if (e.length > 2) upsertPod(e[1], e[2], e[3], e[4], e[5]); else deletePod(e[1]); }
+function apply(e) { if (e.length > 2) upsertPod(e[1], e[2], e[3], e[4], e[5], roleOf(e)); else deletePod(e[1]); }
 
 function resetWorld() {
   for (const b of world.buildings.values()) if (b.view) b.view.destroy({ children: true });
@@ -4110,7 +4148,7 @@ function summary(counts) {
 }
 function buildingTip(b) {
   const counts = [0, 0, 0, 0, 0, 0]; for (const s of b.pods.values()) counts[s]++;
-  return `<div class="t">${esc(b.name)}</div><div class="s">${b.kind} in ${esc(DATA.ns[b.ns])}</div><div>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}: ${summary(counts)}</div>`;
+  return `<div class="t">${esc(b.name)}</div><div class="s">${b.kind} · ${ROLE_WORDS[b.role]} in ${esc(DATA.ns[b.ns])}</div><div>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}: ${summary(counts)}</div>`;
 }
 function districtTip(d) {
   const s = d.stats;
@@ -4182,7 +4220,7 @@ async function renderPanel() {
   const images = [...new Set([...b.pods.keys()].flatMap(id => (podDetails.get(id) || {}).images || []))];
   sel.hidden = false;
   sel.innerHTML = `<div class="card">
-    <div class="card-head">${img ? `<img src="${img}" alt="">` : ""}<div><div class="title">${esc(b.name)}</div><div class="sub">${b.kind} in <b>${esc(DATA.ns[b.ns])}</b></div></div>
+    <div class="card-head">${img ? `<img src="${img}" alt="">` : ""}<div><div class="title">${esc(b.name)}</div><div class="sub">${b.kind} · ${ROLE_WORDS[b.role]} in <b>${esc(DATA.ns[b.ns])}</b></div></div>
       <button class="close" id="unselect" aria-label="Clear selection">×</button></div>
     <h2>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}</h2><div class="pods">${pods}</div>
     ${images.length ? `<h2>Image${images.length === 1 ? "" : "s"}</h2><div class="images">${images.map(i => `<span>${esc(i)}</span>`).join("")}</div>` : ""}
@@ -4247,6 +4285,8 @@ async function renderLegend() {
     const color = `#${theme.zones[zone].toString(16).padStart(6, "0")}`;
     html.push(`<div class="zone"><i style="background:${color}"></i><span>${ZONE_WORDS[zone]}<small>${rule}</small></span></div>`);
   }
+  // Roles (#48): where a building stands inside its neighbourhood, never its shape.
+  html.push(`<div class="zone"><span>Inside a neighbourhood<small>by what runs there: web servers at the front, offices, data and messaging (databases, brokers), Jobs at the back</small></span></div>`);
   document.getElementById("legend").innerHTML = html.join("");
 }
 
@@ -4758,7 +4798,7 @@ const contextSelect = document.getElementById("context");
 
 // Another cluster: forget the old one's namespaces, lots and labels too.
 function newCity() {
-  registry.length = 0; daemons.clear(); DATA.ns.length = 0; DATA.wl.length = 0; townPlaced = null;
+  registry.length = 0; daemons.clear(); DATA.ns.length = 0; DATA.wl.length = 0; townPlaced = null; fronts.clear();
   live.ns.clear(); live.wl.clear(); live.pods.clear(); live.next = 0;
   for (const el of signs) if (el) el.remove();
   signs.length = 0;
@@ -4805,7 +4845,8 @@ function liveBatch(items) {
       if (id === undefined) { id = live.next++; live.pods.set(p.uid, id); }
       if (p.details && p.details.name) podDetails.set(id, p.details);
       events.push([0, id, intern(live.ns, DATA.ns, p.namespace, p.namespace),
-        intern(live.wl, DATA.wl, `${p.kind}/${p.workload}`, p.workload), KINDS.indexOf(p.kind), STATES.indexOf(p.state)]);
+        intern(live.wl, DATA.wl, `${p.kind}/${p.workload}`, p.workload), KINDS.indexOf(p.kind), STATES.indexOf(p.state),
+        ROLES.indexOf(p.role)]);
     } else if (it.PodDeleted) {
       const id = live.pods.get(it.PodDeleted.uid);
       if (id !== undefined) { events.push([0, id]); live.pods.delete(it.PodDeleted.uid); }
