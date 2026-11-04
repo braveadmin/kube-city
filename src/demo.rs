@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
+    roles::role_of,
     util::Rng,
     world::{PodDetails, PodInfo, PodState, WorkloadKind, WorldEvent},
 };
@@ -237,6 +238,7 @@ impl DemoCluster {
             workload: workload.to_owned(),
             kind,
             state,
+            role: Some(role_of(kind, &[format!("{workload}:1")], workload)),
             // Derived from the counter, not the RNG, so seeds replay the same city.
             details: PodDetails {
                 name: format!("{workload}-{}", suffix(n)),

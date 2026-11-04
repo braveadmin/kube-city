@@ -541,6 +541,7 @@ mod tests {
             workload: "cart".into(),
             kind: WorkloadKind::Deployment,
             state,
+            role: None,
             details: Default::default(),
         }
     }

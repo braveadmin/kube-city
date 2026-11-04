@@ -303,6 +303,7 @@ mod tests {
     use super::*;
     use crate::{
         recording,
+        roles::Role,
         world::{PodDetails, PodState},
     };
 
@@ -325,6 +326,7 @@ mod tests {
             workload: workload.into(),
             kind,
             state: PodState::CrashLoop,
+            role: Some(Role::Data),
             details: PodDetails {
                 name: name.into(),
                 node: "ip-10-1-2-3.acme.internal".into(),
@@ -357,6 +359,8 @@ mod tests {
         assert_eq!(leaked(&text), [] as [&str; 0], "{text}");
         // What is not a name stays, so the city looks the same.
         assert_eq!((fake.kind, fake.state, fake.details.restarts), (real.kind, real.state, 4));
+        // The role was worked out from the real images and is kept (#48).
+        assert_eq!(fake.role, Some(Role::Data));
         assert_eq!(fake.details.reason.as_deref(), Some("CrashLoopBackOff"));
         assert!(fake.details.name.starts_with(&format!("{}-", fake.workload)), "{text}");
         // Two versions of one image keep one name.

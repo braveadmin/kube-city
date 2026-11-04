@@ -15,7 +15,10 @@ use kube::{
 };
 use tokio::sync::{mpsc::UnboundedSender, watch};
 
-use crate::world::{PodDetails, PodInfo, PodState, WorkloadKind, WorldEvent};
+use crate::{
+    roles::role_of,
+    world::{PodDetails, PodInfo, PodState, WorkloadKind, WorldEvent},
+};
 
 /// Long enough to finish an interactive (device code) login.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -164,13 +167,15 @@ impl Tracker {
 fn pod_info(pod: &Pod) -> Option<PodInfo> {
     let meta = &pod.metadata;
     let (workload, kind) = workload_of(pod);
+    let details = details_of(pod);
     Some(PodInfo {
         uid: meta.uid.clone()?,
         namespace: meta.namespace.clone()?,
+        role: Some(role_of(kind, &details.images, &workload)),
         workload,
         kind,
         state: state_of(pod),
-        details: details_of(pod),
+        details,
     })
 }
 

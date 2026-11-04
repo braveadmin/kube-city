@@ -4,6 +4,7 @@ mod anonymise;
 mod cluster;
 mod demo;
 mod recording;
+mod roles;
 mod util;
 mod web;
 mod world;
