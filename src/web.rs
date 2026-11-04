@@ -102,6 +102,7 @@ pub struct Clusters {
 /// What the pump gets, in order. Every source of events has a generation;
 /// switching contexts starts a new one and drops whatever the old one still
 /// sends.
+#[expect(clippy::large_enum_variant, reason = "events are passed one at a time; boxing every pod buys nothing")]
 enum Input {
     Event(u64, WorldEvent),
     Status(u64, String),

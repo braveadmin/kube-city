@@ -130,8 +130,8 @@ The page keeps its world under the made-up context name, so without
 | Kubernetes        | Kenney look                                  |
 |-------------------|----------------------------------------------|
 | Namespace         | A block with its name on a road sign         |
-| Deployment        | Office block, a storey per replica           |
-| StatefulSet       | Brick hall with a tank on the roof           |
+| Deployment        | Office block, taller the more its pods request |
+| StatefulSet       | Brick hall with a tank on the roof, taller the same way |
 | DaemonSet         | House with a pitched roof                    |
 | Job               | Works with a chimney, smoking while it runs  |
 | Pod without owner | Kiosk                                        |
@@ -141,7 +141,11 @@ The page keeps its world under the made-up context name, so without
 | Terminating       | Fading                                       |
 
 One building stands for one workload; zoom to street level for one dot per
-pod. Click a building to see its pods: name, readiness, restarts, age, node
+pod. Offices and brick halls get two storeys for every doubling of the CPU
+and memory their pods request (4 GiB counts as a core), from 2 storeys at
+0.1 core up to 12, and the heaviest stand in the middle of their block, so
+each neighbourhood has its skyscrapers in the centre. Without requests
+(older recordings), offices grow a storey per replica. Click a building to see its pods: name, readiness, restarts, age, node
 and, in red, why a pod is not simply running (ImagePullBackOff, OOMKilled,
 Evicted, …), plus the workload's images. A workload looks the same, and stands in the same spot, in every
 namespace that has it, so environments that deploy the same stack are easy

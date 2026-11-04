@@ -162,8 +162,13 @@ def anonymise(lines):
             wl = index(wl_index, (pod["kind"], pod["workload"]), workloads,
                        lambda: workload_name(pod["workload"], pod["kind"], wl_names))
             uid = pod_index.setdefault(pod["uid"], len(pod_index))
-            events.append([at, uid, ns, wl, KINDS.index(pod["kind"]), STATES.index(pod["state"]),
-                           ROLES.index(role_of(pod))])
+            event = [at, uid, ns, wl, KINDS.index(pod["kind"]), STATES.index(pod["state"]),
+                     ROLES.index(role_of(pod))]
+            # CPU (millicores) and memory (bytes) requests (#49), when recorded.
+            details = pod.get("details") or {}
+            if details.get("cpu") or details.get("memory"):
+                event += [details.get("cpu") or 0, details.get("memory") or 0]
+            events.append(event)
         elif "PodDeleted" in event:
             uid = pod_index.get(event["PodDeleted"]["uid"])
             if uid is not None:

@@ -688,6 +688,29 @@ messaging and Jobs. A web street only shows where a namespace runs several
 web servers. The demo's namespaces are one block each; they show the order
 (`ingress-nginx`, `postgres`, `kafka`) but not the blocks.
 
+Built (#49, 2026-11-04): requests in `src/cluster.rs` (`requested()`,
+`quantity_of()`), `weightOf()`, `storeysOf()` and `seatsOf()` in the page's
+world model, `heaviestInside()` in its layout section;
+`art/towers_check.mjs` checks them. Owner's answers on the issue: 1A, 2A,
+3A, 4A.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Requests | Each pod's CPU (millicores) and memory (bytes) requests in `PodDetails`, counted as the scheduler does: containers and sidecars (init containers with `restartPolicy: Always`) together, or an init container plus the sidecars before it if that is more; left out when none. `--anonymise` keeps them, recordings hold them, older recordings load without | The issue; plain numbers say nothing about the cluster's names |
+| Weight | A workload's pods that are meant to run (not terminating or finished) together: the larger of cores and memory / 4 GiB (`GIB_PER_CORE`) | Decision 2A: a memory-heavy database is as tall as a CPU-heavy service |
+| Scale | A fixed scale: 2 storeys (`LOW_STOREYS`) up to 0.1 core (`LIGHT`), two more for every doubling, at most 12 (`MAX_STOREYS`): about 9 at 1 core, 12 from 3.2 cores | Decision 1A: a building changes only when its own requests do; no share of the cluster, so no jumps when others come |
+| Kinds | Offices (Deployments) get their storeys from weight; brick halls (StatefulSets) too, as uppers in Kenney and taller tanks (9 px a storey) in Metropolis; houses and works stay as they were | Decision 3A |
+| Without requests | Until some pod in the city has requests the old heights stay (a few storeys from the name, up to 3 more for replicas); the first pod with requests switches every building over | Older recordings, the big one included, have none |
+| Skyscraper centre | Role still decides the block (#48); inside each block its lots go to the heaviest first from the ring next to the courtyard outwards, so every block rises towards its middle. Weights are the ones a workload had when it got its lot; the seats are kept per neighbourhood while its lots stay the same, a later workload takes the next spare lot, and they are redone when the neighbourhood is laid out anew, as #48's zones are | Decision 4A; scaling a workload never moves it |
+| Inspector | The workload's total requests (for the pods that run) above its pods, each pod's own in its row, the total in the hover tip; a legend row explains the heights | The issue |
+| Demo | Requests for its workloads (`requests_of()` in `src/demo.rs`): kafka, prometheus, postgres and the search indexer heavy, most at 100m and 256Mi, the debug shell none | So the demo shows towers |
+
+250 random towns (`art/towers_check.mjs`, 1 523 neighbourhoods, random
+weights): every lot stays in its block, no two workloads share a lot, and no
+heavier workload stands further out than a lighter one in its block; the
+height scale grows with weight and ignores terminating and finished pods.
+The big recording has no requests, so it looks as before.
+
 ## Roadmap
 
 The public roadmap is [`ROADMAP.md`](../ROADMAP.md); keep it up to date when

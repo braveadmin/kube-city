@@ -65,10 +65,18 @@ pub struct PodDetails {
     pub created: Option<String>,
     /// Why it is not simply running, e.g. ImagePullBackOff or OOMKilled.
     pub reason: Option<String>,
+    /// CPU the pod requests, in millicores, counted as the scheduler does
+    /// (#49); `None` when it requests none or the source does not know.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<u64>,
+    /// Memory the pod requests, in bytes; `None` as for `cpu`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<u64>,
 }
 
 /// A change reported by a source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(clippy::large_enum_variant, reason = "events are passed one at a time; boxing every pod buys nothing")]
 pub enum WorldEvent {
     PodUpserted(PodInfo),
     PodDeleted { uid: String },
@@ -103,5 +111,14 @@ pub(crate) mod tests {
         assert_eq!(info.details, PodDetails::default());
         assert_eq!(info.state, PodState::Running);
         assert_eq!(info.role, None);
+    }
+
+    #[test]
+    fn requests_round_trip_and_stay_out_when_unknown() {
+        let details = PodDetails { cpu: Some(1500), memory: Some(2 << 30), ..PodDetails::default() };
+        let text = serde_json::to_string(&details).unwrap();
+        assert_eq!(serde_json::from_str::<PodDetails>(&text).unwrap(), details);
+        let none = serde_json::to_string(&PodDetails::default()).unwrap();
+        assert!(!none.contains("cpu") && !none.contains("memory"), "{none}");
     }
 }

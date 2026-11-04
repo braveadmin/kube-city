@@ -245,6 +245,8 @@ impl DemoCluster {
                 node: format!("node-{}", 1 + n % 4),
                 images: vec![format!("{workload}:1.{}", n % 7)],
                 containers: 1,
+                cpu: requests_of(workload).map(|(cpu, _)| cpu),
+                memory: requests_of(workload).map(|(_, mib)| mib << 20),
                 ..PodDetails::default()
             },
         };
@@ -259,6 +261,22 @@ impl DemoCluster {
         pod.age = 0;
         events.push(WorldEvent::PodUpserted(pod.info.clone()));
     }
+}
+
+/// What a simulated workload's pods request (#49): millicores and MiB; a few
+/// heavy ones, so the demo has towers. The debug shell requests nothing.
+fn requests_of(workload: &str) -> Option<(u64, u64)> {
+    Some(match workload {
+        "kafka" => (2000, 8192),
+        "prometheus" => (1000, 6144),
+        "postgres" => (1000, 4096),
+        "search-indexer" => (1500, 3072),
+        "core" => (750, 2048),
+        "keycloak" | "orders-api" | "catalog-api" => (500, 1024),
+        "debug-shell" => return None,
+        "node-exporter" => (50, 64),
+        _ => (100, 256),
+    })
 }
 
 /// Changes a simulated pod's state and keeps its details in line: crashes

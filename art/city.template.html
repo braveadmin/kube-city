@@ -463,23 +463,25 @@ function tower(g, v) {
   return h + (floors >= 6 ? 22 : 6);
 }
 
+// A StatefulSet's tanks grow with its weight (#49), as much a storey as a
+// tower's (9 px), past their own height.
 function tankShape(g, v) {
-  const color = ART.tank[v.h % ART.tank.length];
+  const color = ART.tank[v.h % ART.tank.length], rise = v.storeys ? (v.storeys - 2) * 9 : 0;
   poly(g, 0x000000, [P(-0.36, -0.36, 0), P(0.42, -0.36, 0), P(0.42, 0.42, 0), P(-0.36, 0.42, 0)], 0.1);
   shadedBox(g, 0, 0, 0.4, 0.4, 2, ART.concrete);
   if (v.shape === 0) {
-    const h = 20 + (v.h % 3) * 6;
+    const h = 20 + (v.h % 3) * 6 + rise;
     cylinder(g, 0, 0, 0.33, h, color, 2, 2);
     return h + 4;
   }
   if (v.shape === 1) {
-    const h = 18 + (v.h % 3) * 5;
+    const h = 18 + (v.h % 3) * 5 + rise;
     cylinder(g, 0.18, -0.18, 0.2, h, color, 2, 2);
     cylinder(g, -0.18, 0.18, 0.2, h, color, 2, 2);
     g.lineStyle(2, shade(color, 0.6)); g.moveTo(...P(0.1, -0.1, h - 4)); g.lineTo(...P(-0.1, 0.1, h - 4)); g.lineStyle(0);
     return h + 4;
   }
-  const h = 34 + (v.h % 3) * 6;
+  const h = 34 + (v.h % 3) * 6 + rise;
   const c = cylinder(g, 0, 0, 0.24, h, color, 2, 3);
   cone(g, c, shade(color, 0.92), 12);
   return h + 16;
@@ -1147,6 +1149,30 @@ function zonedLots(blocks, order) {
 function frontOf(blocks, middle) {
   const far = b => Math.hypot(b.x + b.w / 2 - middle[0], b.y + b.h / 2 - middle[1]);
   return blocks.map((b, k) => k).sort((a, z) => far(blocks[a]) - far(blocks[z]) || a - z);
+}
+// A block's lots go to its workloads heaviest first, from the ring next to
+// the courtyard outwards (#49). cells: lots in zonedLots order; lots:
+// workload -> lot number; weights: workload -> weight. Returns lot number ->
+// index into cells, moving lots only inside the block zonedLots gave them.
+function heaviestInside(blocks, cells, lots, weights) {
+  const n = Math.min(lots.size, cells.length), weight = new Array(n).fill(0), seats = [...Array(n).keys()];
+  if (weights) for (const [wl, lot] of lots) if (lot < n) weight[lot] = weights.get(wl) || 0;
+  const blockOf = ([i, j]) => blocks.findIndex(b => i > b.x && j > b.y && i < b.x + b.w - 1 && j < b.y + b.h - 1);
+  const ringOf = ([i, j], b) => Math.min(i - b.x - 1, b.x + b.w - 2 - i, j - b.y - 1, b.y + b.h - 2 - j);
+  const byBlock = new Map();
+  for (let k = 0; k < n; k++) {
+    const bk = blockOf(cells[k]);
+    if (!byBlock.has(bk)) byBlock.set(bk, []);
+    byBlock.get(bk).push(k);
+  }
+  for (const [bk, ks] of byBlock) {
+    if (bk < 0) continue;
+    const ring = k => ringOf(cells[k], blocks[bk]);
+    const inner = [...ks].sort((a, z) => ring(z) - ring(a) || a - z);
+    const heavy = [...ks].sort((a, z) => weight[z] - weight[a] || a - z);
+    heavy.forEach((lot, at) => (seats[lot] = inner[at]));
+  }
+  return seats;
 }
 
 // A town of neighbourhoods (#47). Namespaces that share at least half of
@@ -2661,28 +2687,34 @@ const world = {
   buildings: new Map(),    // "ns/wl" -> Building
   districts: [],           // index = namespace index
   showFinished: false,
+  requests: false,         // some pod has CPU or memory requests (#49)
 };
 
 // A workload keeps the lot it got first. A batch of new workloads (a
 // recording, or a cluster's first list) is sorted by role, kind and name
-// before it gets lots (zonedLots puts the roles in their blocks), so the same component sits in the same spot in every namespace
+// before it gets lots (zonedLots puts the roles in their blocks; seatsOf puts
+// the heaviest of each block innermost), so the same component sits in the same spot in every namespace
 // that has it. Live districts keep spare lots, so a new workload rarely
 // makes the city re-pack.
 const registry = [];   // namespace index -> Map(workload index -> lot number)
+const lotWeights = [];   // namespace index -> Map(workload index -> its weight when it got its lot, #49)
 const daemons = new Set();   // namespace indexes that run a DaemonSet (see zoneOf)
 const SPARE = DATA.live ? 0.3 : 0;
 let planDirty = false;
 function registerBatch(events) {
-  const fresh = new Map();
+  const fresh = new Map(), pods = new Map();
   for (const e of events) {
     if (e.length < 3 || (registry[e[2]] && registry[e[2]].has(e[3]))) continue;
-    fresh.set(`${e[2]}/${e[3]}`, [e[2], e[3], KINDS[e[4]], roleOf(e)]);
+    const key = `${e[2]}/${e[3]}`;
+    if (!fresh.has(key)) fresh.set(key, [e[2], e[3], KINDS[e[4]], roleOf(e), new Map()]);
+    fresh.get(key)[4].set(e[1], e);   // its pods' last events, for its weight
   }
   const order = [...fresh.values()].sort((a, b) => a[3] - b[3] || KIND_ORDER[a[2]] - KIND_ORDER[b[2]] || DATA.wl[a[1]].localeCompare(DATA.wl[b[1]]));
-  for (const [ns, wl, kind] of order) {
+  for (const [ns, wl, kind, , last] of order) {
     if (kind === "DaemonSet") daemons.add(ns);
     const lots = registry[ns] ||= new Map();
     lots.set(wl, lots.size);
+    (lotWeights[ns] ||= new Map()).set(wl, weightOf([...last.values()].map(e => [e[5], e[7] || 0, e[8] || 0])));
     const d = world.districts[ns];
     if (!d || lots.size > d.cells.length) planDirty = true;
   }
@@ -2707,11 +2739,27 @@ function planDistricts() {
     const d = city.districts[idx], shape = JSON.stringify(d.blocks.map(b => [b.x - d.x, b.y - d.y, b.w, b.h]));
     let front = fronts.get(name);
     if (!front || front.shape !== shape) fronts.set(name, front = { shape, order: frontOf(d.blocks, middle) });
-    return { idx, name, zone: needs[idx].zone, ...d, cells: zonedLots(d.blocks, front.order), lots: registry[idx] || new Map(), stats: null, health: "ok" };
+    const cells = zonedLots(d.blocks, front.order), lots = registry[idx] || new Map();
+    const seats = seatsOf(name, `${shape}|${front.order}|${cells.length}`, d.blocks, cells, lots, lotWeights[idx]);
+    return { idx, name, zone: needs[idx].zone, ...d, cells: seats.map(k => cells[k]).concat(cells.slice(seats.length)), lots, stats: null, health: "ok" };
   });
   return { districts, parks: city.parks, roads: city.roads, river: city.river, W: city.W, H: city.H, gap: theme.gap, quarters: city.quarters, shift: city.shift };
 }
 
+// Where the heaviest workloads stand (#49): each block's lots (as zonedLots
+// fills them by role) go to its workloads heaviest first, from the ring next
+// to the courtyard outwards, so every block rises towards its middle. Weights
+// are the ones a workload had when it got its lot. Kept per neighbourhood
+// while its lots stay the same, so a workload that comes later takes the next
+// spare lot and nothing moves; redone when the neighbourhood is laid out
+// anew, as #48's zones are. Returns lot number -> index into cells.
+const seating = new Map();   // namespace name -> { key, seats }
+function seatsOf(name, key, blocks, cells, lots, weights) {
+  let s = seating.get(name);
+  if (!s || s.key !== key) seating.set(name, s = { key, seats: heaviestInside(blocks, cells, lots, weights) });
+  for (let k = s.seats.length; k < lots.size; k++) s.seats.push(k);
+  return s.seats;
+}
 
 function lotOf(building) {
   const d = world.districts[building.ns];
@@ -2731,6 +2779,30 @@ function variantOf(name, kind) {
   };
 }
 
+// A workload's weight (#49): what its pods that are meant to run (not
+// terminating or finished) request, in cores, 4 GiB of memory counting as
+// much as a core, whichever is more. pods: [state, millicores, bytes].
+const GIB_PER_CORE = 4 * 2 ** 30;
+function weightOf(pods) {
+  let cpu = 0, memory = 0;
+  for (const [state, m, bytes] of pods) {
+    if (state === TERMINATING || state === SUCCEEDED || state === FAILED) continue;
+    cpu += m / 1000; memory += bytes;
+  }
+  return Math.max(cpu, memory / GIB_PER_CORE);
+}
+// Storeys from weight on a fixed scale, so a building changes only when its
+// own requests do: LOW_STOREYS up to LIGHT cores, two more for every doubling,
+// at most MAX_STOREYS (2 at 0.1 core, about 9 at 1 core, 12 from 3.2 cores).
+const LIGHT = 0.1, LOW_STOREYS = 2, MAX_STOREYS = 12;
+function storeysOf(weight) {
+  if (!(weight > LIGHT)) return LOW_STOREYS;
+  return Math.min(MAX_STOREYS, Math.round(LOW_STOREYS + 2 * Math.log2(weight / LIGHT)));
+}
+function weightOfBuilding(b) {
+  return weightOf([...b.pods.keys()].map(id => { const p = world.pods.get(id); return [p.state, p.cpu, p.memory]; }));
+}
+
 // What a building should look like now, or null when it should not be there.
 function lookOf(b) {
   const counts = [0, 0, 0, 0, 0, 0];
@@ -2746,17 +2818,20 @@ function lookOf(b) {
   const active = visible - counts[SUCCEEDED];
   // A look is a category plus parameters; the active theme draws it.
   const look = { worst, counts, fire: counts[CRASH] > 0, fading: counts[TERMINATING] === visible, smoke: false, p: { ...v } };
+  // Without requests anywhere (recordings made before kube-city sent them)
+  // offices keep their old height: a few storeys from the name, more with replicas.
+  const storeys = world.requests ? storeysOf(weightOfBuilding(b)) : 0;
   if (active === 0) look.cat = "done";
   else if (counts[PENDING] === active) look.cat = "build";
   else if (counts[FAILED] && !counts[RUNNING] && !counts[CRASH]) look.cat = "scorched";
   else switch (b.kind) {
-    case "Deployment": look.cat = "tower"; look.p.floors = v.floors + Math.min(3, Math.max(0, active - 1)); break;
-    case "StatefulSet": look.cat = "tank"; break;
+    case "Deployment": look.cat = "tower"; look.p.floors = storeys || v.floors + Math.min(3, Math.max(0, active - 1)); break;
+    case "StatefulSet": look.cat = "tank"; look.p.storeys = storeys; break;
     case "DaemonSet": look.cat = "house"; look.p.count = Math.min(4, active); break;
     case "Job": look.cat = "factory"; look.smoke = counts[RUNNING] > 0; break;
     default: look.cat = "kiosk";
   }
-  look.key = `${look.cat}:${v.h}:${look.p.floors}:${look.p.count || 0}`;
+  look.key = `${look.cat}:${v.h}:${look.p.floors}:${look.p.count || 0}:${look.p.storeys || 0}`;
   return look;
 }
 
@@ -3228,7 +3303,7 @@ const METROPOLIS = {
   ground: drawGround,
   chimney: () => [iso(-0.28, -0.22)[0], iso(-0.28, -0.22)[1] - 36],
   legend: {
-    tower: "tower, floors grow with replicas", tank: "tank, twin tanks or silo", house: "a house per node, up to four",
+    tower: "tower", tank: "tank, twin tanks or silo", house: "a house per node, up to four",
     factory: "factory, smoking while it runs", build: "construction site", scorched: "scorched shell", kiosk: "kiosk",
   },
   zones: { centre: ART.plaza, industry: ART.yard, suburb: ART.lawn },
@@ -3501,7 +3576,7 @@ const KENNEY = {
         break;
       }
       case "tank": {
-        stack(b, "brick", k, p.shape, "brick");
+        stack(b, "brick", k, p.storeys ? p.storeys - LOW_STOREYS : p.shape, "brick");
         const roof = -b.getLocalBounds().y;
         const geo = geometry(`k:roofTank:${p.shape}:${p.h % ART.tank.length}`, g => roofTank(g, p));
         const g = new PIXI.Graphics(geo.geometry); g.y = -roof + 10; b.addChild(g);
@@ -3644,7 +3719,7 @@ const KENNEY = {
   },
   chimney: look => [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - KENNEY.stackOf(kenneyParts(look.p.seed)).h - 4],
   legend: {
-    tower: "office block, a storey per replica", tank: "brick hall with a tank on the roof", house: "house with a pitched roof",
+    tower: "office block", tank: "brick hall with a tank on the roof", house: "house with a pitched roof",
     factory: "works with a chimney, smoking while it runs", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
   },
   zones: { centre: 0xd0cbb8, industry: 0x929287, suburb: 0xa2b684 },
@@ -3854,15 +3929,17 @@ function refresh(b) {
   } else b.look = look;
 }
 
-function upsertPod(id, ns, wl, kind, state, role) {
+function upsertPod(id, ns, wl, kind, state, role, cpu = 0, memory = 0) {
   let pod = world.pods.get(id);
   const key = `${ns}/${wl}`;
   let b = world.buildings.get(key);
   if (!b) { b = new Building(ns, wl, KINDS[kind]); world.buildings.set(key, b); }
   b.role = role;   // for the inspector; the lot stays where it was
   if (pod && pod.b !== b) { pod.b.pods.delete(id); dirty.add(pod.b); }
-  pod = { id, b, state };
+  pod = { id, b, state, cpu, memory };
   world.pods.set(id, pod);
+  // The first requests switch every building to heights from requests (#49).
+  if ((cpu || memory) && !world.requests) { world.requests = true; for (const o of world.buildings.values()) dirty.add(o); }
   b.pods.set(id, state);
   dirty.add(b);
 }
@@ -3878,13 +3955,14 @@ function deletePod(id) {
   dirty.add(pod.b);
 }
 // One event in the format of a recording line (and of a future WebSocket feed).
-function apply(e) { if (e.length > 2) upsertPod(e[1], e[2], e[3], e[4], e[5], roleOf(e)); else deletePod(e[1]); }
+// e[7] and e[8]: the pod's CPU (millicores) and memory (bytes) requests, when known.
+function apply(e) { if (e.length > 2) upsertPod(e[1], e[2], e[3], e[4], e[5], roleOf(e), e[7] || 0, e[8] || 0); else deletePod(e[1]); }
 
 function resetWorld() {
   for (const b of world.buildings.values()) if (b.view) b.view.destroy({ children: true });
   for (const f of falling) f.view.destroy({ children: true });
   falling.clear(); burning.clear(); smoking.clear(); dirty.clear();
-  world.pods.clear(); world.buildings.clear(); podDetails.clear();
+  world.pods.clear(); world.buildings.clear(); podDetails.clear(); world.requests = false;
   sim.pending.length = 0;
   select(null);
 }
@@ -4146,9 +4224,31 @@ const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;
 function summary(counts) {
   return counts.map((c, k) => c ? `${c} ${STATE_WORDS[k]}` : null).filter(Boolean).join(", ");
 }
+// Requests as kubectl writes them (#49): 250m or 1.5 CPU, 512Mi or 2Gi.
+function cpuText(m) { return m < 1000 ? `${Math.round(m)}m` : `${+(m / 1000).toFixed(2)}`; }
+function memoryText(bytes) {
+  const units = ["", "Ki", "Mi", "Gi", "Ti"];
+  let k = 0; while (bytes >= 1024 && k < units.length - 1) { bytes /= 1024; k++; }
+  return `${+bytes.toFixed(bytes < 10 ? 1 : 0)}${units[k]}`;
+}
+function requestsText(cpu, memory) {
+  return [cpu ? `${cpuText(cpu)} CPU` : "", memory ? `${memoryText(memory)} memory` : ""].filter(Boolean).join(", ");
+}
+// What a building's pods that are meant to run request together; "" for none.
+function buildingRequests(b) {
+  let cpu = 0, memory = 0;
+  for (const id of b.pods.keys()) {
+    const p = world.pods.get(id);
+    if (p.state === TERMINATING || p.state === SUCCEEDED || p.state === FAILED) continue;
+    cpu += p.cpu; memory += p.memory;
+  }
+  return requestsText(cpu, memory);
+}
 function buildingTip(b) {
   const counts = [0, 0, 0, 0, 0, 0]; for (const s of b.pods.values()) counts[s]++;
-  return `<div class="t">${esc(b.name)}</div><div class="s">${b.kind} · ${ROLE_WORDS[b.role]} in ${esc(DATA.ns[b.ns])}</div><div>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}: ${summary(counts)}</div>`;
+  const requests = buildingRequests(b);
+  return `<div class="t">${esc(b.name)}</div><div class="s">${b.kind} · ${ROLE_WORDS[b.role]} in ${esc(DATA.ns[b.ns])}</div><div>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}: ${summary(counts)}</div>` +
+    (requests ? `<div class="s">requests ${requests}</div>` : "");
 }
 function districtTip(d) {
   const s = d.stats;
@@ -4218,10 +4318,12 @@ async function renderPanel() {
   const urgency = [2, 4, 0, 3, 5, 1]; // by state: crashing and failed pods first
   const pods = [...b.pods].sort(([, a], [, z]) => urgency[a] - urgency[z]).map(([id, s]) => podRow(id, s)).join("");
   const images = [...new Set([...b.pods.keys()].flatMap(id => (podDetails.get(id) || {}).images || []))];
+  const requests = buildingRequests(b);
   sel.hidden = false;
   sel.innerHTML = `<div class="card">
     <div class="card-head">${img ? `<img src="${img}" alt="">` : ""}<div><div class="title">${esc(b.name)}</div><div class="sub">${b.kind} · ${ROLE_WORDS[b.role]} in <b>${esc(DATA.ns[b.ns])}</b></div></div>
       <button class="close" id="unselect" aria-label="Clear selection">×</button></div>
+    ${requests ? `<h2>Requests</h2><div class="pod-facts">${requests}, for the pods that run</div>` : ""}
     <h2>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}</h2><div class="pods">${pods}</div>
     ${images.length ? `<h2>Image${images.length === 1 ? "" : "s"}</h2><div class="images">${images.map(i => `<span>${esc(i)}</span>`).join("")}</div>` : ""}
     ${twins.length ? `<h2>Same component in ${twins.length} other namespace${twins.length === 1 ? "" : "s"}</h2>
@@ -4249,6 +4351,8 @@ function podRow(id, state) {
     if (d.created) facts.push(ageOf(d.created));
     if (d.node) facts.push(esc(d.node));
   }
+  const pod = world.pods.get(id);
+  if (pod && (pod.cpu || pod.memory)) facts.push(requestsText(pod.cpu, pod.memory));
   const name = d ? d.name : `pod-${id.toString(36).padStart(4, "0")}`;
   return `<div class="pod"><div class="pod-name"><span class="dot s${state}"></span><span>${esc(name)}</span></div>` +
     `<div class="pod-facts">${facts.filter(Boolean).join(" · ")}</div>` +
@@ -4287,6 +4391,8 @@ async function renderLegend() {
   }
   // Roles (#48): where a building stands inside its neighbourhood, never its shape.
   html.push(`<div class="zone"><span>Inside a neighbourhood<small>by what runs there: web servers at the front, offices, data and messaging (databases, brokers), Jobs at the back</small></span></div>`);
+  // Height (#49): offices and StatefulSets, never houses or works.
+  html.push(`<div class="zone"><span>Height<small>offices and StatefulSets grow with the CPU and memory their pods request (4 GiB counts as a core), two storeys for every doubling; the heaviest stand in the middle of their block. Without requests, offices grow with replicas</small></span></div>`);
   document.getElementById("legend").innerHTML = html.join("");
 }
 
@@ -4798,7 +4904,7 @@ const contextSelect = document.getElementById("context");
 
 // Another cluster: forget the old one's namespaces, lots and labels too.
 function newCity() {
-  registry.length = 0; daemons.clear(); DATA.ns.length = 0; DATA.wl.length = 0; townPlaced = null; fronts.clear();
+  registry.length = 0; lotWeights.length = 0; seating.clear(); daemons.clear(); DATA.ns.length = 0; DATA.wl.length = 0; townPlaced = null; fronts.clear();
   live.ns.clear(); live.wl.clear(); live.pods.clear(); live.next = 0;
   for (const el of signs) if (el) el.remove();
   signs.length = 0;
@@ -4846,7 +4952,7 @@ function liveBatch(items) {
       if (p.details && p.details.name) podDetails.set(id, p.details);
       events.push([0, id, intern(live.ns, DATA.ns, p.namespace, p.namespace),
         intern(live.wl, DATA.wl, `${p.kind}/${p.workload}`, p.workload), KINDS.indexOf(p.kind), STATES.indexOf(p.state),
-        ROLES.indexOf(p.role)]);
+        ROLES.indexOf(p.role), (p.details && p.details.cpu) || 0, (p.details && p.details.memory) || 0]);
     } else if (it.PodDeleted) {
       const id = live.pods.get(it.PodDeleted.uid);
       if (id !== undefined) { events.push([0, id]); live.pods.delete(it.PodDeleted.uid); }
