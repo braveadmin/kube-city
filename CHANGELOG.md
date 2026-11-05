@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0
+
+### Changed
+
+- Jobs are always on the map: a Job's works stands while any of its pods
+  exists, finished ones too, so a CronJob stays in its place between runs
+  and goes only when its Jobs are deleted. The **Finished jobs** button is
+  gone, and the stats line, the district bar and the street-zoom dots
+  always count finished pods (#65).
+- A Job that runs is busy: thicker smoke, a wheel turning on its wall, lit
+  windows that flicker, and a truck driving to the nearest road and back.
+  Between runs it stands idle in its own colours; only its first run is a
+  construction site. A crashing or failed run looks as before (#65).
+- In the demo, each namespace's `report-job` keeps its last three runs,
+  like a CronJob's history (#65).
+
+### Fixed
+
+- A Deployment or StatefulSet with a completed pod could show as a
+  construction site: finished pods were counted out twice (#65).
+
 ## 0.5.0
 
 ### Added
