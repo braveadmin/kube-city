@@ -45,6 +45,13 @@ heaviest workloads in the middle of each block, and shops on the street
 node art/towers_check.mjs [clusters] [seed]
 ```
 
+A Job's look (#65) through the page's own `lookOf()`: running, idle,
+a new run, failed, crashing, gone (instant):
+
+```bash
+node art/jobs_check.mjs
+```
+
 #47's first sketch, the quarters without roads or river (kept for
 comparison):
 
