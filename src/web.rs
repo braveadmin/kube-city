@@ -4,8 +4,9 @@
 //! streams world events to every open page over a WebSocket, as JSON arrays
 //! of the same events a recording holds, plus `{"Status": text}`,
 //! `{"Contexts": {"current", "all"}}` and `{"Reset": null}`. A page that
-//! connects late first gets Reset, the contexts, the status and every
-//! current pod; one that falls too far behind gets that again.
+//! connects late first gets Reset, the contexts, the status, every exposed
+//! workload's exposure and every current pod; one that falls too far behind
+//! gets that again.
 //!
 //! When the city shows a cluster, a page can ask for another kubeconfig
 //! context with `{"Context": name}`: every page then resets and the city
@@ -48,7 +49,7 @@ use tokio::{
 
 use crate::{
     anonymise, cluster,
-    world::{PodInfo, WorldEvent},
+    world::{Exposure, PodInfo, WorkloadKind, WorldEvent},
 };
 
 const TEMPLATE: &str = include_str!("../art/city.template.html");
@@ -113,6 +114,8 @@ enum Input {
 #[derive(Default)]
 struct City {
     pods: HashMap<String, PodInfo>,
+    /// Exposed workloads (#50), by namespace, kind and name.
+    exposed: HashMap<(String, WorkloadKind, String), Exposure>,
     context: Option<String>,
 }
 
@@ -150,7 +153,7 @@ pub async fn serve(
         Shows::Cluster(clusters) => Some(clusters),
         Shows::Demo | Shows::Replay => None,
     };
-    let city = City { pods: HashMap::new(), context: clusters.as_ref().map(|c| c.current.clone()) };
+    let city = City { context: clusters.as_ref().map(|c| c.current.clone()), ..City::default() };
     let (contexts, switcher) = match clusters {
         Some(clusters) => {
             let switcher = Switcher {
@@ -360,6 +363,7 @@ async fn pump(mut inputs: UnboundedReceiver<Input>, status: watch::Sender<String
                 current = generation;
                 let mut city = shared.city.lock().await;
                 city.pods.clear();
+                city.exposed.clear();
                 city.context = Some(context.clone());
                 let text = shared.anonymised_status(&format!("{context} · connecting"));
                 status.send_replace(text.clone());
@@ -379,6 +383,14 @@ async fn apply(shared: &Shared, batch: &[WorldEvent]) {
             }
             WorldEvent::PodDeleted { uid } => {
                 city.pods.remove(uid);
+            }
+            WorldEvent::Exposed(exposure) => {
+                let key = (exposure.namespace.clone(), exposure.kind, exposure.workload.clone());
+                if exposure.ways.is_empty() {
+                    city.exposed.remove(&key);
+                } else {
+                    city.exposed.insert(key, exposure.clone());
+                }
             }
         }
     }
@@ -509,6 +521,8 @@ fn snapshot(city: &City, shared: &Shared, status: &str) -> String {
         items.push(contexts(city, shared));
     }
     items.push(json!({ "Status": status }));
+    // Exposure before the pods, so the page knows its shops when it lays out the street.
+    items.extend(city.exposed.values().map(|exposure| json!({ "Exposed": exposure })));
     items.extend(city.pods.values().map(|pod| json!({ "PodUpserted": pod })));
     Value::Array(items).to_string()
 }
@@ -533,7 +547,7 @@ fn open_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{PodState, WorkloadKind};
+    use crate::world::PodState;
 
     fn pod(uid: &str, state: PodState) -> PodInfo {
         PodInfo {
@@ -622,6 +636,34 @@ mod tests {
         assert_eq!(snapshot[0], json!({ "Reset": null }));
         assert_eq!(snapshot[1], json!({ "Status": "ctx · live" }));
         assert_eq!(snapshot[2]["PodUpserted"]["uid"], "b");
+    }
+
+    #[tokio::test]
+    async fn exposure_comes_before_the_pods_and_goes_when_empty() {
+        let (shared, _status_tx) = shared(&[]);
+        let exposure =
+            |ways| Exposure { namespace: "shop".into(), workload: "cart".into(), kind: WorkloadKind::Deployment, ways };
+        let way = crate::world::Way {
+            via: crate::world::Via::NodePort,
+            service: "cart".into(),
+            hosts: vec![],
+            paths: vec![],
+            ports: vec!["30080".into()],
+            address: None,
+        };
+        apply(
+            &shared,
+            &[WorldEvent::PodUpserted(pod("a", PodState::Running)), WorldEvent::Exposed(exposure(vec![way]))],
+        )
+        .await;
+        {
+            let city = shared.city.lock().await;
+            let snapshot: Value = serde_json::from_str(&snapshot(&city, &shared, "live")).unwrap();
+            assert_eq!(snapshot[2]["Exposed"]["workload"], "cart");
+            assert_eq!(snapshot[3]["PodUpserted"]["uid"], "a");
+        }
+        apply(&shared, &[WorldEvent::Exposed(exposure(vec![]))]).await;
+        assert!(shared.city.lock().await.exposed.is_empty());
     }
 
     #[tokio::test]

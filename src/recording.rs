@@ -148,7 +148,7 @@ mod tests {
             .into_iter()
             .map(|(_, event)| match event {
                 WorldEvent::PodUpserted(pod) => pod.role,
-                WorldEvent::PodDeleted { .. } => None,
+                WorldEvent::PodDeleted { .. } | WorldEvent::Exposed(_) => None,
             })
             .collect();
         // From the name, from the images, and as recorded.

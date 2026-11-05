@@ -11,7 +11,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::{
     roles::role_of,
     util::Rng,
-    world::{PodDetails, PodInfo, PodState, WorkloadKind, WorldEvent},
+    world::{Exposure, PodDetails, PodInfo, PodState, Via, Way, WorkloadKind, WorldEvent},
 };
 
 type Workload = (&'static str, WorkloadKind);
@@ -190,6 +190,13 @@ impl DemoCluster {
         let entry = *self.rng.pick(&closed);
         self.open.push(entry);
         let (namespace, workloads) = CATALOGUE[entry];
+        // Exposure first, as a cluster sends it, so the shops get the street.
+        for &(workload, kind) in workloads {
+            let ways = ways_of(namespace, workload);
+            if !ways.is_empty() {
+                events.push(exposure(namespace, (workload, kind), ways));
+            }
+        }
         for &workload in workloads {
             for _ in 0..=self.rng.below(3) {
                 self.spawn(namespace, workload, state, events);
@@ -202,7 +209,12 @@ impl DemoCluster {
             return;
         }
         let position = self.rng.below(self.open.len() as u64) as usize;
-        let (namespace, _) = CATALOGUE[self.open.swap_remove(position)];
+        let (namespace, workloads) = CATALOGUE[self.open.swap_remove(position)];
+        for &(workload, kind) in workloads {
+            if !ways_of(namespace, workload).is_empty() {
+                events.push(exposure(namespace, (workload, kind), Vec::new()));
+            }
+        }
         for i in 0..self.pods.len() {
             let info = &self.pods[i].info;
             if info.namespace == namespace && info.state != PodState::Terminating {
@@ -260,6 +272,36 @@ impl DemoCluster {
         move_to(&mut pod.info, state);
         pod.age = 0;
         events.push(WorldEvent::PodUpserted(pod.info.clone()));
+    }
+}
+
+fn exposure(namespace: &str, (workload, kind): Workload, ways: Vec<Way>) -> WorldEvent {
+    WorldEvent::Exposed(Exposure { namespace: namespace.to_owned(), workload: workload.to_owned(), kind, ways })
+}
+
+/// How a simulated workload is reached from outside (#50): the shop fronts
+/// behind an Ingress, a route, the ingress controller's load balancer and a
+/// NodePort; the rest only inside. Host names under `demo.example`.
+fn ways_of(namespace: &str, workload: &str) -> Vec<Way> {
+    let way = |via, hosts: &[String], paths: &[&str], ports: &[&str]| Way {
+        via,
+        service: workload.to_owned(),
+        hosts: hosts.to_vec(),
+        paths: paths.iter().map(|p| p.to_string()).collect(),
+        ports: ports.iter().map(|p| p.to_string()).collect(),
+        address: (via == Via::LoadBalancer).then(|| "203.0.113.10".to_owned()),
+    };
+    let host = |name: &str| vec![format!("{name}.demo.example")];
+    match workload {
+        "ingress-nginx" => vec![way(Via::LoadBalancer, &[], &[], &["80", "443"])],
+        "grafana" => vec![way(Via::Ingress, &host("grafana"), &["/"], &["3000"])],
+        "keycloak" => vec![way(Via::Ingress, &host("auth"), &["/"], &["8080"])],
+        "orders-api" => vec![way(Via::Ingress, &host("shop"), &["/api/orders"], &["8080"])],
+        "catalog-api" => vec![way(Via::Ingress, &host("shop"), &["/api/catalog"], &["8080"])],
+        "payments-gateway" => vec![way(Via::HttpRoute, &host("pay"), &["/"], &["8443"])],
+        "carrier-simulator" => vec![way(Via::NodePort, &[], &[], &["30080"])],
+        "console" => vec![way(Via::Ingress, &[format!("{namespace}.preview.demo.example")], &["/"], &["80"])],
+        _ => Vec::new(),
     }
 }
 
@@ -348,7 +390,8 @@ mod tests {
     fn it_starts_with_a_running_city() {
         let first = DemoCluster::new(1).step();
         assert!(!first.is_empty());
-        assert!(first.iter().all(|e| matches!(e, WorldEvent::PodUpserted(p) if p.state == PodState::Running)));
+        let pods: Vec<_> = first.iter().filter(|e| !matches!(e, WorldEvent::Exposed(_))).collect();
+        assert!(pods.iter().all(|e| matches!(e, WorldEvent::PodUpserted(p) if p.state == PodState::Running)));
     }
 
     #[test]
@@ -358,7 +401,7 @@ mod tests {
         for _ in 0..400 {
             upserts.extend(demo.step().into_iter().filter_map(|e| match e {
                 WorldEvent::PodUpserted(info) => Some(info),
-                WorldEvent::PodDeleted { .. } => None,
+                WorldEvent::PodDeleted { .. } | WorldEvent::Exposed(_) => None,
             }));
         }
         assert!(upserts.iter().all(|p| p.details.name.starts_with(&p.workload) && !p.details.node.is_empty()));
@@ -384,11 +427,38 @@ mod tests {
                     WorldEvent::PodDeleted { uid } => {
                         assert!(alive.remove(uid), "deleted a pod that was never created: {uid}");
                     }
+                    WorldEvent::Exposed(_) => {}
                 }
             }
             assert_eq!(alive.len(), cluster.pods.len());
             assert!(cluster.pods.len() < MAX_PODS * 2);
         }
         assert_eq!(seen_states.len(), 6, "every state shows up: {seen_states:?}");
+    }
+
+    #[test]
+    fn a_namespace_shows_its_shops_before_its_pods_and_closes_them() {
+        let mut cluster = DemoCluster::new(5);
+        let mut shops = HashSet::new();
+        let mut built = HashSet::new();
+        for _ in 0..3000 {
+            for event in cluster.step() {
+                match event {
+                    WorldEvent::Exposed(e) if e.ways.is_empty() => assert!(shops.remove(&(e.namespace, e.workload))),
+                    WorldEvent::Exposed(e) => {
+                        let key = (e.namespace, e.workload);
+                        assert!(!built.contains(&key), "exposure comes before the first pod: {key:?}");
+                        shops.insert(key);
+                    }
+                    WorldEvent::PodUpserted(p) => {
+                        built.insert((p.namespace, p.workload));
+                    }
+                    WorldEvent::PodDeleted { .. } => {}
+                }
+            }
+            // A namespace that closes forgets its pods' workloads too.
+            built.retain(|(namespace, _)| cluster.open.iter().any(|&i| CATALOGUE[i].0 == namespace));
+        }
+        assert!(!shops.is_empty());
     }
 }

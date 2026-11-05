@@ -9,8 +9,9 @@ grow, burn and rebuild, live.
 - **In your browser.** `kube-city` opens the city in your browser (WebGL,
   mouse-wheel zoom, search, details on click). The old terminal view
   (`--tui`) was removed in 0.4.0.
-- **Read-only.** It only lists and watches pods, the way `kubectl get pods -w`
-  does, and never changes anything in the cluster.
+- **Read-only.** It only lists and watches pods, Services, Ingresses and
+  Gateway routes, the way `kubectl get pods -w` does, and never changes
+  anything in the cluster.
 - **Big clusters stay readable.** Zoom out to one district per namespace,
   coloured by health; zoom in for buildings, then names and individual pods.
   Infrastructure namespaces form an industrial quarter, branch namespaces
@@ -121,7 +122,9 @@ The page keeps its world under the made-up context name, so without
   work; kube-city connects before it starts, so login prompts show up as
   plain text.
 - Permission to `list` and `watch` pods, in all namespaces or in the ones
-  you pass with `-n`.
+  you pass with `-n`. For shops, the same for Services, Ingresses and (if
+  the cluster has the Gateway API) HTTPRoutes and GRPCRoutes; without it
+  the city runs without shops and the status line says so.
 - A browser with WebGL. The page is served only on 127.0.0.1 and needs
   no internet: PixiJS, the sprites and the fonts are in the binary.
 
@@ -139,15 +142,20 @@ The page keeps its world under the made-up context name, so without
 | Crashing          | On fire (CrashLoopBackOff, ImagePullBackOff and similar) |
 | Failed            | Burnt-out shell                              |
 | Terminating       | Fading                                       |
+| Reached from outside | Shop front with an awning at street level |
 
 One building stands for one workload; zoom to street level for one dot per
 pod. Offices and brick halls get two storeys for every doubling of the CPU
 and memory their pods request (4 GiB counts as a core), from 2 storeys at
 0.1 core up to 12, and the heaviest stand in the middle of their block, so
 each neighbourhood has its skyscrapers in the centre. Without requests
-(older recordings), offices grow a storey per replica. Click a building to see its pods: name, readiness, restarts, age, node
+(older recordings), offices grow a storey per replica. Workloads reached
+from outside the cluster (behind an Ingress, a Gateway route, a
+LoadBalancer or a NodePort Service) are shops: they keep their shape, get
+a shop front, and stand on the neighbourhood's street facing the middle of
+town. Click a building to see its pods: name, readiness, restarts, age, node
 and, in red, why a pod is not simply running (ImagePullBackOff, OOMKilled,
-Evicted, …), plus the workload's images. A workload looks the same, and stands in the same spot, in every
+Evicted, …), plus the workload's images and how it is reached from outside. A workload looks the same, and stands in the same spot, in every
 namespace that has it, so environments that deploy the same stack are easy
 to compare.
 
