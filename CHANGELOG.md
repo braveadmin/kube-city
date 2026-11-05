@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- Roads out of town: every road that reaches the edge of town runs on to
+  the edge of the world along the easiest way, round steep slopes and
+  lakes, up ramps and over rivers on bridges; cars drive them and hide
+  behind hills (#44).
+- World styles: the seed picks a valley, a coast, an island with a harbour,
+  lake country or highlands, and a **World style** dropdown can force one;
+  the legend names the style and the seed (#45).
+- Quarter labels at cluster zoom: each quarter of related namespaces gets
+  one label with its shared name ("feature-* · 6") and the pods, problems
+  and pending pods of all of them (#47).
+- Each workload's role (web, office, data, messaging or worker), worked
+  out from its images, in the hover tip, the inspector and the legend
+  (#48).
+- Towers from CPU and memory requests: offices and brick halls get two
+  storeys for every doubling of what their pods request (4 GiB counts as a
+  core), from 2 storeys at 0.1 core up to 12, the heaviest in the middle
+  of their block; the inspector and hover tip show the requests (#49).
+- Shops: workloads reached from outside the cluster (behind an Ingress, a
+  Gateway HTTPRoute or GRPCRoute, a LoadBalancer or a NodePort Service)
+  get a shop front and stand on their neighbourhood's street, facing the
+  middle of town; the inspector shows how each is reached. kube-city now
+  also lists and watches Services, Ingresses and Gateway routes, still
+  read-only; without access to them the city runs without shops and the
+  status line says so (#50).
+
+### Changed
+
+- The city is a town of neighbourhoods: each namespace is laid out on its
+  own, namespaces that share at least half their workloads form a quarter,
+  with parks between neighbourhoods and wider belts between quarters. A new
+  namespace finds free land without moving the others, and the river bends
+  between the two halves of town (#47).
+- Inside a neighbourhood, workloads stand by role: web servers at the
+  front, then offices, data and messaging, Jobs at the back (#48).
+- The terrain stays readable at every zoom: its colours and details calm
+  down as the district colours come in, and the farthest zoom frames the
+  town with a ring of country instead of the whole world (#46).
+- `--anonymise` also gives Services and host names made-up names and drops
+  load balancers' addresses (#50).
+- In the Kenney look, ground floors with awnings are kept for shops; works
+  and brick halls have plain ones (#50).
+- No macOS binaries in this release (#80); on macOS, `cargo install
+  kube-city` works.
+
 ## 0.4.0
 
 ### Added
