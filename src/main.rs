@@ -3,6 +3,7 @@
 mod anonymise;
 mod cluster;
 mod demo;
+mod exposure;
 mod recording;
 mod roles;
 mod util;
@@ -72,8 +73,9 @@ struct Args {
     tui: bool,
 
     /// Replace every name (namespaces, workloads, pods, nodes, images,
-    /// contexts) with a made-up one in the page and in --record, so the city
-    /// can be shared. The names are new every run.
+    /// Services, host names, contexts) with a made-up one in the page and in
+    /// --record, and drop load balancers' addresses, so the city can be
+    /// shared. The names are new every run.
     #[arg(long)]
     anonymise: bool,
 

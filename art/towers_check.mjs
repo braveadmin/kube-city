@@ -12,6 +12,10 @@
 // zonedLots gave it (#48's role zoning), no two workloads share a lot, and
 // in each block a heavier workload never stands on a ring further out than a
 // lighter one.
+// Shops (#50): random workloads are exposed; every shop stands on the outer
+// ring of the front block nearest the town's middle (or of the next blocks,
+// once that is full), whatever its weight; the others keep the rule above;
+// no two share a lot; without shops nothing changes.
 
 import { readFileSync } from "node:fs";
 
@@ -25,7 +29,7 @@ const page = readFileSync(new URL("city.template.html", import.meta.url), "utf8"
 const MARK = "// ---------------------------------------------------------------- ";
 const from = page.indexOf(`${MARK}layout\n`), to = page.indexOf(MARK, from + MARK.length);
 const hashFn = page.slice(page.indexOf("function hash("), page.indexOf("function rng("));
-const L = new Function(`${hashFn}${page.slice(from, to)}\nreturn { planTown, lotsFor, zonedLots, frontOf, heaviestInside };`)();
+const L = new Function(`${hashFn}${page.slice(from, to)}\nreturn { planTown, lotsFor, zonedLots, frontOf, heaviestInside, streetSeats };`)();
 const heights = page.slice(page.indexOf("const GIB_PER_CORE"), page.indexOf("function weightOfBuilding("));
 const H = new Function(`const [PENDING, RUNNING, CRASH, TERMINATING, SUCCEEDED, FAILED] = [0, 1, 2, 3, 4, 5];
 ${heights}\nreturn { weightOf, storeysOf, LIGHT, LOW_STOREYS, MAX_STOREYS, GIB_PER_CORE };`)();
@@ -50,7 +54,7 @@ const one = [1, 250, 2 ** 29];
 if (!(storeysOf(weightOf([one, one, one])) > storeysOf(weightOf([one])))) fail("replicas do not make a building taller");
 
 // Lots.
-let districts = 0, blocks = 0, moved = 0;
+let districts = 0, blocks = 0, moved = 0, shopCount = 0, offStreet = 0;
 for (let c = 0; c < COUNT; c++) {
   const n = 1 + pick(12);
   const needs = Array.from({ length: n }, (_, k) => {
@@ -80,9 +84,31 @@ for (let c = 0; c < COUNT; c++) {
       if (bk < 0 || bk !== blockOf(z.cell) || !(a.w > z.w)) continue;
       if (ringOf(a.cell, d.blocks[bk]) < ringOf(z.cell, d.blocks[bk])) { fail(`${where}: a heavier workload stands further out`); break; }
     }
+
+    // Shops (#50).
+    const middle = [city.W / 2, city.H / 2], order = L.frontOf(d.blocks, middle);
+    const none = L.streetSeats(d.blocks, order, middle, cells, lots, weights, new Set());
+    if (none.length !== cells.length || seats.some((k, lot) => none[lot] !== k) || none.slice(seats.length).some((k, x) => k !== seats.length + x)) fail(`${where}: without shops the seats changed`);
+    const shops = new Set(need.wl.filter(() => rand() < (rand() < 0.2 ? 0.8 : 0.15)));
+    const all = L.streetSeats(d.blocks, order, middle, cells, lots, weights, shops);
+    if (all.length !== cells.length || new Set(all).size !== all.length || all.some(k => !(k >= 0 && k < cells.length))) return fail(`${where}: shop seats are not a permutation of the cells`);
+    const far = c => Math.hypot(c[0] + 0.5 - middle[0], c[1] + 0.5 - middle[1]);
+    const street = order.flatMap(bk => cells.filter(c => blockOf(c) === bk && ringOf(c, d.blocks[bk]) === 0).sort((a, z) => far(a) - far(z)));
+    const at = need.wl.map((w, lot) => ({ w, shop: shops.has(w), weight: weights.get(w), cell: cells[all[lot]] }));
+    const shopCells = at.filter(a => a.shop).map(a => a.cell), rest = at.filter(a => !a.shop);
+    shopCount += shopCells.length;
+    const want = new Set(street.slice(0, Math.min(shopCells.length, street.length)));
+    for (const c of shopCells) if (!want.has(c)) offStreet++;
+    if (shopCells.length <= street.length && shopCells.some(c => !want.has(c))) fail(`${where}: a shop is not on the street nearest the middle`);
+    for (const a of rest) for (const z of rest) {
+      const bk = blockOf(a.cell);
+      if (bk < 0 || bk !== blockOf(z.cell) || !(a.weight > z.weight)) continue;
+      if (ringOf(a.cell, d.blocks[bk]) < ringOf(z.cell, d.blocks[bk])) { fail(`${where}: with shops, a heavier workload stands further out`); break; }
+    }
   });
 }
 
 console.log(`${COUNT} clusters, ${districts} neighbourhoods, ${blocks} blocks, ${moved} workloads moved inwards or out by weight`);
+console.log(`${shopCount} shops, ${offStreet} of them off the street (more shops than street lots)`);
 console.log(failures.length ? `${failures.length} failures` : "all checks pass");
 process.exit(failures.length ? 1 : 0);

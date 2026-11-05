@@ -1,28 +1,45 @@
-//! Watches pods in a real cluster and turns them into world events.
+//! Watches pods in a real cluster and turns them into world events, and
+//! Services, Ingresses and Gateway routes for which workloads are reached
+//! from outside (#50).
 //!
-//! Access is read-only: the city only ever lists and watches pods.
+//! Access is read-only: the city only ever lists and watches.
 
 use std::{collections::HashSet, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use futures::{StreamExt, stream};
-use k8s_openapi::api::core::v1::{Container, Pod, PodSpec, PodStatus};
+use futures::{StreamExt, stream, stream::BoxStream};
+use k8s_openapi::api::{
+    core::v1::{Container, Pod, PodSpec, PodStatus, Service},
+    networking::v1::Ingress,
+};
 use kube::{
-    Api, Client, Config,
+    Api, Client, Config, Resource,
     api::ListParams,
     config::{KubeConfigOptions, Kubeconfig},
+    core::{ApiResource, DynamicObject, GroupVersionKind},
     runtime::{WatchStreamExt, watcher},
 };
+use serde::de::DeserializeOwned;
 use tokio::sync::{mpsc::UnboundedSender, watch};
 
 use crate::{
+    exposure::{self, Exposures, PodLabels},
     roles::role_of,
-    world::{PodDetails, PodInfo, PodState, WorkloadKind, WorldEvent},
+    world::{PodDetails, PodInfo, PodState, Via, WorkloadKind, WorldEvent},
 };
 
 /// Long enough to finish an interactive (device code) login.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(180);
 const STATUS_ERROR_MAX: usize = 80;
+/// How long the first pods wait for the Services, Ingresses and routes, so a
+/// workload's exposure reaches the page before its pods do (#50).
+const EXPOSURE_WAIT: Duration = Duration::from_secs(15);
+/// How often exposure is worked out again while something changes.
+const EXPOSURE_EVERY: Duration = Duration::from_secs(1);
+/// The Gateway API's stable routes: plural, kind, and how the city names them.
+const ROUTES: [(&str, &str, Via); 2] =
+    [("httproutes", "HTTPRoute", Via::HttpRoute), ("grpcroutes", "GRPCRoute", Via::GrpcRoute)];
+const GATEWAY_API: (&str, &str) = ("gateway.networking.k8s.io", "v1");
 /// Container waiting reasons that mean the pod will not start without help.
 const BROKEN_REASONS: [&str; 7] = [
     "CrashLoopBackOff",
@@ -76,9 +93,13 @@ pub async fn connect(context: Option<&str>, namespaces: &[String]) -> Result<(Cl
     Ok((client, context))
 }
 
-/// Streams pod changes into `events` until the receiver goes away, keeping
-/// `status` up to date for the status bar. Dropped connections are retried
-/// with backoff.
+/// Streams pod changes and exposure (#50) into `events` until the receiver
+/// goes away, keeping `status` up to date for the status bar. Dropped
+/// connections are retried with backoff.
+///
+/// The first pods are held until the Services, Ingresses and routes are
+/// listed too (at most `EXPOSURE_WAIT`), and follow the first exposure, so
+/// the page knows its shops when it lays out the street.
 pub async fn watch(
     client: Client,
     context: String,
@@ -86,6 +107,13 @@ pub async fn watch(
     events: UnboundedSender<WorldEvent>,
     status: watch::Sender<String>,
 ) {
+    let (aux, missing) = exposure_sources(&client, &namespaces).await;
+    let live_text = match missing.is_empty() {
+        true => format!("{context} · live"),
+        false => format!("{context} · {}", limited(&missing)),
+    };
+    let aux_total = aux.len();
+    let mut aux = stream::select_all(aux);
     let apis = pod_apis(&client, &namespaces);
     let mut trackers = vec![Tracker::default(); apis.len()];
     let mut live = vec![false; apis.len()];
@@ -93,28 +121,209 @@ pub async fn watch(
         watcher(api, watcher::Config::default().any_semantic()).default_backoff().map(move |event| (i, event)).boxed()
     });
     let mut merged = stream::select_all(streams);
-    while let Some((i, result)) = merged.next().await {
-        match result {
-            Ok(event) => {
-                if matches!(event, watcher::Event::InitDone) {
-                    live[i] = true;
-                    if live.iter().all(|&ok| ok) {
-                        status.send_replace(format!("{context} · live"));
+    let mut exposures = Exposures::default();
+    let mut held: Option<Vec<WorldEvent>> = Some(Vec::new());
+    let mut dirty = false;
+    let wait = tokio::time::sleep(EXPOSURE_WAIT);
+    tokio::pin!(wait);
+    let mut every = tokio::time::interval(EXPOSURE_EVERY);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            next = merged.next() => {
+                let Some((i, result)) = next else { return };
+                match result {
+                    Ok(event) => {
+                        if matches!(event, watcher::Event::InitDone) {
+                            live[i] = true;
+                            if live.iter().all(|&ok| ok) {
+                                status.send_replace(live_text.clone());
+                            }
+                        }
+                        if let watcher::Event::InitApply(pod) | watcher::Event::Apply(pod) = &event
+                            && let Some((uid, labels)) = pod_labels(pod)
+                        {
+                            dirty |= exposures.pod_seen(&uid, labels);
+                        }
+                        for change in trackers[i].handle(event) {
+                            if let WorldEvent::PodDeleted { uid } = &change {
+                                dirty |= exposures.pod_gone(uid);
+                            }
+                            match &mut held {
+                                Some(held) => held.push(change),
+                                None => {
+                                    if events.send(change).is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        live[i] = false;
+                        let message: String = error.to_string().chars().take(STATUS_ERROR_MAX).collect();
+                        status.send_replace(format!("{context} · reconnecting: {message}"));
                     }
                 }
-                for change in trackers[i].handle(event) {
+            }
+            Some(fact) = aux.next(), if aux_total > 0 => dirty |= fact.apply(&mut exposures),
+            () = &mut wait, if held.is_some() => {
+                if !release(&mut held, &mut exposures, &events) {
+                    return;
+                }
+                dirty = false;
+            }
+            _ = every.tick(), if held.is_none() && dirty => {
+                dirty = false;
+                for change in exposures.changes() {
                     if events.send(change).is_err() {
                         return;
                     }
                 }
             }
-            Err(error) => {
-                live[i] = false;
-                let message: String = error.to_string().chars().take(STATUS_ERROR_MAX).collect();
-                status.send_replace(format!("{context} · reconnecting: {message}"));
+        }
+        let aux_ready = exposures.services.values().filter(|store| store.ready).count()
+            + exposures.backends.values().filter(|store| store.ready).count();
+        if held.is_some() && live.iter().all(|&ok| ok) && aux_ready >= aux_total {
+            if !release(&mut held, &mut exposures, &events) {
+                return;
             }
+            dirty = false;
         }
     }
+}
+
+/// Sends the first exposure, then the pods held for it; false when the
+/// receiver has gone.
+fn release(
+    held: &mut Option<Vec<WorldEvent>>,
+    exposures: &mut Exposures,
+    events: &UnboundedSender<WorldEvent>,
+) -> bool {
+    let pods = held.take().unwrap_or_default();
+    exposures.changes().into_iter().chain(pods).all(|event| events.send(event).is_ok())
+}
+
+/// The status after the context when some of what exposure needs cannot be
+/// listed; `--anonymise` lets it through, it names no object.
+pub fn limited(missing: &[&str]) -> String {
+    format!("live · no access to {}; shops may be missing", missing.join(", "))
+}
+
+/// One change from the watchers exposure is worked out from.
+#[expect(clippy::large_enum_variant, reason = "facts are passed one at a time; boxing every object buys nothing")]
+enum Fact {
+    Services(usize, watcher::Event<Service>),
+    Ingresses(usize, watcher::Event<Ingress>),
+    Routes(usize, Via, watcher::Event<DynamicObject>),
+    /// A stream lost its connection; it retries with backoff, and the pods'
+    /// stream reports the trouble.
+    Dropped,
+}
+
+impl Fact {
+    /// True when exposure may have changed.
+    fn apply(self, exposures: &mut Exposures) -> bool {
+        match self {
+            Fact::Services(i, event) => exposures.services.entry(i).or_default().handle(event, exposure::service_facts),
+            Fact::Ingresses(i, event) => {
+                exposures.backends.entry(i).or_default().handle(event, exposure::ingress_backends)
+            }
+            Fact::Routes(i, via, event) => {
+                exposures.backends.entry(i).or_default().handle(event, |route| exposure::route_backends(route, via))
+            }
+            Fact::Dropped => false,
+        }
+    }
+}
+
+/// The watchers exposure needs, for what may be listed, and what may not.
+/// A cluster without the Gateway API simply has no routes.
+async fn exposure_sources(
+    client: &Client,
+    namespaces: &[String],
+) -> (Vec<BoxStream<'static, Fact>>, Vec<&'static str>) {
+    let mut streams = Vec::new();
+    let mut missing = Vec::new();
+    let services = scoped(namespaces, || Api::<Service>::all(client.clone()), |n| Api::namespaced(client.clone(), n));
+    if can_list(&services).await {
+        for api in services {
+            let i = streams.len();
+            streams.push(watch_stream(api, move |event| Fact::Services(i, event)));
+        }
+    } else {
+        missing.push("Services");
+    }
+    let ingresses = scoped(namespaces, || Api::<Ingress>::all(client.clone()), |n| Api::namespaced(client.clone(), n));
+    if can_list(&ingresses).await {
+        for api in ingresses {
+            let i = streams.len();
+            streams.push(watch_stream(api, move |event| Fact::Ingresses(i, event)));
+        }
+    } else {
+        missing.push("Ingresses");
+    }
+    let (group, version) = GATEWAY_API;
+    let served = client.list_api_group_resources(&format!("{group}/{version}")).await.map(|list| list.resources);
+    let mut routes_missing = false;
+    for (plural, kind, via) in ROUTES {
+        if !served.as_ref().is_ok_and(|resources| resources.iter().any(|r| r.name == plural)) {
+            continue;
+        }
+        let resource = ApiResource::from_gvk_with_plural(&GroupVersionKind::gvk(group, version, kind), plural);
+        let routes = scoped(
+            namespaces,
+            || Api::<DynamicObject>::all_with(client.clone(), &resource),
+            |n| Api::namespaced_with(client.clone(), n, &resource),
+        );
+        if !can_list(&routes).await {
+            routes_missing = true;
+            continue;
+        }
+        for api in routes {
+            let i = streams.len();
+            streams.push(watch_stream(api, move |event| Fact::Routes(i, via, event)));
+        }
+    }
+    if routes_missing {
+        missing.push("Gateway routes");
+    }
+    (streams, missing)
+}
+
+/// One Api for the whole cluster, or one per `--namespace`.
+fn scoped<K>(namespaces: &[String], all: impl Fn() -> Api<K>, one: impl Fn(&str) -> Api<K>) -> Vec<Api<K>> {
+    if namespaces.is_empty() { vec![all()] } else { namespaces.iter().map(|namespace| one(namespace)).collect() }
+}
+
+async fn can_list<K>(apis: &[Api<K>]) -> bool
+where
+    K: Resource + Clone + DeserializeOwned + std::fmt::Debug,
+{
+    for api in apis {
+        if api.list(&ListParams::default().limit(1)).await.is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+fn watch_stream<K>(api: Api<K>, fact: impl Fn(watcher::Event<K>) -> Fact + Send + 'static) -> BoxStream<'static, Fact>
+where
+    K: Resource + Clone + DeserializeOwned + std::fmt::Debug + Send + 'static,
+{
+    watcher(api, watcher::Config::default().any_semantic())
+        .default_backoff()
+        .map(move |result| result.map_or(Fact::Dropped, &fact))
+        .boxed()
+}
+
+/// What exposure needs of a pod: its labels and its workload.
+fn pod_labels(pod: &Pod) -> Option<(String, PodLabels)> {
+    let meta = &pod.metadata;
+    let (workload, kind) = workload_of(pod);
+    let labels = meta.labels.clone().unwrap_or_default();
+    Some((meta.uid.clone()?, PodLabels { namespace: meta.namespace.clone()?, labels, workload, kind }))
 }
 
 fn pod_apis(client: &Client, namespaces: &[String]) -> Vec<Api<Pod>> {
@@ -379,6 +588,7 @@ mod tests {
             .map(|event| match event {
                 WorldEvent::PodUpserted(info) => ("upsert", info.uid.as_str()),
                 WorldEvent::PodDeleted { uid } => ("delete", uid.as_str()),
+                WorldEvent::Exposed(e) => ("exposed", e.workload.as_str()),
             })
             .collect();
         out.sort_unstable();

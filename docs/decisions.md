@@ -711,6 +711,31 @@ heavier workload stands further out than a lighter one in its block; the
 height scale grows with weight and ignores terminating and finished pods.
 The big recording has no requests, so it looks as before.
 
+Built (#50, 2026-11-05): `src/exposure.rs`, the exposure watchers in
+`src/cluster.rs`, `streetSeats()` in the page's layout section, `shopOf()`
+and `shopFront()` in its world model and art. Owner's answers on the issue:
+1A, 2A, 3A, 4A.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Shops | A workload is a shop when one of its pods is selected by a LoadBalancer or NodePort Service, or by a Service an Ingress (rules and default backend) or a Gateway `HTTPRoute` or `GRPCRoute` sends to (route backends in another namespace too; only Services) | The issue |
+| Server | Watches Services, Ingresses and, where the cluster serves `gateway.networking.k8s.io/v1`, the two routes (list/watch only); matches selectors to the pods' labels on the server and sends `Exposed { namespace, workload, kind, ways }` when a workload's ways change (none once it is not exposed), worked out at most once a second. Labels and selectors never reach the page | Small events; the page needs no labels |
+| Order | The first pods are held until the Services, Ingresses and routes are listed (at most 15 s, `EXPOSURE_WAIT`) and follow the first exposure; a page's snapshot sends every exposure before the pods; the demo sends a namespace's exposure before its pods | The page must know its shops when it first lays out the street |
+| No access | What cannot be listed is left out; the status line says "live · no access to Services, Ingresses; shops may be missing" (kept by `--anonymise`, it names no object) | The issue's plan |
+| Street | Decision 1A: shops take the outer ring of the front block (#48's `frontOf`), nearest the town's middle first, then the outer rings of the next blocks; the others get the lots left as #49 hands them out (`streetSeats`) | Works for one-block neighbourhoods; the street faces the town |
+| Towers | Decision 4A: a shop stays on the street whatever its weight | A heavy shop is a tall building on the street |
+| Stability | Shops are part of the seating kept per neighbourhood: a workload that becomes a shop later gets its shop front where it stands; the street is redone when the neighbourhood is laid out anew | Nothing moves when a Service changes, as #48's zones and #49's seats |
+| Kenney look | Decision 2A: the pack's ground floors with awnings or stalls (`KIT.shops`: light walls under offices, houses and works, red under brick halls) only for shops; works and brick halls got plain ground floors, and the eight sprites nothing names any more left `assets/kenney` | An awning always means a shop |
+| Metropolis look | A striped awning over a lit shop window on the front faces (`shopFront()`), in one of four awning colours; brick halls get a small shop at their foot, houses on the front house | Same idea in code |
+| Anonymise | Decision 3A: Services and host names get pseudonyms (`granite-svc`, `garnet.example`, a wildcard keeps its `*.`), paths and ports stay, load balancers' addresses go | Two workloads behind one host still share it |
+| Inspector | "Reached from outside": one line per way ("Ingress · shop.example.com /api → web:8080", "LoadBalancer 203.0.113.10 · ports 80, 443 · Service …"); the hover tip says "shop: Ingress"; a legend row for shops | The issue |
+| Demo | `ingress-nginx` behind a LoadBalancer, grafana, keycloak, the shop APIs and every branch's console behind Ingresses, payments behind an HTTPRoute, the carrier simulator on a NodePort | So the demo has a shopping street |
+
+250 random towns (`art/towers_check.mjs`, 1 533 neighbourhoods, 11 473
+shops): every shop on its street nearest the town's middle, the others
+still heaviest inside, no two workloads on one lot, and without shops the
+seats as before. The big recording has no Services, so it has no shops.
+
 ## Roadmap
 
 The public roadmap is [`ROADMAP.md`](../ROADMAP.md); keep it up to date when

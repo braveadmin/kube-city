@@ -17,7 +17,7 @@ pub enum PodState {
 }
 
 /// What kind of workload owns a pod; it decides the type of building.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum WorkloadKind {
     Deployment,
     StatefulSet,
@@ -76,10 +76,57 @@ pub struct PodDetails {
 
 /// A change reported by a source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[expect(clippy::large_enum_variant, reason = "events are passed one at a time; boxing every pod buys nothing")]
 pub enum WorldEvent {
     PodUpserted(PodInfo),
-    PodDeleted { uid: String },
+    PodDeleted {
+        uid: String,
+    },
+    /// How a workload is reached from outside the cluster (#50); sent when
+    /// that changes, with no `ways` once it is not reached any more. A
+    /// source sends a workload's first one before its pods where it can, so
+    /// the page knows its shops when it lays out the street.
+    Exposed(Exposure),
+}
+
+/// A workload that is reached from outside: a "shop" in the city (#50).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Exposure {
+    pub namespace: String,
+    pub workload: String,
+    pub kind: WorkloadKind,
+    /// Sorted, so the same exposure always reads the same.
+    pub ways: Vec<Way>,
+}
+
+/// One way in: an Ingress or a Gateway route to one of the workload's
+/// Services, or the Service itself as a load balancer or on node ports.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Way {
+    pub via: Via,
+    /// The Service the way leads to.
+    pub service: String,
+    /// Host names (Ingress rules, route hostnames); sorted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<String>,
+    /// Paths (Ingress rules, HTTP route matches); sorted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    /// Ports: the Service's port for an Ingress or route (a number or a
+    /// port's name), the load balancer's ports, or the node ports; sorted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<String>,
+    /// A load balancer's address (IP or host name), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Via {
+    Ingress,
+    HttpRoute,
+    GrpcRoute,
+    LoadBalancer,
+    NodePort,
 }
 
 #[cfg(test)]

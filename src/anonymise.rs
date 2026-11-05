@@ -1,8 +1,9 @@
 //! `--anonymise`: pseudonyms for every name, so a city can be shared.
 //!
-//! Namespaces, workloads, pod names and uids, nodes, images and contexts get
-//! made-up names before they leave the server, and the status line loses
-//! error text (which can hold host names). The same real name keeps its
+//! Namespaces, workloads, pod names and uids, nodes, images, Services, host
+//! names and contexts get made-up names before they leave the server, load
+//! balancers' addresses are dropped, and the status line loses error text
+//! (which can hold host names). The same real name keeps its
 //! pseudonym for the whole run; a workload keeps it in every namespace, so
 //! landmarks still work. Pseudonyms are new every run unless a salt is
 //! given: the code is public, so stable ones could be matched by guessing.
@@ -19,7 +20,7 @@ use tokio::sync::{
     watch,
 };
 
-use crate::world::{PodInfo, WorkloadKind, WorldEvent};
+use crate::world::{Exposure, PodInfo, Way, WorkloadKind, WorldEvent};
 
 const WORDS: &[&str] = &[
     "alder", "amber", "aspen", "basalt", "birch", "bramble", "brook", "cedar", "cinder", "clover", "cobalt", "coral",
@@ -75,6 +76,8 @@ pub struct Anonymiser {
     workloads: Names,
     nodes: Names,
     images: Names,
+    services: Names,
+    hosts: Names,
     contexts: Names,
 }
 
@@ -88,6 +91,8 @@ impl Anonymiser {
             workloads: Names::default(),
             nodes: Names::default(),
             images: Names::default(),
+            services: Names::default(),
+            hosts: Names::default(),
             contexts: Names::default(),
         }
     }
@@ -106,7 +111,42 @@ impl Anonymiser {
         match event {
             WorldEvent::PodUpserted(pod) => WorldEvent::PodUpserted(self.pod(pod)),
             WorldEvent::PodDeleted { uid } => WorldEvent::PodDeleted { uid: self.uid(&uid) },
+            WorldEvent::Exposed(exposure) => WorldEvent::Exposed(self.exposure(exposure)),
         }
+    }
+
+    /// Services and host names get pseudonyms, so two workloads behind one
+    /// host still share it; paths and ports stay, addresses go (#50).
+    fn exposure(&mut self, exposure: Exposure) -> Exposure {
+        let mut ways: Vec<Way> = exposure
+            .ways
+            .into_iter()
+            .map(|way| {
+                let mut hosts: Vec<String> = way.hosts.iter().map(|host| self.host(host)).collect();
+                hosts.sort();
+                Way { service: self.service(&way.service), hosts, address: None, ..way }
+            })
+            .collect();
+        ways.sort();
+        Exposure {
+            namespace: self.namespace(&exposure.namespace),
+            workload: self.workload(&exposure.workload, exposure.kind),
+            ways,
+            ..exposure
+        }
+    }
+
+    fn service(&mut self, real: &str) -> String {
+        let hash = self.hash("service", real);
+        self.services.pick(real, |i| format!("{}-svc", word(hash, i)))
+    }
+
+    /// A wildcard host keeps its `*.`.
+    fn host(&mut self, real: &str) -> String {
+        let (wildcard, rest) = real.strip_prefix("*.").map_or((false, real), |rest| (true, rest));
+        let hash = self.hash("host", rest);
+        let name = self.hosts.pick(rest, |i| format!("{}.example", word(hash, i)));
+        if wildcard { format!("*.{name}") } else { name }
     }
 
     fn pod(&mut self, pod: PodInfo) -> PodInfo {
@@ -209,7 +249,7 @@ impl Anonymiser {
     /// without a context (demo, replay) are left as they are.
     pub fn status(&mut self, text: &str) -> String {
         let Some((context, rest)) = text.split_once(" · ") else { return text.to_owned() };
-        let rest = if PLAIN_STATUSES.contains(&rest) {
+        let rest = if PLAIN_STATUSES.contains(&rest) || is_limited(rest) {
             rest
         } else if rest.starts_with("reconnecting") {
             "reconnecting"
@@ -218,6 +258,14 @@ impl Anonymiser {
         };
         format!("{} · {rest}", self.context(context))
     }
+}
+
+/// "live" with what cannot be listed (`cluster::limited`): kinds of
+/// object only, no names.
+fn is_limited(text: &str) -> bool {
+    text.starts_with("live · no access to ")
+        && text.ends_with("; shops may be missing")
+        && text.chars().all(|c| c.is_ascii_alphabetic() || " ,;·".contains(c))
 }
 
 /// Pseudonyms of one kind: each real name gets its own, for the whole run.
@@ -304,7 +352,7 @@ mod tests {
     use crate::{
         recording,
         roles::Role,
-        world::{PodDetails, PodState},
+        world::{PodDetails, PodState, Via},
     };
 
     const REAL: &[&str] = &[
@@ -461,6 +509,53 @@ mod tests {
         assert_eq!(anonymiser.status("demo seed 7"), "demo seed 7");
         assert_eq!(anonymiser.real_context(&context).as_deref(), Some("acme-prod-eu"));
         assert_eq!(anonymiser.real_context("acme-prod-eu"), None);
+    }
+
+    #[test]
+    fn exposure_keeps_its_shape_but_no_name_or_address() {
+        let mut anonymiser = Anonymiser::new(None);
+        let way = |via, service: &str, hosts: &[&str]| Way {
+            via,
+            service: service.into(),
+            hosts: hosts.iter().map(|h| h.to_string()).collect(),
+            paths: vec!["/api".into()],
+            ports: vec!["443".into(), "http".into()],
+            address: Some("secret-host.acme.example".into()),
+        };
+        let real = Exposure {
+            namespace: "acme-payments".into(),
+            workload: "ledger-writer".into(),
+            kind: WorkloadKind::Deployment,
+            ways: vec![
+                way(Via::Ingress, "ledger-writer", &["ledger.acme.example", "*.acme.example"]),
+                way(Via::LoadBalancer, "ledger-writer-lb", &[]),
+            ],
+        };
+        let WorldEvent::Exposed(fake) = anonymiser.event(WorldEvent::Exposed(real.clone())) else {
+            panic!("an exposure stays an exposure")
+        };
+        let text = serde_json::to_string(&fake).unwrap();
+        assert_eq!(leaked(&text), [] as [&str; 0], "{text}");
+        // The same workload as its pods, in the same namespace.
+        let pod = anonymiser.pod(pod("acme-payments", "ledger-writer", WorkloadKind::Deployment, "x"));
+        assert_eq!((&fake.namespace, &fake.workload), (&pod.namespace, &pod.workload));
+        assert_eq!(fake.ways.len(), 2);
+        assert!(
+            fake.ways.iter().all(|way| way.address.is_none() && way.paths == ["/api"] && way.ports == ["443", "http"])
+        );
+        let ingress = fake.ways.iter().find(|way| way.via == Via::Ingress).unwrap();
+        assert!(ingress.hosts.iter().any(|host| host.starts_with("*.")), "{text}");
+        // The same host keeps its pseudonym.
+        assert_eq!(anonymiser.host("ledger.acme.example"), anonymiser.host("ledger.acme.example"));
+        assert!(ingress.hosts.contains(&anonymiser.host("ledger.acme.example")));
+    }
+
+    #[test]
+    fn a_status_without_access_to_services_is_kept() {
+        let mut anonymiser = Anonymiser::new(None);
+        let context = anonymiser.context("acme-prod-eu");
+        let limited = crate::cluster::limited(&["Services", "Gateway routes"]);
+        assert_eq!(anonymiser.status(&format!("acme-prod-eu · {limited}")), format!("{context} · {limited}"));
     }
 
     #[test]

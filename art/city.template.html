@@ -451,12 +451,34 @@ function pyramidRoof(g, cx, cy, a, b, z, rise, color) {
   poly(g, shade(color, 0.72), [P(cx + a + 0.03, cy + b + 0.03, z), P(cx + a + 0.03, cy - b - 0.03, z), apex]);
 }
 
+// A shop front (#50) on a box's two visible faces: a lit shop window under a
+// striped awning, in one of the colours of the Kenney pack's awnings.
+const AWNINGS = [0xd8453a, 0x6aa84f, 0x5b8fd6, 0xe08a3c];
+function shopFront(g, cx, cy, a, b, z, h) {
+  const color = AWNINGS[h % AWNINGS.length], out = 0.1, inset = 0.04;
+  poly(g, ART.lit, [P(cx - a + inset, cy + b, 1.5), P(cx + a - inset, cy + b, 1.5), P(cx + a - inset, cy + b, z - 2), P(cx - a + inset, cy + b, z - 2)]);
+  poly(g, shade(ART.lit, 0.82), [P(cx + a, cy + b - inset, 1.5), P(cx + a, cy - b + inset, 1.5), P(cx + a, cy - b + inset, z - 2), P(cx + a, cy + b - inset, z - 2)]);
+  const stripes = (n, at, dim) => {
+    for (let k = 0; k < n; k++) {
+      const [p1, p2, p3, p4] = at(k / n, (k + 1) / n);
+      poly(g, shade(k % 2 ? 0xf4f1ea : color, dim), [p1, p2, p3, p4]);
+    }
+  };
+  stripes(Math.max(3, Math.round(b * 14)), (u1, u2) => [
+    P(cx + a, cy + b - 2 * b * u1, z + 1), P(cx + a, cy + b - 2 * b * u2, z + 1),
+    P(cx + a + out, cy + b - 2 * b * u2, z - 3), P(cx + a + out, cy + b - 2 * b * u1, z - 3)], 0.84);
+  stripes(Math.max(3, Math.round(a * 14)), (u1, u2) => [
+    P(cx - a + 2 * a * u1, cy + b, z + 1), P(cx - a + 2 * a * u2, cy + b, z + 1),
+    P(cx - a + 2 * a * u2, cy + b + out, z - 3), P(cx - a + 2 * a * u1, cy + b + out, z - 3)], 1);
+}
+
 function tower(g, v) {
   const a = 0.3 + (v.h % 3) * 0.03, b = 0.3 + ((v.h >>> 2) % 3) * 0.03;
   const floors = v.floors, h = 10 + floors * 9;
   poly(g, 0x000000, [P(-a, -b, 0), P(a + 0.12, -b, 0), P(a + 0.12, b + 0.12, 0), P(-a, b + 0.12, 0)], 0.12);
   shadedBox(g, 0, 0, a, b, h, v.wall);
   windows(g, 0, 0, a, b, h, floors, v.h);
+  if (v.shop) shopFront(g, 0, 0, a, b, 9, v.h);
   shadedBox(g, 0, 0, a - 0.05, b - 0.05, 1.5, shade(v.wall, 0.8), h);
   if (v.h % 4 === 0) shadedBox(g, -0.08, -0.06, 0.08, 0.1, 6, 0xbdbdbd, h);
   if (floors >= 6) { g.lineStyle(1.5, 0x5a5a5a); g.moveTo(...P(0.1, -0.1, h)); g.lineTo(...P(0.1, -0.1, h + 22)); g.lineStyle(0); g.beginFill(0xe8452c); g.drawCircle(...P(0.1, -0.1, h + 22), 1.6); g.endFill(); }
@@ -466,6 +488,15 @@ function tower(g, v) {
 // A StatefulSet's tanks grow with its weight (#49), as much a storey as a
 // tower's (9 px), past their own height.
 function tankShape(g, v) {
+  const top = tankBody(g, v);
+  if (v.shop) {
+    // A shop at the hall's foot (#50), in front of its tanks.
+    shadedBox(g, 0.2, 0.2, 0.17, 0.17, 10, ART.walls[v.h % ART.walls.length], 2);
+    shopFront(g, 0.2, 0.2, 0.17, 0.17, 10, v.h);
+  }
+  return top;
+}
+function tankBody(g, v) {
   const color = ART.tank[v.h % ART.tank.length], rise = v.storeys ? (v.storeys - 2) * 9 : 0;
   poly(g, 0x000000, [P(-0.36, -0.36, 0), P(0.42, -0.36, 0), P(0.42, 0.42, 0), P(-0.36, 0.42, 0)], 0.1);
   shadedBox(g, 0, 0, 0.4, 0.4, 2, ART.concrete);
@@ -492,10 +523,13 @@ function houses(g, v) {
   const spots = [[[0, 0]], [[0.2, -0.2], [-0.2, 0.2]], [[-0.2, -0.2], [0.22, -0.05], [-0.05, 0.22]], [[-0.21, -0.21], [0.21, -0.21], [-0.21, 0.21], [0.21, 0.21]]][n - 1];
   const s = n === 1 ? 0.26 : 0.15, h = n === 1 ? 13 : 9;
   poly(g, ART.lawn, [P(-0.45, -0.45, 0), P(0.45, -0.45, 0), P(0.45, 0.45, 0), P(-0.45, 0.45, 0)]);
+  // A shop (#50): the house nearest the street has the shop front.
+  const front = v.shop ? spots.reduce((f, p) => (p[0] + p[1] > f[0] + f[1] ? p : f)) : null;
   for (const [x, y] of spots) {
     shadedBox(g, x, y, s, s, h, v.wall);
     poly(g, shade(v.wall, 0.45), [P(x - s * 0.2, y + s, 0), P(x + s * 0.2, y + s, 0), P(x + s * 0.2, y + s, h * 0.6), P(x - s * 0.2, y + s, h * 0.6)]);
     poly(g, ART.glassDark, [P(x + s, y + s * 0.4, h * 0.4), P(x + s, y - s * 0.3, h * 0.4), P(x + s, y - s * 0.3, h * 0.75), P(x + s, y + s * 0.4, h * 0.75)]);
+    if (front && x === front[0] && y === front[1]) shopFront(g, x, y, s, s, h * 0.6, v.h);
     pyramidRoof(g, x, y, s, s, h, n === 1 ? 11 : 8, v.roof);
   }
   return h + 11;
@@ -509,6 +543,7 @@ function factory(g, v, done) {
   const a = 0.42, b = 0.3, h = 14;
   shadedBox(g, 0, 0, a, b, h, wall);
   poly(g, shade(wall, 0.5), [P(-0.15, b, 0), P(0.1, b, 0), P(0.1, b, 9), P(-0.15, b, 9)]);
+  if (v.shop && !done) shopFront(g, 0, 0, a, b, 9, v.h);
   for (let t = 0; t < 3; t++) {
     const i0 = -a + (2 * a * t) / 3, i1 = i0 + (2 * a) / 3;
     poly(g, shade(roof, 1.05), [P(i0, -b, h), P(i1, -b, h + 8), P(i1, b, h + 8), P(i0, b, h)]);
@@ -1173,6 +1208,39 @@ function heaviestInside(blocks, cells, lots, weights) {
     heavy.forEach((lot, at) => (seats[lot] = inner[at]));
   }
   return seats;
+}
+// Shops on the neighbourhood's street (#50): exposed workloads take the outer
+// ring of its front block, from the lots nearest the town's middle round
+// (then the outer rings of the next blocks), whatever their weight; the other
+// workloads get the lots left, as heaviestInside hands them out. order: the
+// blocks from the front (frontOf); shops: the workloads that are shops.
+// Returns a seat for every cell (lot number -> index into cells), the spare
+// ones last in zonedLots order. Without shops: heaviestInside as before.
+function streetSeats(blocks, order, middle, cells, lots, weights, shops) {
+  const n = Math.min(lots.size, cells.length);
+  const shopLots = [...lots].filter(([wl, lot]) => lot < n && shops.has(wl)).map(([, lot]) => lot).sort((a, z) => a - z);
+  if (!shopLots.length) {
+    const seats = heaviestInside(blocks, cells, lots, weights);
+    for (let k = seats.length; k < cells.length; k++) seats.push(k);
+    return seats;
+  }
+  const blockOf = ([i, j]) => blocks.findIndex(b => i > b.x && j > b.y && i < b.x + b.w - 1 && j < b.y + b.h - 1);
+  const ringOf = ([i, j], b) => Math.min(i - b.x - 1, b.x + b.w - 2 - i, j - b.y - 1, b.y + b.h - 2 - j);
+  const far = k => Math.hypot(cells[k][0] + 0.5 - middle[0], cells[k][1] + 0.5 - middle[1]);
+  const street = [];
+  for (const bk of order) {
+    const ks = [...cells.keys()].filter(k => blockOf(cells[k]) === bk && ringOf(cells[k], blocks[bk]) === 0);
+    street.push(...ks.sort((a, z) => far(a) - far(z) || a - z));
+  }
+  const onStreet = shopLots.slice(0, street.length), take = street.slice(0, onStreet.length), taken = new Set(take);
+  const free = [...cells.keys()].filter(k => !taken.has(k)), shop = new Set(onStreet);
+  const rest = [...lots].filter(([, lot]) => lot < n && !shop.has(lot)).sort((a, z) => a[1] - z[1]);
+  const theirs = free.slice(0, rest.length);
+  const inner = heaviestInside(blocks, theirs.map(k => cells[k]), new Map(rest.map(([wl], k) => [wl, k])), weights);
+  const seats = new Array(n);
+  onStreet.forEach((lot, k) => (seats[lot] = take[k]));
+  rest.forEach(([, lot], k) => (seats[lot] = theirs[inner[k]]));
+  return seats.concat(free.slice(rest.length));
 }
 
 // A town of neighbourhoods (#47). Namespaces that share at least half of
@@ -2699,6 +2767,7 @@ const world = {
 const registry = [];   // namespace index -> Map(workload index -> lot number)
 const lotWeights = [];   // namespace index -> Map(workload index -> its weight when it got its lot, #49)
 const daemons = new Set();   // namespace indexes that run a DaemonSet (see zoneOf)
+const wlKinds = [];   // workload index -> its kind, for its exposure (#50)
 const SPARE = DATA.live ? 0.3 : 0;
 let planDirty = false;
 function registerBatch(events) {
@@ -2712,6 +2781,7 @@ function registerBatch(events) {
   const order = [...fresh.values()].sort((a, b) => a[3] - b[3] || KIND_ORDER[a[2]] - KIND_ORDER[b[2]] || DATA.wl[a[1]].localeCompare(DATA.wl[b[1]]));
   for (const [ns, wl, kind, , last] of order) {
     if (kind === "DaemonSet") daemons.add(ns);
+    wlKinds[wl] = kind;
     const lots = registry[ns] ||= new Map();
     lots.set(wl, lots.size);
     (lotWeights[ns] ||= new Map()).set(wl, weightOf([...last.values()].map(e => [e[5], e[7] || 0, e[8] || 0])));
@@ -2740,24 +2810,26 @@ function planDistricts() {
     let front = fronts.get(name);
     if (!front || front.shape !== shape) fronts.set(name, front = { shape, order: frontOf(d.blocks, middle) });
     const cells = zonedLots(d.blocks, front.order), lots = registry[idx] || new Map();
-    const seats = seatsOf(name, `${shape}|${front.order}|${cells.length}`, d.blocks, cells, lots, lotWeights[idx]);
+    const shops = new Set([...lots.keys()].filter(wl => exposures.has(exposureKey(name, wlKinds[wl], DATA.wl[wl]))));
+    const seats = seatsOf(name, `${shape}|${front.order}|${cells.length}`, () => streetSeats(d.blocks, front.order, middle, cells, lots, lotWeights[idx], shops));
     return { idx, name, zone: needs[idx].zone, ...d, cells: seats.map(k => cells[k]).concat(cells.slice(seats.length)), lots, stats: null, health: "ok" };
   });
   return { districts, parks: city.parks, roads: city.roads, river: city.river, W: city.W, H: city.H, gap: theme.gap, quarters: city.quarters, shift: city.shift };
 }
 
-// Where the heaviest workloads stand (#49): each block's lots (as zonedLots
-// fills them by role) go to its workloads heaviest first, from the ring next
-// to the courtyard outwards, so every block rises towards its middle. Weights
-// are the ones a workload had when it got its lot. Kept per neighbourhood
+// Where the shops (#50) and the heaviest workloads (#49) stand: shops on the
+// street (streetSeats), the rest of each block's lots (as zonedLots fills
+// them by role) to its workloads heaviest first, from the ring next to the
+// courtyard outwards, so every block rises towards its middle. Weights and
+// shops are the ones when the lots were handed out. Kept per neighbourhood
 // while its lots stay the same, so a workload that comes later takes the next
-// spare lot and nothing moves; redone when the neighbourhood is laid out
-// anew, as #48's zones are. Returns lot number -> index into cells.
+// spare lot and nothing moves, not even when a Service changes; redone when
+// the neighbourhood is laid out anew, as #48's zones are. Returns lot number
+// -> index into cells, for every cell.
 const seating = new Map();   // namespace name -> { key, seats }
-function seatsOf(name, key, blocks, cells, lots, weights) {
+function seatsOf(name, key, seat) {
   let s = seating.get(name);
-  if (!s || s.key !== key) seating.set(name, s = { key, seats: heaviestInside(blocks, cells, lots, weights) });
-  for (let k = s.seats.length; k < lots.size; k++) s.seats.push(k);
+  if (!s || s.key !== key) seating.set(name, s = { key, seats: seat() });
   return s.seats;
 }
 
@@ -2803,6 +2875,13 @@ function weightOfBuilding(b) {
   return weightOf([...b.pods.keys()].map(id => { const p = world.pods.get(id); return [p.state, p.cpu, p.memory]; }));
 }
 
+// Exposed workloads (#50): "namespace/kind/workload" -> how they are reached
+// (the server's ways: via, service, hosts, paths, ports, address).
+const exposures = new Map();
+const SHOP_CATS = new Set(["tower", "tank", "house", "factory"]);
+const exposureKey = (ns, kind, name) => `${ns}/${kind}/${name}`;
+function shopOf(b) { return exposures.get(exposureKey(DATA.ns[b.ns], b.kind, b.name)) || null; }
+
 // What a building should look like now, or null when it should not be there.
 function lookOf(b) {
   const counts = [0, 0, 0, 0, 0, 0];
@@ -2831,7 +2910,9 @@ function lookOf(b) {
     case "Job": look.cat = "factory"; look.smoke = counts[RUNNING] > 0; break;
     default: look.cat = "kiosk";
   }
-  look.key = `${look.cat}:${v.h}:${look.p.floors}:${look.p.count || 0}:${look.p.storeys || 0}`;
+  // A shop (#50) keeps its kind's shape with a shop front at street level.
+  look.p.shop = SHOP_CATS.has(look.cat) && !!shopOf(b);
+  look.key = `${look.cat}:${v.h}:${look.p.floors}:${look.p.count || 0}:${look.p.storeys || 0}:${look.p.shop ? 1 : 0}`;
   return look;
 }
 
@@ -3305,6 +3386,7 @@ const METROPOLIS = {
   legend: {
     tower: "tower", tank: "tank, twin tanks or silo", house: "a house per node, up to four",
     factory: "factory, smoking while it runs", build: "construction site", scorched: "scorched shell", kiosk: "kiosk",
+    shop: "striped awning over a lit shop window: reached from outside (Ingress, Gateway route, LoadBalancer or NodePort)",
   },
   zones: { centre: ART.plaza, industry: ART.yard, suburb: ART.lawn },
 };
@@ -3319,10 +3401,17 @@ const STOREY = 35;       // height of one storey in sprite pixels
 const BOX = 24.75;       // a 99 px box's front corner below its centre, in sprite pixels
 const KIT = {
   ground: {
-    office: ["b001", "b002", "b003", "b009", "b010", "b017", "b093", "b100", "b101", "b107", "b108", "b109", "b113", "b114", "b115", "b116", "b117", "b122", "b123", "b124", "b125"],
-    brick: ["b014", "b021", "b025", "b026", "b030", "b033", "b036", "b040", "b041", "b046", "b092", "b099", "b106"],
+    office: ["b001", "b002", "b003", "b009", "b010", "b017", "b093", "b101", "b109", "b114", "b116", "b117", "b122", "b123", "b124", "b125"],
+    brick: ["b014", "b021", "b030", "b036", "b092", "b106"],
     house: ["b022", "b029", "b037", "b042"],
-    works: ["b004", "b011", "b012", "b018", "b019", "b020", "b027", "b028", "b034", "b035"],
+    works: ["b014", "b021", "b022", "b029", "b037", "b042"],
+  },
+  // Shop fronts (#50): the pack's ground floors with awnings or stalls, kept
+  // for exposed workloads so an awning always means a shop; light walls
+  // under offices, houses and works, red ones under brick halls.
+  shops: {
+    office: ["b004", "b012", "b020", "b028", "b100", "b107", "b108", "b115"],
+    brick: ["b018", "b026", "b034", "b041", "b099", "b113"],
   },
   floors: {
     office: ["b000", "b007", "b008", "b015", "b016", "b023", "b024", "b031"],
@@ -3446,11 +3535,12 @@ function kenneyParts(seed) {
   return parts;
 }
 
-// A ground floor, `uppers` storeys and a roof, centred on the lot. The
+// A ground floor (a shop front for a shop, #50), `uppers` storeys and a roof, centred on the lot. The
 // storeys follow a facade pattern: all alike, banded, or a different top or
 // bottom storey. Returns the y of the roof's front corner.
-function stack(c, set, k, uppers, roofSet, tint = k.tint) {
-  const g = pick(KIT.ground[set], k.ground, 0), gh = TEX[g].height;
+function stack(c, set, k, uppers, roofSet, tint = k.tint, shop = false) {
+  const grounds = shop ? KIT.shops[set === "brick" ? "brick" : "office"] : KIT.ground[set];
+  const g = pick(grounds, k.ground, 0), gh = TEX[g].height;
   const parts = [ksprite(g, 0.5, (gh - 68) / gh)];
   const floors = KIT.floors[set];
   if (floors) {
@@ -3566,7 +3656,7 @@ const KENNEY = {
     c.addChild(b);
     switch (look.cat) {
       case "tower": {
-        const top = stack(b, "office", k, Math.max(0, p.floors - 2), "office");
+        const top = stack(b, "office", k, Math.max(0, p.floors - 2), "office", k.tint, p.shop);
         const roof = top - (BOX + 3) * KS;
         if (k.dress === 1) {
           const s = ksprite(KIT.antenna, 0.5, 0.95); s.position.set(iso(0.12, -0.12)[0], roof + iso(0.12, -0.12)[1]); b.addChild(s);
@@ -3576,20 +3666,20 @@ const KENNEY = {
         break;
       }
       case "tank": {
-        stack(b, "brick", k, p.storeys ? p.storeys - LOW_STOREYS : p.shape, "brick");
+        stack(b, "brick", k, p.storeys ? p.storeys - LOW_STOREYS : p.shape, "brick", k.tint, p.shop);
         const roof = -b.getLocalBounds().y;
         const geo = geometry(`k:roofTank:${p.shape}:${p.h % ART.tank.length}`, g => roofTank(g, p));
         const g = new PIXI.Graphics(geo.geometry); g.y = -roof + 10; b.addChild(g);
         break;
       }
-      case "house": stack(b, "house", k, p.count >= 3 ? 1 : 0, "house"); break;
+      case "house": stack(b, "house", k, p.count >= 3 ? 1 : 0, "house", k.tint, p.shop); break;
       case "factory": case "done": {
         const done = look.cat === "done", ch = KENNEY.stackOf(k);
         const g = new PIXI.Graphics();
         shadedBox(g, -0.24, -0.24, 0.06, 0.06, ch.h, done ? 0x9a9a9a : ch.color);
         shadedBox(g, -0.24, -0.24, 0.075, 0.075, 3, 0x6d6d6d, ch.h);
         b.addChild(g);
-        stack(b, "works", k, 0, "works", done ? 0xa0a0a0 : k.tint);
+        stack(b, "works", k, 0, "works", done ? 0xa0a0a0 : k.tint, p.shop && !done);
         break;
       }
       case "kiosk": {
@@ -3721,6 +3811,7 @@ const KENNEY = {
   legend: {
     tower: "office block", tank: "brick hall with a tank on the roof", house: "house with a pitched roof",
     factory: "works with a chimney, smoking while it runs", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
+    shop: "shop front with an awning: reached from outside (Ingress, Gateway route, LoadBalancer or NodePort)",
   },
   zones: { centre: 0xd0cbb8, industry: 0x929287, suburb: 0xa2b684 },
 };
@@ -3962,7 +4053,7 @@ function resetWorld() {
   for (const b of world.buildings.values()) if (b.view) b.view.destroy({ children: true });
   for (const f of falling) f.view.destroy({ children: true });
   falling.clear(); burning.clear(); smoking.clear(); dirty.clear();
-  world.pods.clear(); world.buildings.clear(); podDetails.clear(); world.requests = false;
+  world.pods.clear(); world.buildings.clear(); podDetails.clear(); exposures.clear(); world.requests = false;
   sim.pending.length = 0;
   select(null);
 }
@@ -4244,11 +4335,21 @@ function buildingRequests(b) {
   }
   return requestsText(cpu, memory);
 }
+// How a shop is reached (#50), one line per way in.
+const VIA_WORDS = { Ingress: "Ingress", HttpRoute: "HTTPRoute", GrpcRoute: "GRPCRoute", LoadBalancer: "LoadBalancer", NodePort: "NodePort" };
+function wayText(w) {
+  const ports = (w.ports || []).join(", "), to = `${w.service}${ports ? `:${ports}` : ""}`;
+  if (w.via === "LoadBalancer") return `LoadBalancer${w.address ? ` ${w.address}` : ""}${ports ? ` · ports ${ports}` : ""} · Service ${w.service}`;
+  if (w.via === "NodePort") return `NodePort ${ports || "?"} · Service ${w.service}`;
+  const where = [(w.hosts || []).join(", ") || "any host", (w.paths || []).join(" ")].filter(Boolean).join(" ");
+  return `${VIA_WORDS[w.via] || w.via} · ${where} → ${to}`;
+}
 function buildingTip(b) {
   const counts = [0, 0, 0, 0, 0, 0]; for (const s of b.pods.values()) counts[s]++;
-  const requests = buildingRequests(b);
+  const requests = buildingRequests(b), ways = shopOf(b);
   return `<div class="t">${esc(b.name)}</div><div class="s">${b.kind} · ${ROLE_WORDS[b.role]} in ${esc(DATA.ns[b.ns])}</div><div>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}: ${summary(counts)}</div>` +
-    (requests ? `<div class="s">requests ${requests}</div>` : "");
+    (requests ? `<div class="s">requests ${requests}</div>` : "") +
+    (ways ? `<div class="s">shop: ${esc([...new Set(ways.map(w => VIA_WORDS[w.via] || w.via))].join(", "))}</div>` : "");
 }
 function districtTip(d) {
   const s = d.stats;
@@ -4318,12 +4419,13 @@ async function renderPanel() {
   const urgency = [2, 4, 0, 3, 5, 1]; // by state: crashing and failed pods first
   const pods = [...b.pods].sort(([, a], [, z]) => urgency[a] - urgency[z]).map(([id, s]) => podRow(id, s)).join("");
   const images = [...new Set([...b.pods.keys()].flatMap(id => (podDetails.get(id) || {}).images || []))];
-  const requests = buildingRequests(b);
+  const requests = buildingRequests(b), ways = shopOf(b);
   sel.hidden = false;
   sel.innerHTML = `<div class="card">
     <div class="card-head">${img ? `<img src="${img}" alt="">` : ""}<div><div class="title">${esc(b.name)}</div><div class="sub">${b.kind} · ${ROLE_WORDS[b.role]} in <b>${esc(DATA.ns[b.ns])}</b></div></div>
       <button class="close" id="unselect" aria-label="Clear selection">×</button></div>
     ${requests ? `<h2>Requests</h2><div class="pod-facts">${requests}, for the pods that run</div>` : ""}
+    ${ways ? `<h2>Reached from outside</h2>${ways.map(w => `<div class="pod-facts">${esc(wayText(w))}</div>`).join("")}` : ""}
     <h2>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}</h2><div class="pods">${pods}</div>
     ${images.length ? `<h2>Image${images.length === 1 ? "" : "s"}</h2><div class="images">${images.map(i => `<span>${esc(i)}</span>`).join("")}</div>` : ""}
     ${twins.length ? `<h2>Same component in ${twins.length} other namespace${twins.length === 1 ? "" : "s"}</h2>
@@ -4378,6 +4480,7 @@ async function renderLegend() {
     ["Crashing", "on fire", look("tower", { floors: 3 }), true],
     ["Failed", t.scorched, look("scorched")],
     ["Pod without owner", t.kiosk, look("kiosk")],
+    ["Shop", t.shop, look("tower", { floors: 3, shop: true })],
   ];
   const html = [];
   for (const [title, sub, l, fire] of items) {
@@ -4390,7 +4493,7 @@ async function renderLegend() {
     html.push(`<div class="zone"><i style="background:${color}"></i><span>${ZONE_WORDS[zone]}<small>${rule}</small></span></div>`);
   }
   // Roles (#48): where a building stands inside its neighbourhood, never its shape.
-  html.push(`<div class="zone"><span>Inside a neighbourhood<small>by what runs there: web servers at the front, offices, data and messaging (databases, brokers), Jobs at the back</small></span></div>`);
+  html.push(`<div class="zone"><span>Inside a neighbourhood<small>by what runs there: shops on the street facing the middle of town, then web servers, offices, data and messaging (databases, brokers), Jobs at the back</small></span></div>`);
   // Height (#49): offices and StatefulSets, never houses or works.
   html.push(`<div class="zone"><span>Height<small>offices and StatefulSets grow with the CPU and memory their pods request (4 GiB counts as a core), two storeys for every doubling; the heaviest stand in the middle of their block. Without requests, offices grow with replicas</small></span></div>`);
   document.getElementById("legend").innerHTML = html.join("");
@@ -4890,9 +4993,9 @@ function applyDeepLink() {
 
 // ---------------------------------------------------------------- live feed (kube-city --web)
 // The server sends JSON arrays of {"PodUpserted": pod}, {"PodDeleted": {uid}},
-// {"Status": text}, {"Contexts": {current, all}} and {"Reset": null} (a full
-// list of the pods follows). The page asks for another context with
-// {"Context": name}.
+// {"Exposed": {namespace, workload, kind, ways}} (#50), {"Status": text},
+// {"Contexts": {current, all}} and {"Reset": null} (every exposure and then
+// every pod follow). The page asks for another context with {"Context": name}.
 
 const live = DATA.live ? {
   connected: false, retries: 0, status: "connecting", ws: null, context: null,
@@ -4904,7 +5007,7 @@ const contextSelect = document.getElementById("context");
 
 // Another cluster: forget the old one's namespaces, lots and labels too.
 function newCity() {
-  registry.length = 0; lotWeights.length = 0; seating.clear(); daemons.clear(); DATA.ns.length = 0; DATA.wl.length = 0; townPlaced = null; fronts.clear();
+  registry.length = 0; lotWeights.length = 0; wlKinds.length = 0; exposures.clear(); seating.clear(); daemons.clear(); DATA.ns.length = 0; DATA.wl.length = 0; townPlaced = null; fronts.clear();
   live.ns.clear(); live.wl.clear(); live.pods.clear(); live.next = 0;
   for (const el of signs) if (el) el.remove();
   signs.length = 0;
@@ -4956,6 +5059,12 @@ function liveBatch(items) {
     } else if (it.PodDeleted) {
       const id = live.pods.get(it.PodDeleted.uid);
       if (id !== undefined) { events.push([0, id]); live.pods.delete(it.PodDeleted.uid); }
+    } else if (it.Exposed) {
+      // A shop front comes or goes where the building stands; the street is
+      // laid out again only with the neighbourhood (streetSeats).
+      const e = it.Exposed, key = exposureKey(e.namespace, e.kind, e.workload);
+      if (e.ways.length) exposures.set(key, e.ways); else exposures.delete(key);
+      for (const b of world.buildings.values()) if (exposureKey(DATA.ns[b.ns], b.kind, b.name) === key) dirty.add(b);
     }
   }
   flush();
