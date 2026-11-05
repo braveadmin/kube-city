@@ -736,6 +736,23 @@ shops): every shop on its street nearest the town's middle, the others
 still heaviest inside, no two workloads on one lot, and without shops the
 seats as before. The big recording has no Services, so it has no shops.
 
+Built (#65, 2026-11-05): Jobs always on the map. `lookOf()`'s Job rules,
+`startWorks()`, `truckFor()` and `animateWorks()` in the page,
+`forget_old_runs()` in `src/demo.rs`; `art/jobs_check.mjs` checks the look
+rules. Owner's answers on the issue: 1C, 2A, 3A.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Always shown | The **Finished jobs** button is gone. A Job's works stands while any of its pods exists, finished ones included, so it goes only when the Job is deleted (its TTL, or a CronJob's history limit). The stats line, the district bar and the street dots count finished pods. Other workloads' finished pods (a bare pod that completed) still do not show | The issue |
+| Working | While a run is pending or running: thicker, faster smoke, a wheel turning on the side wall, three lit windows that flicker, and a truck that drives from the door onto the nearest road and back every 7 s. All drawn in code over both looks (`theme.works`: the walls' half-widths and height) | Decision 1C; the Kenney packs have no animation |
+| Truck | Only where a road is at most 1.6 tiles from the lot, so it never drives through other buildings; a works in a courtyard has none. It finds its way again when the city re-packs | The plan: "between the works and the road" |
+| Idle | Its normal colours, no smoke, dark windows, a still wheel, no truck. The grey "done" look is gone | Decision 2A: idle, not broken |
+| New run | A works that already stands stays and starts working as soon as the new run's pod is pending; a construction site only for a Job's first run | Decision 3A: no blinking at every run |
+| Problems | A crashing run burns as before; a burnt-out shell while the only pods besides finished ones have failed and nothing runs or waits | As before |
+| Reduced motion | The wheel stands still, the windows stay lit, the truck waits at the door | As the other animations |
+| Demo | `report-job` keeps each namespace's last three finished runs (`JOB_HISTORY`), as a CronJob's history does, so its works idles between runs | The issue |
+| Fixed on the way | Finished pods were taken off twice when counting a workload's active pods, so a Deployment with a completed pod could show as a construction site | Found by the new check |
+
 ## Roadmap
 
 The public roadmap is [`ROADMAP.md`](../ROADMAP.md); keep it up to date when

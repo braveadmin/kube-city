@@ -231,7 +231,6 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
         <input id="q" type="search" placeholder="Find a workload or namespace" autocomplete="off" aria-label="Find a workload or namespace">
       </label>
       <button class="toggle" id="focus" aria-pressed="false" title="Fade healthy buildings">Focus on problems <kbd>f</kbd></button>
-      <button class="toggle" id="finished" aria-pressed="false" title="Show pods of finished jobs">Finished jobs</button>
       <button class="toggle" id="banners" aria-pressed="true" title="Show or hide the name signs of namespaces and workloads (b)">Banners <kbd>b</kbd></button>
       <button class="toggle" id="sim" aria-pressed="true" title="Restarts and crashes made up by the page, to show how changes look">Simulated changes</button>
       <button class="btn" id="replay" title="Build the city again from the recording">Replay</button>
@@ -535,15 +534,14 @@ function houses(g, v) {
   return h + 11;
 }
 
-function factory(g, v, done) {
-  const wall = done ? 0xa9a59d : v.wall, roof = done ? 0x8d8a85 : 0x9aa3a8, glass = done ? 0x77808a : ART.glass;
-  const stack = done ? 0x9a9a9a : 0xc8503e;
+function factory(g, v) {
+  const wall = v.wall, roof = 0x9aa3a8, glass = ART.glass, stack = 0xc8503e;
   poly(g, 0x000000, [P(-0.42, -0.34, 0), P(0.5, -0.34, 0), P(0.5, 0.42, 0), P(-0.42, 0.42, 0)], 0.1);
   cylinder(g, -0.28, -0.22, 0.07, 34, stack, 0, 3);
   const a = 0.42, b = 0.3, h = 14;
   shadedBox(g, 0, 0, a, b, h, wall);
   poly(g, shade(wall, 0.5), [P(-0.15, b, 0), P(0.1, b, 0), P(0.1, b, 9), P(-0.15, b, 9)]);
-  if (v.shop && !done) shopFront(g, 0, 0, a, b, 9, v.h);
+  if (v.shop) shopFront(g, 0, 0, a, b, 9, v.h);
   for (let t = 0; t < 3; t++) {
     const i0 = -a + (2 * a * t) / 3, i1 = i0 + (2 * a) / 3;
     poly(g, shade(roof, 1.05), [P(i0, -b, h), P(i1, -b, h + 8), P(i1, b, h + 8), P(i0, b, h)]);
@@ -680,6 +678,20 @@ function car(g, color, turned = false) {
     shadedBox(g, -0.02, 0, 0.08, 0.07, 3.5, shade(color, 1.05), 6);
   }
   poly(g, 0x2c3a46, [Q(0.06, 0.07, 6.2), Q(0.06, -0.07, 6.2), Q(0.06, -0.07, 9), Q(0.06, 0.07, 9)]);
+}
+
+// A small truck along i, or along j when `turned`: a cab in front (towards
+// +i or +j, or the other way when `back`), a box behind.
+function truck(g, turned = false, back = false) {
+  const f = back ? -1 : 1, at = turned ? (a, b) => [b, a] : (a, b) => [a, b];
+  const box = (u, a, b, h, color) => { const [x, y] = at(u * f, 0), [ea, eb] = at(a, b); shadedBox(g, x, y, ea, eb, h, color, 1); };
+  // Drawn back to front, so the nearer part covers the farther one.
+  const parts = [[-0.06, 0.13, 0.085, 9, 0xe8e4da], [0.13, 0.06, 0.08, 6, 0x2f6fb5]];
+  for (const p of back ? parts.reverse() : parts) box(...p);
+  if (!back) {
+    const Q = turned ? (a, b, z) => P(b, a, z) : P;
+    poly(g, 0x2c3a46, [Q(0.19, 0.06, 4), Q(0.19, -0.06, 4), Q(0.19, -0.06, 6.5), Q(0.19, 0.06, 6.5)]);
+  }
 }
 
 function flame(g) {
@@ -2754,7 +2766,6 @@ const world = {
   pods: new Map(),         // pod id -> { id, b: building, state }
   buildings: new Map(),    // "ns/wl" -> Building
   districts: [],           // index = namespace index
-  showFinished: false,
   requests: false,         // some pod has CPU or memory requests (#49)
 };
 
@@ -2883,10 +2894,16 @@ const exposureKey = (ns, kind, name) => `${ns}/${kind}/${name}`;
 function shopOf(b) { return exposures.get(exposureKey(DATA.ns[b.ns], b.kind, b.name)) || null; }
 
 // What a building should look like now, or null when it should not be there.
+// A Job's works (#65) stands while any of its pods exists, finished ones
+// too, so a CronJob stays put between runs; it works (smoke, wheel, lit
+// windows, a truck) while a run is pending or running, and idles when every
+// run has ended. Its first run is a construction site; later runs start in
+// the works. Other workloads' finished pods do not count.
 function lookOf(b) {
   const counts = [0, 0, 0, 0, 0, 0];
   for (const s of b.pods.values()) counts[s]++;
-  const visible = counts.reduce((s, c, k) => s + (k === SUCCEEDED && !world.showFinished ? 0 : c), 0);
+  const job = b.kind === "Job";
+  const visible = job ? b.pods.size : b.pods.size - counts[SUCCEEDED];
   if (visible === 0) return null;
   const v = b.variant;
   let worst = RUNNING;
@@ -2894,20 +2911,23 @@ function lookOf(b) {
   if (counts[PENDING]) worst = PENDING;
   if (counts[FAILED]) worst = FAILED;
   if (counts[CRASH]) worst = CRASH;
-  const active = visible - counts[SUCCEEDED];
+  const active = b.pods.size - counts[SUCCEEDED];
   // A look is a category plus parameters; the active theme draws it.
-  const look = { worst, counts, fire: counts[CRASH] > 0, fading: counts[TERMINATING] === visible, smoke: false, p: { ...v } };
+  const look = { worst, counts, fire: counts[CRASH] > 0, fading: counts[TERMINATING] === visible, working: false, p: { ...v } };
   // Without requests anywhere (recordings made before kube-city sent them)
   // offices keep their old height: a few storeys from the name, more with replicas.
   const storeys = world.requests ? storeysOf(weightOfBuilding(b)) : 0;
-  if (active === 0) look.cat = "done";
-  else if (counts[PENDING] === active) look.cat = "build";
+  if (job) {
+    const working = counts[RUNNING] + counts[PENDING] > 0, ended = counts[SUCCEEDED] + counts[FAILED] > 0;
+    if (!ended && active > 0 && counts[PENDING] === active) look.cat = "build";
+    else if (counts[FAILED] && !working && !counts[CRASH]) look.cat = "scorched";
+    else { look.cat = "factory"; look.working = working; }
+  } else if (counts[PENDING] === active) look.cat = "build";
   else if (counts[FAILED] && !counts[RUNNING] && !counts[CRASH]) look.cat = "scorched";
   else switch (b.kind) {
     case "Deployment": look.cat = "tower"; look.p.floors = storeys || v.floors + Math.min(3, Math.max(0, active - 1)); break;
     case "StatefulSet": look.cat = "tank"; look.p.storeys = storeys; break;
     case "DaemonSet": look.cat = "house"; look.p.count = Math.min(4, active); break;
-    case "Job": look.cat = "factory"; look.smoke = counts[RUNNING] > 0; break;
     default: look.cat = "kiosk";
   }
   // A shop (#50) keeps its kind's shape with a shop front at street level.
@@ -3375,7 +3395,7 @@ const METROPOLIS = {
   gap: 2, lane: 0.32,
   draw: {
     tower: tower, tank: tankShape, house: houses, kiosk, scorched,
-    factory: (g, p) => factory(g, p, false), done: (g, p) => factory(g, p, true), build: construction,
+    factory, build: construction,
   },
   body(look) {
     const geo = geometry(`m:${look.key}`, g => this.draw[look.cat](g, look.p));
@@ -3385,10 +3405,12 @@ const METROPOLIS = {
   chimney: () => [iso(-0.28, -0.22)[0], iso(-0.28, -0.22)[1] - 36],
   legend: {
     tower: "tower", tank: "tank, twin tanks or silo", house: "a house per node, up to four",
-    factory: "factory, smoking while it runs", build: "construction site", scorched: "scorched shell", kiosk: "kiosk",
+    factory: "factory; while it runs: smoke, a turning wheel, lit windows and a truck to the road", build: "construction site", scorched: "scorched shell", kiosk: "kiosk",
     shop: "striped awning over a lit shop window: reached from outside (Ingress, Gateway route, LoadBalancer or NodePort)",
   },
   zones: { centre: ART.plaza, industry: ART.yard, suburb: ART.lawn },
+  // The factory's walls: half-widths along i and j, and height (#65).
+  works: { a: 0.42, b: 0.3, h: 14 },
 };
 
 // Sprites from Kenney's Isometric Buildings and Isometric City packs (CC0,
@@ -3673,13 +3695,13 @@ const KENNEY = {
         break;
       }
       case "house": stack(b, "house", k, p.count >= 3 ? 1 : 0, "house", k.tint, p.shop); break;
-      case "factory": case "done": {
-        const done = look.cat === "done", ch = KENNEY.stackOf(k);
+      case "factory": {
+        const ch = KENNEY.stackOf(k);
         const g = new PIXI.Graphics();
-        shadedBox(g, -0.24, -0.24, 0.06, 0.06, ch.h, done ? 0x9a9a9a : ch.color);
+        shadedBox(g, -0.24, -0.24, 0.06, 0.06, ch.h, ch.color);
         shadedBox(g, -0.24, -0.24, 0.075, 0.075, 3, 0x6d6d6d, ch.h);
         b.addChild(g);
-        stack(b, "works", k, 0, "works", done ? 0xa0a0a0 : k.tint, p.shop && !done);
+        stack(b, "works", k, 0, "works", k.tint, p.shop);
         break;
       }
       case "kiosk": {
@@ -3810,10 +3832,12 @@ const KENNEY = {
   chimney: look => [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - KENNEY.stackOf(kenneyParts(look.p.seed)).h - 4],
   legend: {
     tower: "office block", tank: "brick hall with a tank on the roof", house: "house with a pitched roof",
-    factory: "works with a chimney, smoking while it runs", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
+    factory: "works with a chimney; while it runs: smoke, a turning wheel, lit windows and a truck to the road", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
     shop: "shop front with an awning: reached from outside (Ingress, Gateway route, LoadBalancer or NodePort)",
   },
   zones: { centre: 0xd0cbb8, industry: 0x929287, suburb: 0xa2b684 },
+  // The works' walls: a 99 px box on a 132 px lot, one storey high (#65).
+  works: { a: 0.375, b: 0.375, h: STOREY * KS },
 };
 
 const THEMES = { metropolis: METROPOLIS, kenney: KENNEY };
@@ -3894,6 +3918,8 @@ function replan() {
     b.lot = lotOf(b);
     b.view.position.set(...iso(b.lot.i, b.lot.j));
     b.view.zIndex = (b.lot.i + b.lot.j) * 10;
+    // The roads moved too: a working Job's truck finds its way again.
+    if (b.truck) { b.truck.g.destroy({ children: true }); b.truck = truckFor(b); if (b.truck) cityLayer.addChild(b.truck.g); }
   }
   districtStats();
   cam.fit = fitScale(); cam.min = minScale(cam.fit);
@@ -3974,19 +4000,76 @@ function setBody(b, look) {
     b.view.addChild(b.fx);
     burning.add(b);
   }
-  if (look.fire || look.smoke) {
+  if (look.fire || look.working) {
     if (!b.fx) { b.fx = new PIXI.Container(); b.view.addChild(b.fx); }
     b.puffs = [];
-    for (let k = 0; k < 3; k++) {
+    // A working Job's chimney smokes thick and fast (#65).
+    for (let k = 0; k < (look.fire ? 3 : 5); k++) {
       const p = new PIXI.Graphics(geometry(look.fire ? "smoke-dark" : "smoke", g => { g.beginFill(look.fire ? 0x4a4a4a : 0xf2f2f2); g.drawCircle(0, 0, 5); g.endFill(); return 0; }).geometry);
       b.view.addChild(p); b.puffs.push(p);
     }
     b.puffBase = look.fire ? [0, -Math.min(b.top, 46) - 12] : theme.chimney(look);
     smoking.add(b);
   } else b.puffs = null;
+  stopWorks(b);
+  if (look.working && look.cat === "factory") startWorks(b);
+}
+
+// A working Job's works (#65): a wheel turning on its side wall, lit windows
+// that flicker, and a truck driving between its door and the nearest road
+// (only where a road is close, so never through other buildings). Drawn in
+// code over both looks; theme.works gives the works' half-widths and height.
+const working = new Set();
+function startWorks(b) {
+  const w = theme.works;
+  b.works = new PIXI.Container();
+  b.wheel = new PIXI.Graphics();
+  const glow = new PIXI.Graphics(geometry(`works-glow:${theme.name}`, g => {
+    for (let k = 0; k < 3; k++) {
+      const i0 = -w.a + 0.08 + k * (2 * w.a - 0.16) / 3, i1 = i0 + (2 * w.a - 0.16) / 3 - 0.06;
+      poly(g, 0xffd36a, [P(i0, w.b + 0.002, w.h * 0.68), P(i1, w.b + 0.002, w.h * 0.68), P(i1, w.b + 0.002, w.h * 0.9), P(i0, w.b + 0.002, w.h * 0.9)]);
+    }
+    return 0;
+  }).geometry);
+  b.glow = glow;
+  b.works.addChild(glow, b.wheel);
+  b.view.addChild(b.works);
+  b.truck = truckFor(b);
+  if (b.truck) cityLayer.addChild(b.truck.g);
+  working.add(b);
+}
+function stopWorks(b) {
+  working.delete(b);
+  if (b.works) { b.works.destroy({ children: true }); b.works = null; b.wheel = null; b.glow = null; }
+  if (b.truck) { b.truck.g.destroy({ children: true }); b.truck = null; }
+}
+// The way from a works' door to the nearest road, if one is within reach:
+// along i or j, from just outside the wall to the road's near edge.
+function truckFor(b) {
+  const ci = b.lot.i, cj = b.lot.j, half = plan.gap / 2;
+  let best = null;
+  for (const r of plan.roads) {
+    const along = r.i0 === r.i1 ? "j" : "i";   // a road along j has one i
+    if (along === "j") {
+      if (cj < Math.min(r.j0, r.j1) || cj > Math.max(r.j0, r.j1)) continue;
+      const d = r.i0 - ci, far = Math.abs(d) - half;
+      if (!best || far < best.far) best = { axis: "i", sign: Math.sign(d), far };
+    } else {
+      if (ci < Math.min(r.i0, r.i1) || ci > Math.max(r.i0, r.i1)) continue;
+      const d = r.j0 - cj, far = Math.abs(d) - half;
+      if (!best || far < best.far) best = { axis: "j", sign: Math.sign(d), far };
+    }
+  }
+  const s0 = theme.works.a + 0.18;
+  if (!best || !best.sign || best.far > 1.6) return null;
+  const g = new PIXI.Container(), turned = best.axis === "j";
+  const back = best.sign < 0;   // the road lies the other way: the cab faces it
+  g.addChild(new PIXI.Graphics(geometry(`truck:${turned}:${back}`, gg => (truck(gg, turned, back), 10)).geometry));
+  return { g, ...best, s0, s1: Math.max(s0 + 0.2, best.far + 0.25), phase: (b.variant.h % 97) / 97 };
 }
 
 function unmount(b) {
+  stopWorks(b);
   burning.delete(b); smoking.delete(b);
   if (!b.view) return;
   if (reducedMotion) { b.view.destroy({ children: true }); b.view = null; return; }
@@ -4013,7 +4096,7 @@ function refresh(b) {
     mount(b, look, delay);
     return;
   }
-  const changed = b.look.key !== look.key || b.look.fire !== look.fire || b.look.smoke !== look.smoke;
+  const changed = b.look.key !== look.key || b.look.fire !== look.fire || b.look.working !== look.working;
   if (changed) {
     setBody(b, look);
     if (!reducedMotion && !b.anim) b.anim = { kind: "bump", t0: performance.now(), dur: 360 };
@@ -4050,6 +4133,7 @@ function deletePod(id) {
 function apply(e) { if (e.length > 2) upsertPod(e[1], e[2], e[3], e[4], e[5], roleOf(e), e[7] || 0, e[8] || 0); else deletePod(e[1]); }
 
 function resetWorld() {
+  for (const b of working) stopWorks(b);
   for (const b of world.buildings.values()) if (b.view) b.view.destroy({ children: true });
   for (const f of falling) f.view.destroy({ children: true });
   falling.clear(); burning.clear(); smoking.clear(); dirty.clear();
@@ -4246,11 +4330,10 @@ addEventListener("keydown", (e) => {
 
 // ---------------------------------------------------------------- toolbar
 
-const flags = { focus: false, finished: false, sim: true, banners: true };
+const flags = { focus: false, sim: true, banners: true };
 function toggle(name) {
   flags[name] = !flags[name];
   document.getElementById(name).setAttribute("aria-pressed", String(flags[name]));
-  if (name === "finished") { world.showFinished = flags.finished; for (const b of world.buildings.values()) dirty.add(b); }
   if (name === "banners") {
     try { localStorage.setItem("kube-city-banners", flags.banners ? "on" : "off"); } catch { /* per-viewer convenience only */ }
     cam.dirty = true;
@@ -4398,7 +4481,7 @@ async function renderPanel() {
   document.getElementById("stats").innerHTML =
     stat(nsCount, "namespaces") + stat(shown, "buildings") + stat(total, "pods") +
     stat(counts[RUNNING], "running") + stat(counts[CRASH] + counts[FAILED], "crashing or failed", counts[CRASH] + counts[FAILED] ? "bad" : "") +
-    stat(counts[SUCCEEDED], flags.finished ? "finished jobs" : "finished jobs, hidden");
+    stat(counts[SUCCEEDED], "finished jobs");
 
   const problems = [...world.buildings.values()].filter(b => b.view && severity(b));
   const rank = { bad: 0, failed: 1, warn: 2 };
@@ -4596,7 +4679,7 @@ function renderLabels(level) {
     cand.sort((a, b) => a.pri - b.pri || b.b.view.zIndex - a.b.view.zIndex);
     for (const { b, sx, sy } of cand.slice(0, 220)) {
       const el = bLabel(b);
-      const counts = [...b.pods.values()].filter(s => s !== SUCCEEDED || world.showFinished);
+      const counts = [...b.pods.values()];
       const dots = counts.slice(0, 10).map(s => `<span class="dot s${s}"></span>`).join("") + (counts.length > 10 ? `+${counts.length - 10}` : "");
       const html = `<span>${esc(b.name)}</span><span class="dots">${dots}</span>`;
       measure(el, html, () => { el.innerHTML = html; });
@@ -4719,6 +4802,7 @@ app.ticker.add(() => {
     f.view.scale.y = 1 - k; f.view.alpha = 1 - k;
     if (k >= 1) { f.view.destroy({ children: true }); falling.delete(f); }
   }
+  animateWorks(now);
   if (!reducedMotion) {
     // The glints on the water; the clock wraps after a whole number of glints.
     for (const s of groundShaders.values()) s.uniforms.uTime = (now / 1000) % (100 * GLINT);
@@ -4734,9 +4818,9 @@ app.ticker.add(() => {
     for (const b of smoking) {
       if (!b.puffs) continue;
       b.puffs.forEach((p, k) => {
-        const ph = ((now / 1800) + k / b.puffs.length + (b.variant.h % 100) / 100) % 1;
+        const ph = ((now / (b.look.fire ? 1800 : 1200)) + k / b.puffs.length + (b.variant.h % 100) / 100) % 1;
         p.position.set(b.puffBase[0] + Math.sin(ph * 5 + k) * 3 + ph * 8, b.puffBase[1] - ph * 34);
-        p.scale.set(0.6 + ph * 1.2);
+        p.scale.set(b.look.fire ? 0.6 + ph * 1.2 : 0.8 + ph * 1.6);
         p.alpha = (b.look.fire ? 0.55 : 0.75) * (1 - ph);
       });
     }
@@ -4754,10 +4838,9 @@ app.ticker.add(() => {
       const pts = [iso(d.x, d.y), iso(d.x + d.w, d.y), iso(d.x + d.w, d.y + d.h), iso(d.x, d.y + d.h)].flat();
       overlay.beginFill(colors[d.health], 0.72 * strength); overlay.drawPolygon(pts); overlay.endFill();
       // A bar of pod states along the front edge: how much of the district is healthy.
-      const c = d.stats.counts, total = d.stats.pods - (world.showFinished ? 0 : c[SUCCEEDED]);
+      const c = d.stats.counts, total = d.stats.pods;
       let at = 0;
       for (const [k, col] of [[RUNNING, colors.ok], [PENDING, colors.warn], [CRASH, colors.bad], [FAILED, 0x4b3d36], [TERMINATING, 0x999999], [SUCCEEDED, 0xbbbbbb]]) {
-        if (k === SUCCEEDED && !world.showFinished) continue;
         const part = total ? c[k] / total : 0;
         if (!part) continue;
         const a0 = d.x + 0.3 + at * (d.w - 0.6), a1 = a0 + part * (d.w - 0.6);
@@ -4923,6 +5006,38 @@ function calmTerrain(strength) {
     c.g.alpha = out ? 1 - groundLook.calm : 1;
   }
 }
+// A working Job's wheel, windows and truck (#65); still with reduced motion.
+const ease = k => k * k * (3 - 2 * k);
+function animateWorks(now) {
+  const t = reducedMotion ? 0 : now;
+  for (const b of working) {
+    if (!b.view || !b.works) continue;
+    const w = theme.works, g = b.wheel;
+    b.works.visible = !b.anim;
+    const jc = -w.b * 0.4, zc = w.h * 0.42, rj = Math.min(0.11, w.b * 0.3), rz = w.h * 0.3, turn = t / 260;
+    const at = (a, r) => P(w.a + 0.004, jc + r * rj * Math.cos(a), zc + r * rz * Math.sin(a));
+    g.clear();
+    g.beginFill(0x4a5156); g.drawPolygon(Array.from({ length: 16 }, (_, k) => at(k * Math.PI / 8, 1)).flat()); g.endFill();
+    g.beginFill(0x8d969c); g.drawPolygon(Array.from({ length: 16 }, (_, k) => at(k * Math.PI / 8, 0.78)).flat()); g.endFill();
+    g.lineStyle(1.4, 0x3a4044);
+    for (let k = 0; k < 3; k++) { const a = turn + k * Math.PI / 3; g.moveTo(...at(a, 0.78)); g.lineTo(...at(a + Math.PI, 0.78)); }
+    g.lineStyle(0);
+    const flicker = Math.sin(t / 130 + b.variant.h) * Math.sin(t / 370 + b.variant.h * 0.7);
+    b.glow.alpha = reducedMotion ? 0.8 : clamp(0.62 + 0.38 * flicker, 0.3, 1);
+    const tr = b.truck;
+    if (!tr) continue;
+    // Seven seconds a trip: loading at the door, out to the road, a pause, back.
+    const u = ((t / 7000) + tr.phase) % 1;
+    const k = reducedMotion || u < 0.2 ? 0 : u < 0.45 ? ease((u - 0.2) / 0.25) : u < 0.6 ? 1 : u < 0.85 ? 1 - ease((u - 0.6) / 0.25) : 0;
+    const along = tr.sign * (tr.s0 + (tr.s1 - tr.s0) * k), aside = 0.14;
+    const i = b.lot.i + (tr.axis === "i" ? along : aside), j = b.lot.j + (tr.axis === "j" ? along : aside);
+    tr.g.position.set(...iso(i, j));
+    tr.g.zIndex = (i + j) * 10 + 1;
+    tr.g.visible = !b.anim;
+    tr.g.alpha = b.view.alpha;
+  }
+}
+
 let lastCars = 0;
 function moveCars(now) {
   const dt = lastCars ? Math.min(0.1, (now - lastCars) / 1000) : 0; lastCars = now;

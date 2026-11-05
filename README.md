@@ -136,7 +136,7 @@ The page keeps its world under the made-up context name, so without
 | Deployment        | Office block, taller the more its pods request |
 | StatefulSet       | Brick hall with a tank on the roof, taller the same way |
 | DaemonSet         | House with a pitched roof                    |
-| Job               | Works with a chimney, smoking while it runs  |
+| Job               | Works with a chimney; while it runs, smoke, a turning wheel, lit windows and a truck. It stays, idle, between runs until its pods are deleted |
 | Pod without owner | Kiosk                                        |
 | Pending           | Dug foundation with a crane                  |
 | Crashing          | On fire (CrashLoopBackOff, ImagePullBackOff and similar) |

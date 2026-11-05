@@ -41,6 +41,9 @@ const JOB: Workload = ("report-job", WorkloadKind::Job);
 /// Scale-ups stop here; restarts and new namespaces may briefly exceed it.
 const MAX_PODS: usize = 120;
 const INITIAL_NAMESPACES: usize = 4;
+/// Finished runs a namespace's `report-job` keeps, like a CronJob's history
+/// (#65): its works stays on the map between runs.
+const JOB_HISTORY: usize = 3;
 
 #[derive(Debug)]
 struct SimPod {
@@ -96,6 +99,7 @@ impl DemoCluster {
             84..89 => self.run_job(&mut events),
             _ => {}
         }
+        self.forget_old_runs(&mut events);
         events
     }
 
@@ -116,8 +120,6 @@ impl DemoCluster {
                     Transition::To(if roll < 50 { PodState::Running } else { PodState::CrashLoop })
                 }
                 PodState::Terminating if pod.age >= 2 => Transition::Remove,
-                PodState::Succeeded if pod.age >= 6 => Transition::Remove,
-                PodState::Failed if pod.age >= 8 => Transition::Remove,
                 _ => Transition::Stay,
             };
             match transition {
@@ -226,6 +228,31 @@ impl DemoCluster {
     fn run_job(&mut self, events: &mut Vec<WorldEvent>) {
         if let Some((namespace, _)) = self.random_open_namespace() {
             self.spawn(namespace, JOB, PodState::Pending, events);
+        }
+    }
+
+    /// Deletes each namespace's finished runs beyond the newest
+    /// `JOB_HISTORY`, as a CronJob's history limit does.
+    fn forget_old_runs(&mut self, events: &mut Vec<WorldEvent>) {
+        let finished = |pod: &SimPod| pod.is_job() && matches!(pod.info.state, PodState::Succeeded | PodState::Failed);
+        let mut runs: Vec<(&str, u64, &str)> = self
+            .pods
+            .iter()
+            .filter(|pod| finished(pod))
+            .map(|pod| (pod.info.namespace.as_str(), uid_number(&pod.info.uid), pod.info.uid.as_str()))
+            .collect();
+        // Newest first within each namespace.
+        runs.sort_by(|a, b| a.0.cmp(b.0).then(b.1.cmp(&a.1)));
+        let mut old = Vec::new();
+        for (k, run) in runs.iter().enumerate() {
+            let newer = runs[..k].iter().filter(|other| other.0 == run.0).count();
+            if newer >= JOB_HISTORY {
+                old.push(run.2.to_owned());
+            }
+        }
+        for uid in old {
+            self.pods.retain(|pod| pod.info.uid != uid);
+            events.push(WorldEvent::PodDeleted { uid });
         }
     }
 
@@ -342,6 +369,11 @@ fn move_to(info: &mut PodInfo, state: PodState) {
     info.state = state;
 }
 
+/// The counter in a simulated pod's uid (`demo-17`), so runs sort by age.
+fn uid_number(uid: &str) -> u64 {
+    uid.rsplit('-').next().and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
 /// Five letters that look like a pod name's random suffix.
 fn suffix(n: u64) -> String {
     let mut x = n.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 20;
@@ -434,6 +466,36 @@ mod tests {
             assert!(cluster.pods.len() < MAX_PODS * 2);
         }
         assert_eq!(seen_states.len(), 6, "every state shows up: {seen_states:?}");
+    }
+
+    #[test]
+    fn a_report_job_keeps_its_last_runs_and_stays_on_the_map() {
+        let mut cluster = DemoCluster::new(11);
+        let mut ran = HashSet::new();
+        let mut idle_seen = false;
+        for _ in 0..4000 {
+            cluster.step();
+            for &entry in &cluster.open {
+                let namespace = CATALOGUE[entry].0;
+                // Pods still terminating belong to the namespace's last life.
+                let runs: Vec<_> = cluster
+                    .pods
+                    .iter()
+                    .filter(|p| p.is_job() && p.info.namespace == namespace && p.info.state != PodState::Terminating)
+                    .collect();
+                let finished =
+                    runs.iter().filter(|p| matches!(p.info.state, PodState::Succeeded | PodState::Failed)).count();
+                assert!(finished <= JOB_HISTORY, "{namespace} keeps {finished} finished runs");
+                if !runs.is_empty() {
+                    ran.insert(namespace);
+                    idle_seen |= finished == runs.len();
+                }
+                // Once it has run, the works never empties while the namespace is open.
+                assert!(!ran.contains(namespace) || !runs.is_empty(), "{namespace}'s report-job vanished");
+            }
+            ran.retain(|namespace| cluster.open.iter().any(|&i| CATALOGUE[i].0 == *namespace));
+        }
+        assert!(idle_seen, "a works idles between runs");
     }
 
     #[test]
