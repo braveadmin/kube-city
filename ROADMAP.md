@@ -35,6 +35,8 @@ Ideas, votes and questions are welcome in
   as quarters, workloads placed by role, towers from CPU and memory
   requests, and a shopping street of workloads reached from outside. See
   [CHANGELOG.md](CHANGELOG.md).
+- **v0.6.0:** Jobs always on the map, busy while they run and idle between
+  runs.
 
 ## Next
 
