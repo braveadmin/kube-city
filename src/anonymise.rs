@@ -1,6 +1,7 @@
 //! `--anonymise`: pseudonyms for every name, so a city can be shared.
 //!
-//! Namespaces, workloads, pod names and uids, nodes, images, Services, host
+//! Namespaces, workloads, pod names and uids, nodes (in pods and their own
+//! events), images, Services, host
 //! names and contexts get made-up names before they leave the server, load
 //! balancers' addresses are dropped, and the status line loses error text
 //! (which can hold host names). The same real name keeps its
@@ -20,7 +21,7 @@ use tokio::sync::{
     watch,
 };
 
-use crate::world::{Exposure, PodInfo, Way, WorkloadKind, WorldEvent};
+use crate::world::{Exposure, NodeInfo, PodInfo, Way, WorkloadKind, WorldEvent};
 
 const WORDS: &[&str] = &[
     "alder", "amber", "aspen", "basalt", "birch", "bramble", "brook", "cedar", "cinder", "clover", "cobalt", "coral",
@@ -112,6 +113,9 @@ impl Anonymiser {
             WorldEvent::PodUpserted(pod) => WorldEvent::PodUpserted(self.pod(pod)),
             WorldEvent::PodDeleted { uid } => WorldEvent::PodDeleted { uid: self.uid(&uid) },
             WorldEvent::Exposed(exposure) => WorldEvent::Exposed(self.exposure(exposure)),
+            // The same pseudonym as in its pods' details; the rest is no secret.
+            WorldEvent::Node(node) => WorldEvent::Node(NodeInfo { name: self.node(&node.name), ..node }),
+            WorldEvent::NodeGone { name } => WorldEvent::NodeGone { name: self.node(&name) },
         }
     }
 
@@ -264,7 +268,7 @@ impl Anonymiser {
 /// object only, no names.
 fn is_limited(text: &str) -> bool {
     text.starts_with("live · no access to ")
-        && text.ends_with("; shops may be missing")
+        && text.ends_with(" may be missing")
         && text.chars().all(|c| c.is_ascii_alphabetic() || " ,;·".contains(c))
 }
 
@@ -554,8 +558,34 @@ mod tests {
     fn a_status_without_access_to_services_is_kept() {
         let mut anonymiser = Anonymiser::new(None);
         let context = anonymiser.context("acme-prod-eu");
-        let limited = crate::cluster::limited(&["Services", "Gateway routes"]);
-        assert_eq!(anonymiser.status(&format!("acme-prod-eu · {limited}")), format!("{context} · {limited}"));
+        for missing in [&["Services", "Gateway routes"][..], &["Nodes"], &["Nodes", "Ingresses"]] {
+            let limited = crate::cluster::limited(missing);
+            assert_eq!(anonymiser.status(&format!("acme-prod-eu · {limited}")), format!("{context} · {limited}"));
+        }
+    }
+
+    #[test]
+    fn a_node_keeps_the_pseudonym_its_pods_give_it() {
+        let mut anonymiser = Anonymiser::new(None);
+        let real = NodeInfo {
+            name: "ip-10-1-2-3.acme.internal".into(),
+            ready: false,
+            pressure: vec!["MemoryPressure".into()],
+            cordoned: true,
+            control_plane: false,
+            cpu: Some(8000),
+            memory: Some(32 << 30),
+            kubelet: Some("v1.31.2".into()),
+            created: Some("2026-10-22T08:00:00Z".into()),
+        };
+        let WorldEvent::Node(fake) = anonymiser.event(WorldEvent::Node(real.clone())) else { panic!("a node") };
+        let text = serde_json::to_string(&fake).unwrap();
+        assert_eq!(leaked(&text), [] as [&str; 0], "{text}");
+        assert_eq!(NodeInfo { name: real.name.clone(), ..fake.clone() }, real);
+        let pod = anonymiser.pod(pod("acme-payments", "ledger-writer", WorkloadKind::Deployment, "x"));
+        assert_eq!(pod.details.node, fake.name);
+        let gone = anonymiser.event(WorldEvent::NodeGone { name: real.name });
+        assert_eq!(gone, WorldEvent::NodeGone { name: fake.name });
     }
 
     #[test]

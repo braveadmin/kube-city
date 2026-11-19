@@ -45,5 +45,5 @@ Ideas, votes and questions are welcome in
 ## Later
 
 - [All contexts at the same time](https://github.com/braveadmin/kube-city/issues/18).
-- [More Kubernetes objects](https://github.com/braveadmin/kube-city/issues/19): Nodes, Services, Ingresses, volumes.
+- [More Kubernetes objects](https://github.com/braveadmin/kube-city/issues/19): Nodes (power stations, #96), volumes (#97); Services and Ingresses came with #50.
 - [krew](https://github.com/braveadmin/kube-city/issues/23): `kubectl krew install`; until then a symlink gives you `kubectl city` (see the README).

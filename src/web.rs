@@ -4,9 +4,9 @@
 //! streams world events to every open page over a WebSocket, as JSON arrays
 //! of the same events a recording holds, plus `{"Status": text}`,
 //! `{"Contexts": {"current", "all"}}` and `{"Reset": null}`. A page that
-//! connects late first gets Reset, the contexts, the status, every exposed
-//! workload's exposure and every current pod; one that falls too far behind
-//! gets that again.
+//! connects late first gets Reset, the contexts, the status, every node,
+//! every exposed workload's exposure and every current pod; one that falls
+//! too far behind gets that again.
 //!
 //! When the city shows a cluster, a page can ask for another kubeconfig
 //! context with `{"Context": name}`: every page then resets and the city
@@ -49,7 +49,7 @@ use tokio::{
 
 use crate::{
     anonymise, cluster,
-    world::{Exposure, PodInfo, WorkloadKind, WorldEvent},
+    world::{Exposure, NodeInfo, PodInfo, WorkloadKind, WorldEvent},
 };
 
 const TEMPLATE: &str = include_str!("../art/city.template.html");
@@ -119,6 +119,8 @@ struct City {
     pods: HashMap<String, PodInfo>,
     /// Exposed workloads (#50), by namespace, kind and name.
     exposed: HashMap<(String, WorkloadKind, String), Exposure>,
+    /// Nodes (#96), by name.
+    nodes: HashMap<String, NodeInfo>,
     context: Option<String>,
 }
 
@@ -369,6 +371,7 @@ async fn pump(mut inputs: UnboundedReceiver<Input>, status: watch::Sender<String
                 let mut city = shared.city.lock().await;
                 city.pods.clear();
                 city.exposed.clear();
+                city.nodes.clear();
                 city.context = Some(context.clone());
                 let text = shared.anonymised_status(&format!("{context} · connecting"));
                 status.send_replace(text.clone());
@@ -396,6 +399,12 @@ async fn apply(shared: &Shared, batch: &[WorldEvent]) {
                 } else {
                     city.exposed.insert(key, exposure.clone());
                 }
+            }
+            WorldEvent::Node(node) => {
+                city.nodes.insert(node.name.clone(), node.clone());
+            }
+            WorldEvent::NodeGone { name } => {
+                city.nodes.remove(name);
             }
         }
     }
@@ -534,7 +543,9 @@ fn snapshot(city: &City, shared: &Shared, status: &str) -> String {
         items.push(contexts(city, shared));
     }
     items.push(json!({ "Status": status }));
-    // Exposure before the pods, so the page knows its shops when it lays out the street.
+    // Nodes and exposure before the pods, so the page knows its stations and
+    // shops when it lays out the city.
+    items.extend(city.nodes.values().map(|node| json!({ "Node": node })));
     items.extend(city.exposed.values().map(|exposure| json!({ "Exposed": exposure })));
     items.extend(city.pods.values().map(|pod| json!({ "PodUpserted": pod })));
     Value::Array(items).to_string()
@@ -696,6 +707,31 @@ mod tests {
         }
         apply(&shared, &[WorldEvent::Exposed(exposure(vec![]))]).await;
         assert!(shared.city.lock().await.exposed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn nodes_come_first_and_go_when_deleted() {
+        let (shared, _status_tx) = shared(&[]);
+        let node = NodeInfo {
+            name: "node-1".into(),
+            ready: true,
+            pressure: vec![],
+            cordoned: false,
+            control_plane: false,
+            cpu: None,
+            memory: None,
+            kubelet: None,
+            created: None,
+        };
+        apply(&shared, &[WorldEvent::PodUpserted(pod("a", PodState::Running)), WorldEvent::Node(node)]).await;
+        {
+            let city = shared.city.lock().await;
+            let snapshot: Value = serde_json::from_str(&snapshot(&city, &shared, "live")).unwrap();
+            assert_eq!(snapshot[2], json!({ "Node": { "name": "node-1", "ready": true } }));
+            assert_eq!(snapshot[3]["PodUpserted"]["uid"], "a");
+        }
+        apply(&shared, &[WorldEvent::NodeGone { name: "node-1".into() }]).await;
+        assert!(shared.city.lock().await.nodes.is_empty());
     }
 
     #[tokio::test]
