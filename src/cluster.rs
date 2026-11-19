@@ -1,15 +1,18 @@
-//! Watches pods in a real cluster and turns them into world events, and
-//! Services, Ingresses and Gateway routes for which workloads are reached
-//! from outside (#50).
+//! Watches pods in a real cluster and turns them into world events, Nodes
+//! for the power stations (#96), and Services, Ingresses and Gateway routes
+//! for which workloads are reached from outside (#50).
 //!
 //! Access is read-only: the city only ever lists and watches.
 
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use futures::{StreamExt, stream, stream::BoxStream};
 use k8s_openapi::api::{
-    core::v1::{Container, Pod, PodSpec, PodStatus, Service},
+    core::v1::{Container, Node, Pod, PodSpec, PodStatus, Service},
     networking::v1::Ingress,
 };
 use kube::{
@@ -25,7 +28,7 @@ use tokio::sync::{mpsc::UnboundedSender, watch};
 use crate::{
     exposure::{self, Exposures, PodLabels},
     roles::role_of,
-    world::{PodDetails, PodInfo, PodState, Via, WorkloadKind, WorldEvent},
+    world::{NodeInfo, PodDetails, PodInfo, PodState, Via, WorkloadKind, WorldEvent},
 };
 
 /// Long enough to finish an interactive (device code) login.
@@ -40,6 +43,8 @@ const EXPOSURE_EVERY: Duration = Duration::from_secs(1);
 const ROUTES: [(&str, &str, Via); 2] =
     [("httproutes", "HTTPRoute", Via::HttpRoute), ("grpcroutes", "GRPCRoute", Via::GrpcRoute)];
 const GATEWAY_API: (&str, &str) = ("gateway.networking.k8s.io", "v1");
+/// Node conditions that warn of trouble when True (#96).
+const PRESSURE: [&str; 4] = ["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"];
 /// Container waiting reasons that mean the pod will not start without help.
 const BROKEN_REASONS: [&str; 7] = [
     "CrashLoopBackOff",
@@ -107,7 +112,18 @@ pub async fn watch(
     events: UnboundedSender<WorldEvent>,
     status: watch::Sender<String>,
 ) {
-    let (aux, missing) = exposure_sources(&client, &namespaces).await;
+    let (aux, mut missing) = exposure_sources(&client, &namespaces).await;
+    // Nodes are cluster-wide: users limited to their namespaces often may not
+    // list them, and then the stations come from the pods' node names alone.
+    let node_api = Api::<Node>::all(client.clone());
+    let mut nodes = match can_list(std::slice::from_ref(&node_api)).await {
+        true => watcher(node_api, watcher::Config::default().any_semantic()).default_backoff().boxed(),
+        false => {
+            missing.insert(0, "Nodes");
+            stream::pending().boxed()
+        }
+    };
+    let mut node_tracker = NodeTracker::default();
     let live_text = match missing.is_empty() {
         true => format!("{context} · live"),
         false => format!("{context} · {}", limited(&missing)),
@@ -167,6 +183,20 @@ pub async fn watch(
                 }
             }
             Some(fact) = aux.next(), if aux_total > 0 => dirty |= fact.apply(&mut exposures),
+            // A dropped node stream retries with backoff; the pods' stream
+            // reports the trouble.
+            Some(Ok(event)) = nodes.next() => {
+                for change in node_tracker.handle(event) {
+                    match &mut held {
+                        Some(held) => held.push(change),
+                        None => {
+                            if events.send(change).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
             () = &mut wait, if held.is_some() => {
                 if !release(&mut held, &mut exposures, &events) {
                     return;
@@ -204,10 +234,18 @@ fn release(
     exposures.changes().into_iter().chain(pods).all(|event| events.send(event).is_ok())
 }
 
-/// The status after the context when some of what exposure needs cannot be
-/// listed; `--anonymise` lets it through, it names no object.
+/// The status after the context when Nodes or some of what exposure needs
+/// cannot be listed; `--anonymise` lets it through, it names no object.
 pub fn limited(missing: &[&str]) -> String {
-    format!("live · no access to {}; shops may be missing", missing.join(", "))
+    format!("live · no access to {}; {} may be missing", missing.join(", "), what_is_missing(missing))
+}
+
+fn what_is_missing(missing: &[&str]) -> &'static str {
+    match (missing.contains(&"Nodes"), missing.iter().any(|kind| *kind != "Nodes")) {
+        (true, true) => "power stations and shops",
+        (true, false) => "power stations",
+        _ => "shops",
+    }
 }
 
 /// One change from the watchers exposure is worked out from.
@@ -371,6 +409,82 @@ impl Tracker {
             }
         }
     }
+}
+
+/// The nodes one watch stream has reported, as last sent, so only what the
+/// city shows of a node is sent again, and nodes deleted while the stream
+/// was reconnecting go when it lists them again.
+#[derive(Debug, Default)]
+struct NodeTracker {
+    known: HashMap<String, NodeInfo>,
+    relisted: Option<HashSet<String>>,
+}
+
+impl NodeTracker {
+    fn handle(&mut self, event: watcher::Event<Node>) -> Vec<WorldEvent> {
+        match event {
+            watcher::Event::Init => {
+                self.relisted = Some(HashSet::new());
+                Vec::new()
+            }
+            watcher::Event::InitApply(node) | watcher::Event::Apply(node) => {
+                let Some(info) = node_info(&node) else {
+                    return Vec::new();
+                };
+                if let Some(relisted) = &mut self.relisted {
+                    relisted.insert(info.name.clone());
+                }
+                if self.known.get(&info.name) == Some(&info) {
+                    return Vec::new();
+                }
+                self.known.insert(info.name.clone(), info.clone());
+                vec![WorldEvent::Node(info)]
+            }
+            watcher::Event::Delete(node) => match node.metadata.name {
+                Some(name) if self.known.remove(&name).is_some() => vec![WorldEvent::NodeGone { name }],
+                _ => Vec::new(),
+            },
+            watcher::Event::InitDone => {
+                let relisted = self.relisted.take().unwrap_or_default();
+                let mut gone: Vec<String> =
+                    self.known.keys().filter(|name| !relisted.contains(*name)).cloned().collect();
+                gone.sort();
+                for name in &gone {
+                    self.known.remove(name);
+                }
+                gone.into_iter().map(|name| WorldEvent::NodeGone { name }).collect()
+            }
+        }
+    }
+}
+
+fn node_info(node: &Node) -> Option<NodeInfo> {
+    let meta = &node.metadata;
+    let status = node.status.as_ref();
+    let conditions = status.and_then(|status| status.conditions.as_deref()).unwrap_or_default();
+    let is_true = |kind: &str| conditions.iter().any(|c| c.type_ == kind && c.status == "True");
+    let labels = meta.labels.as_ref();
+    let has_label = |key: &str| labels.is_some_and(|labels| labels.contains_key(key));
+    let capacity = |resource: &str, unit: f64| {
+        let quantity = status?.capacity.as_ref()?.get(resource)?;
+        let amount = (quantity_of(&quantity.0)? * unit).round();
+        (amount >= 1.0).then_some(amount as u64)
+    };
+    Some(NodeInfo {
+        name: meta.name.clone()?,
+        ready: is_true("Ready"),
+        pressure: PRESSURE.iter().filter(|kind| is_true(kind)).map(|kind| kind.to_string()).collect(),
+        cordoned: node.spec.as_ref().and_then(|spec| spec.unschedulable).unwrap_or(false),
+        control_plane: has_label("node-role.kubernetes.io/control-plane")
+            || has_label("node-role.kubernetes.io/master"),
+        cpu: capacity("cpu", 1000.0),
+        memory: capacity("memory", 1.0),
+        kubelet: status.and_then(|status| Some(status.node_info.as_ref()?.kubelet_version.clone())),
+        created: meta
+            .creation_timestamp
+            .as_ref()
+            .and_then(|time| serde_json::to_value(time).ok()?.as_str().map(str::to_owned)),
+    })
 }
 
 fn pod_info(pod: &Pod) -> Option<PodInfo> {
@@ -589,10 +703,91 @@ mod tests {
                 WorldEvent::PodUpserted(info) => ("upsert", info.uid.as_str()),
                 WorldEvent::PodDeleted { uid } => ("delete", uid.as_str()),
                 WorldEvent::Exposed(e) => ("exposed", e.workload.as_str()),
+                WorldEvent::Node(node) => ("node", node.name.as_str()),
+                WorldEvent::NodeGone { name } => ("node gone", name.as_str()),
             })
             .collect();
         out.sort_unstable();
         out
+    }
+
+    fn node(name: &str, ready: &str, extra: Value) -> Node {
+        let mut manifest = json!({
+            "metadata": { "name": name, "labels": { "node-role.kubernetes.io/control-plane": "" },
+                          "creationTimestamp": "2026-10-01T08:00:00Z" },
+            "spec": { "unschedulable": true },
+            "status": {
+                "capacity": { "cpu": "8", "memory": "32Gi", "pods": "110" },
+                "nodeInfo": { "kubeletVersion": "v1.31.2", "machineID": "", "systemUUID": "", "bootID": "",
+                              "kernelVersion": "", "osImage": "", "containerRuntimeVersion": "",
+                              "kubeProxyVersion": "", "operatingSystem": "linux", "architecture": "amd64" },
+                "conditions": [
+                    { "type": "Ready", "status": ready },
+                    { "type": "MemoryPressure", "status": "True" },
+                    { "type": "DiskPressure", "status": "False" }
+                ]
+            }
+        });
+        if let (Some(target), Value::Object(extra)) = (manifest.as_object_mut(), extra) {
+            target.extend(extra);
+        }
+        serde_json::from_value(manifest).expect("valid node")
+    }
+
+    #[test]
+    fn a_node_reads_as_its_station() {
+        let info = node_info(&node("cp-1", "True", json!({}))).unwrap();
+        assert_eq!(
+            info,
+            NodeInfo {
+                name: "cp-1".into(),
+                ready: true,
+                pressure: vec!["MemoryPressure".into()],
+                cordoned: true,
+                control_plane: true,
+                cpu: Some(8000),
+                memory: Some(32 << 30),
+                kubelet: Some("v1.31.2".into()),
+                created: Some("2026-10-01T08:00:00Z".into()),
+            }
+        );
+        let bare = node_info(&node("w", "Unknown", json!({ "metadata": { "name": "w" }, "spec": {}, "status": {} })));
+        let bare = bare.unwrap();
+        assert!(!bare.ready && !bare.cordoned && !bare.control_plane && bare.pressure.is_empty() && bare.cpu.is_none());
+    }
+
+    #[test]
+    fn nodes_are_sent_when_they_change_and_go_when_gone() {
+        let mut tracker = NodeTracker::default();
+        let names = |events: Vec<WorldEvent>| -> Vec<String> {
+            events
+                .into_iter()
+                .map(|event| match event {
+                    WorldEvent::Node(n) => format!("{} {}", n.name, n.ready),
+                    WorldEvent::NodeGone { name } => format!("{name} gone"),
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        };
+        tracker.handle(watcher::Event::Init);
+        assert_eq!(names(tracker.handle(watcher::Event::InitApply(node("a", "True", json!({}))))), ["a true"]);
+        assert_eq!(names(tracker.handle(watcher::Event::InitApply(node("b", "True", json!({}))))), ["b true"]);
+        tracker.handle(watcher::Event::InitDone);
+        // A heartbeat that changes nothing the city shows is not sent.
+        assert!(tracker.handle(watcher::Event::Apply(node("a", "True", json!({})))).is_empty());
+        assert_eq!(names(tracker.handle(watcher::Event::Apply(node("a", "False", json!({}))))), ["a false"]);
+        // b is deleted while the stream reconnects.
+        tracker.handle(watcher::Event::Init);
+        assert!(tracker.handle(watcher::Event::InitApply(node("a", "False", json!({})))).is_empty());
+        assert_eq!(names(tracker.handle(watcher::Event::InitDone)), ["b gone"]);
+        assert_eq!(names(tracker.handle(watcher::Event::Delete(node("a", "False", json!({}))))), ["a gone"]);
+    }
+
+    #[test]
+    fn the_status_says_what_may_be_missing() {
+        assert!(limited(&["Nodes"]).ends_with("Nodes; power stations may be missing"));
+        assert!(limited(&["Services"]).ends_with("Services; shops may be missing"));
+        assert!(limited(&["Nodes", "Ingresses"]).ends_with("power stations and shops may be missing"));
     }
 
     #[test]

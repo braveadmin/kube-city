@@ -169,7 +169,7 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 .stat.bad .n { color: var(--bad); } .stat.warn .n { color: var(--warn); }
 .note { font-size: 0.76rem; color: var(--muted); line-height: 1.4; margin: 0; }
 .list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.list button {
+.list button, .list .row {
   width: 100%; display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 2px 8px; align-items: center; text-align: left;
   border: 0; background: none; padding: 5px 6px; border-radius: 5px; cursor: pointer; font-size: 0.82rem;
 }
@@ -303,10 +303,14 @@ kbd { font-family: var(--mono); font-size: 0.72rem; border: 1px solid currentCol
 "use strict";
 const DATA = /*CITY_DATA*/null;
 
-const KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "Standalone"];
+// "Node" is a node's power station (#96), never a pod's kind.
+const KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "Standalone", "Node"];
 const STATES = ["Pending", "Running", "CrashLoop", "Terminating", "Succeeded", "Failed"];
 const [PENDING, RUNNING, CRASH, TERMINATING, SUCCEEDED, FAILED] = [0, 1, 2, 3, 4, 5];
-const KIND_ORDER = { Deployment: 0, StatefulSet: 1, Job: 2, DaemonSet: 3, Standalone: 4 };
+const KIND_ORDER = { Deployment: 0, StatefulSet: 1, Job: 2, DaemonSet: 3, Standalone: 4, Node: 5 };
+// The district of the nodes' power stations (#96): with a space in it, so no
+// namespace can have its name.
+const POWER = "power grid";
 // What a workload does, from its images (#48; worked out by the server, see
 // src/roles.rs). Its lots are handed out in this order: the web street at a
 // neighbourhood's front, offices, the utility block, the working edge.
@@ -318,7 +322,7 @@ const STATE_WORDS = ["pending", "running", "crashing", "terminating", "finished"
 const ZONE_WORDS = { centre: "Town centre", industry: "Industrial quarter", suburb: "Suburb" };
 const ZONE_RULES = {
   centre: "plaza: every other namespace",
-  industry: "concrete: kube-*, *-system, *-operator, well-known tools, or runs a DaemonSet",
+  industry: "concrete: kube-*, *-system, *-operator, well-known tools, or runs a DaemonSet; and the power grid of the nodes",
   suburb: "lawn: feature-* and bugfix-* namespaces",
 };
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -553,6 +557,73 @@ function factory(g, v) {
   return 34;
 }
 
+// A node's power station (#96), drawn in code in both looks (pal: their
+// colours, tall: their height scale): a pad, one to three cooling towers by
+// the node's CPU at the back, the turbine hall in front with a lightning
+// sign. A dark station (NotReady) has no lit windows; a cordoned one has a
+// striped barrier at the front.
+const STATION_PALETTES = {
+  metropolis: { pad: ART.concrete, tower: 0xd9d5cb, hall: 0x9aa3a8, roof: 0x6f7a80, tall: 1 },
+  kenney: { pad: 0xb4b8bc, tower: 0xe4e0d4, hall: 0xc9785c, roof: 0x7a5a48, tall: 1.25 },
+};
+// The towers' spots, radii and heights, back to front; the first one steams.
+function stationTowers(n, tall) {
+  const spots = [
+    [[-0.17, -0.17, 0.22, 36]],
+    [[-0.22, -0.02, 0.16, 32], [-0.02, -0.22, 0.16, 32]],
+    [[-0.25, -0.25, 0.13, 30], [-0.27, 0.03, 0.12, 26], [0.03, -0.27, 0.12, 26]],
+  ][clamp(n, 1, 3) - 1];
+  return spots.map(([cx, cy, r, h]) => ({ cx, cy, r, h: h * tall }));
+}
+function coolingTower(g, cx, cy, r, h, color) {
+  // A hyperboloid: wide foot, narrow waist two thirds up, flared lip.
+  const [ox, oy] = P(cx, cy, 0), rx = r * TW / Math.SQRT2, ry = r * TH / Math.SQRT2;
+  const radius = t => 1 - 0.32 * Math.sin(Math.PI * Math.min(1, t / 0.85) * 0.85) + (t > 0.85 ? (t - 0.85) * 0.9 : 0);
+  const N = 8, left = [], right = [];
+  for (let s = 0; s <= N; s++) {
+    const t = s / N, k = radius(t), y = oy - t * h;
+    left.push([ox - rx * k, y]); right.push([ox + rx * k, y]);
+  }
+  // The lit left half and the shaded right half, each down to the foot's front curve.
+  const foot = (from, to) => { const out = []; for (let s = 0; s <= 6; s++) { const a = from + (to - from) * s / 6; out.push([ox + Math.cos(a) * rx, oy + Math.sin(a) * ry]); } return out; };
+  poly(g, shade(color, 1.04), [...left, [ox, oy - h], ...foot(Math.PI / 2, Math.PI)]);
+  poly(g, shade(color, 0.76), [...right, [ox, oy - h], ...foot(Math.PI / 2, 0)]);
+  const lip = radius(1);
+  g.beginFill(shade(color, 0.9)); g.drawEllipse(ox, oy - h, rx * lip, ry * lip); g.endFill();
+  g.beginFill(0x3d3d3d, 0.85); g.drawEllipse(ox, oy - h, rx * lip * 0.8, ry * lip * 0.8); g.endFill();
+}
+function station(g, p, pal) {
+  poly(g, 0x000000, [P(-0.44, -0.44, 0), P(0.5, -0.44, 0), P(0.5, 0.5, 0), P(-0.44, 0.5, 0)], 0.1);
+  shadedBox(g, 0, 0, 0.45, 0.45, 1.5, pal.pad);
+  const towers = stationTowers(p.towers, pal.tall);
+  for (const t of towers) coolingTower(g, t.cx, t.cy, t.r, t.h, pal.tower);
+  // The turbine hall along the front, with a row of windows and a sign.
+  const a = 0.36, b = 0.15, cx = 0.06, cy = 0.27, h = 13 * pal.tall;
+  shadedBox(g, cx, cy, a, b, h, pal.hall, 1.5);
+  shadedBox(g, cx, cy, a, b, 3, pal.roof, 1.5 + h);
+  for (let k = 0; k < 5; k++) {
+    const u1 = cx - a + 0.05 + k * 0.14, u2 = u1 + 0.08;
+    poly(g, p.dark ? 0x3a4250 : k % 2 ? ART.lit : shade(ART.lit, 0.9), [P(u1, cy + b, h * 0.45), P(u2, cy + b, h * 0.45), P(u2, cy + b, h * 0.8), P(u1, cy + b, h * 0.8)]);
+  }
+  // A yellow lightning sign on the hall's right face.
+  const bolt = [[0.02, 0.85], [-0.05, 0.45], [0.02, 0.5], [-0.03, 0.15], [0.07, 0.6], [0, 0.55]];
+  poly(g, p.dark ? 0x6e6a52 : 0xf2c230, bolt.map(([u, z]) => P(cx + a, cy + u * 1.6, 1.5 + h * z)));
+  if (p.cordoned) {
+    // A red and white barrier on two posts at the front of the lot.
+    for (const u of [-0.3, 0.3]) shadedBox(g, u, 0.47, 0.02, 0.02, 7, 0x4a4a4a, 1.5);
+    for (let k = 0; k < 6; k++) {
+      const u1 = -0.32 + k * 0.107, u2 = u1 + 0.107;
+      poly(g, k % 2 ? 0xffffff : 0xd8453a, [P(u1, 0.48, 5), P(u2, 0.48, 5), P(u2, 0.48, 8.5), P(u1, 0.48, 8.5)]);
+    }
+  }
+  return Math.max(...towers.map(t => t.h)) + 4;
+}
+// Where a station's steam or smoke leaves: the top of its first tower.
+function stationStack(look) {
+  const t = stationTowers(look.p.towers, STATION_PALETTES[theme.name].tall)[0];
+  return P(t.cx, t.cy, t.h + 2);
+}
+
 function kiosk(g, v) {
   shadedBox(g, 0, 0, 0.42, 0.42, 1.5, ART.plaza);
   shadedBox(g, 0, 0, 0.2, 0.2, 11, v.wall, 1.5);
@@ -743,6 +814,7 @@ const INFRA = "argo argocd calico cert-manager cilium crossplane external-dns ex
 // name, or because it runs a DaemonSet: node agents) is the industrial
 // quarter; the rest is the town centre, however small.
 function zoneOf(name, daemons) {
+  if (name === POWER) return "industry";
   if (/^(feature|bugfix)-/.test(name)) return "suburb";
   if (daemons || infraName(name)) return "industry";
   return "centre";
@@ -2895,6 +2967,77 @@ const SHOP_CATS = new Set(["tower", "tank", "house", "factory"]);
 const exposureKey = (ns, kind, name) => `${ns}/${kind}/${name}`;
 function shopOf(b) { return exposures.get(exposureKey(DATA.ns[b.ns], b.kind, b.name)) || null; }
 
+// Nodes (#96): name -> { name, info (the server's Node, or null when only
+// pods name it: no access to Nodes, or a recording made before #96), pods
+// (ids of the pods on it), b (its station) }. A station stands while the
+// node exists or a pod runs on it.
+const nodes = new Map();
+const podNode = new Map();   // pod id -> the name of its node
+function stationOf(name) {
+  let n = nodes.get(name);
+  if (n) return n;
+  const ns = intern(live.ns, DATA.ns, POWER, POWER), wl = intern(live.wl, DATA.wl, `Node/${name}`, name);
+  registerBatch([[0, -1, ns, wl, KINDS.indexOf("Node"), RUNNING, OTHER]]);
+  const b = new Building(ns, wl, "Node");
+  world.buildings.set(b.key, b);
+  n = { name, info: null, pods: new Set(), b };
+  nodes.set(name, n);
+  return n;
+}
+// Lots for new stations in name order, before any of them is built.
+function registerStations(names) {
+  const ns = intern(live.ns, DATA.ns, POWER, POWER);
+  registerBatch(names.map(name => [0, -1, ns, intern(live.wl, DATA.wl, `Node/${name}`, name), KINDS.indexOf("Node"), RUNNING, OTHER]));
+}
+// Its pods' buildings follow a node that goes dark or comes back.
+function nodeChanged(n) {
+  dirty.add(n.b);
+  for (const id of n.pods) { const pod = world.pods.get(id); if (pod) dirty.add(pod.b); }
+}
+function setNode(info) {
+  const n = stationOf(info.name), was = n.info ? n.info.ready : null;
+  n.info = info;
+  if (was !== info.ready) nodeChanged(n); else dirty.add(n.b);
+}
+function nodeGone(name) {
+  const n = nodes.get(name);
+  if (n) { n.info = null; nodeChanged(n); }
+}
+function setPodNode(id, name) {
+  const old = podNode.get(id);
+  if (old === name) return;
+  if (old !== undefined) { const n = nodes.get(old); if (n) { n.pods.delete(id); dirty.add(n.b); } podNode.delete(id); }
+  if (name) { const n = stationOf(name); n.pods.add(id); dirty.add(n.b); podNode.set(id, name); }
+}
+const isDark = n => !!(n && n.info && !n.info.ready);
+// A building's blackout: 0, 1 when some of its pods that run or are meant to
+// run are on NotReady nodes, 2 when all of them are.
+function blackoutOf(b) {
+  let on = 0, off = 0;
+  for (const [id, s] of b.pods) {
+    if (s !== RUNNING && s !== PENDING && s !== CRASH) continue;
+    const name = podNode.get(id);
+    if (name === undefined) continue;
+    if (isDark(nodes.get(name))) off++; else on++;
+  }
+  return off === 0 ? 0 : on === 0 ? 2 : 1;
+}
+// A station's look: dark without steam when NotReady, dark smoke under
+// pressure, a barrier when cordoned; null once the node and its pods are gone.
+function stationLook(b) {
+  const n = nodes.get(b.name);
+  if (!n || n.b !== b || (!n.info && !n.pods.size)) return null;
+  const i = n.info, cores = i && i.cpu ? i.cpu / 1000 : 0;
+  const towers = cores > 32 ? 3 : cores > 8 ? 2 : 1;
+  const dark = isDark(n), smoke = !!i && !dark && !!(i.pressure && i.pressure.length), cordoned = !!(i && i.cordoned);
+  const look = {
+    cat: "station", worst: RUNNING, counts: [0, 0, 0, 0, 0, 0], fire: false, fading: false, working: false,
+    steam: !dark, smoke, dark: dark ? 2 : 0, p: { ...b.variant, towers, dark, cordoned },
+  };
+  look.key = `station:${towers}:${dark ? 1 : 0}:${cordoned ? 1 : 0}:${smoke ? 1 : 0}`;
+  return look;
+}
+
 // What a building should look like now, or null when it should not be there.
 // A Job's works (#65) stands while any of its pods exists, finished ones
 // too, so a CronJob stays put between runs; it works (smoke, wheel, lit
@@ -2902,6 +3045,7 @@ function shopOf(b) { return exposures.get(exposureKey(DATA.ns[b.ns], b.kind, b.n
 // run has ended. Its first run is a construction site; later runs start in
 // the works. Other workloads' finished pods do not count.
 function lookOf(b) {
+  if (b.kind === "Node") return stationLook(b);
   const counts = [0, 0, 0, 0, 0, 0];
   for (const s of b.pods.values()) counts[s]++;
   const job = b.kind === "Job";
@@ -2934,7 +3078,9 @@ function lookOf(b) {
   }
   // A shop (#50) keeps its kind's shape with a shop front at street level.
   look.p.shop = SHOP_CATS.has(look.cat) && !!shopOf(b);
-  look.key = `${look.cat}:${v.h}:${look.p.floors}:${look.p.count || 0}:${look.p.storeys || 0}:${look.p.shop ? 1 : 0}`;
+  // A blackout (#96) dims the building; it is no part of its shape.
+  look.dark = blackoutOf(b);
+  look.key = `${look.cat}:${v.h}:${look.p.floors}:${look.p.count || 0}:${look.p.storeys || 0}:${look.p.shop ? 1 : 0}:${look.dark}`;
   return look;
 }
 
@@ -3397,18 +3543,19 @@ const METROPOLIS = {
   gap: 2, lane: 0.32,
   draw: {
     tower: tower, tank: tankShape, house: houses, kiosk, scorched,
-    factory, build: construction,
+    factory, build: construction, station: (g, p) => station(g, p, STATION_PALETTES.metropolis),
   },
   body(look) {
     const geo = geometry(`m:${look.key}`, g => this.draw[look.cat](g, look.p));
     return { obj: new PIXI.Graphics(geo.geometry), top: geo.top };
   },
   ground: drawGround,
-  chimney: () => [iso(-0.28, -0.22)[0], iso(-0.28, -0.22)[1] - 36],
+  chimney: look => (look.cat === "station" ? stationStack(look) : [iso(-0.28, -0.22)[0], iso(-0.28, -0.22)[1] - 36]),
   legend: {
     tower: "tower", tank: "tank, twin tanks or silo", house: "a house per node, up to four",
     factory: "factory; while it runs: smoke, a turning wheel, lit windows and a truck to the road", build: "construction site", scorched: "scorched shell", kiosk: "kiosk",
     shop: "striped awning over a lit shop window: reached from outside (Ingress, Gateway route, LoadBalancer or NodePort)",
+    station: "power station with cooling towers, one to three by the node's CPU",
   },
   zones: { centre: ART.plaza, industry: ART.yard, suburb: ART.lawn },
   // The factory's walls: half-widths along i and j, and height (#65).
@@ -3718,8 +3865,13 @@ const KENNEY = {
         break;
       }
       case "scorched": stack(b, "brick", k, 0, null, 0x5a4f49); break;
+      case "station": {
+        const g = new PIXI.Graphics(geometry(`k:station:${look.key}`, g => station(g, p, STATION_PALETTES.kenney)).geometry);
+        b.addChild(g);
+        break;
+      }
     }
-    if (k.mirror && look.cat !== "build") b.scale.x = -1;
+    if (k.mirror && look.cat !== "build" && look.cat !== "station") b.scale.x = -1;
     return { obj: c, top: -c.getLocalBounds().y };
   },
   // A works' chimney by name: its height and its brick or concrete. It
@@ -3831,11 +3983,12 @@ const KENNEY = {
       addScenery(t, i, j);
     }
   },
-  chimney: look => [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - KENNEY.stackOf(kenneyParts(look.p.seed)).h - 4],
+  chimney: look => (look.cat === "station" ? stationStack(look) : [iso(-0.24, -0.24)[0], iso(-0.24, -0.24)[1] - KENNEY.stackOf(kenneyParts(look.p.seed)).h - 4]),
   legend: {
     tower: "office block", tank: "brick hall with a tank on the roof", house: "house with a pitched roof",
     factory: "works with a chimney; while it runs: smoke, a turning wheel, lit windows and a truck to the road", build: "dug foundation with a crane", scorched: "burnt-out shell", kiosk: "kiosk",
     shop: "shop front with an awning: reached from outside (Ingress, Gateway route, LoadBalancer or NodePort)",
+    station: "power station with cooling towers, one to three by the node's CPU",
   },
   zones: { centre: 0xd0cbb8, industry: 0x929287, suburb: 0xa2b684 },
   // The works' walls: a 99 px box on a 132 px lot, one storey high (#65).
@@ -3987,6 +4140,7 @@ function setBody(b, look) {
   if (b.body) { body.scale.copyFrom(b.body.scale); b.body.destroy({ children: true }); }
   b.body = body; b.top = top; b.look = look;
   b.view.addChildAt(body, 0);
+  if (look.dark) tintAll(body, BLACKOUT[look.dark]);
   if (b.fx) { b.fx.destroy({ children: true }); b.fx = null; }
   if (b.puffs) { for (const p of b.puffs) p.destroy(); b.puffs = null; }
   burning.delete(b); smoking.delete(b);
@@ -4002,12 +4156,14 @@ function setBody(b, look) {
     b.view.addChild(b.fx);
     burning.add(b);
   }
-  if (look.fire || look.working) {
+  if (look.fire || look.working || look.steam) {
     if (!b.fx) { b.fx = new PIXI.Container(); b.view.addChild(b.fx); }
     b.puffs = [];
-    // A working Job's chimney smokes thick and fast (#65).
+    // A working Job's chimney smokes thick and fast (#65); a station's tower
+    // steams, or smokes dark under pressure (#96).
+    const [name, color] = look.fire ? ["smoke-dark", 0x4a4a4a] : look.smoke ? ["smoke-warn", 0x6b5d50] : ["smoke", 0xf2f2f2];
     for (let k = 0; k < (look.fire ? 3 : 5); k++) {
-      const p = new PIXI.Graphics(geometry(look.fire ? "smoke-dark" : "smoke", g => { g.beginFill(look.fire ? 0x4a4a4a : 0xf2f2f2); g.drawCircle(0, 0, 5); g.endFill(); return 0; }).geometry);
+      const p = new PIXI.Graphics(geometry(name, g => { g.beginFill(color); g.drawCircle(0, 0, 5); g.endFill(); return 0; }).geometry);
       b.view.addChild(p); b.puffs.push(p);
     }
     b.puffBase = look.fire ? [0, -Math.min(b.top, 46) - 12] : theme.chimney(look);
@@ -4079,6 +4235,17 @@ function unmount(b) {
   b.view = null; b.body = null; b.fx = null; b.puffs = null; b.anim = null;
 }
 const falling = new Set();
+// A blackout's tint (#96), multiplied into a building's sprites and drawings:
+// some of its pods on NotReady nodes, or all of them.
+const BLACKOUT = [0xffffff, 0xa4a7ba, 0x4c5168];
+function mulColor(a, b) {
+  const ch = s => Math.round((((a >> s) & 255) * ((b >> s) & 255)) / 255) << s;
+  return ch(16) | ch(8) | ch(0);
+}
+function tintAll(obj, tint) {
+  if (obj instanceof PIXI.Sprite || obj instanceof PIXI.Graphics) obj.tint = mulColor(obj.tint, tint);
+  for (const c of obj.children || []) tintAll(c, tint);
+}
 
 const dirty = new Set();
 let riseOrigin = null;
@@ -4089,6 +4256,7 @@ function refresh(b) {
     unmount(b);
     b.look = null;
     if (b.pods.size === 0) world.buildings.delete(b.key);
+    if (b.kind === "Node" && nodes.get(b.name) && nodes.get(b.name).b === b) nodes.delete(b.name);
     return;
   }
   if (!b.view) {
@@ -4140,6 +4308,7 @@ function resetWorld() {
   for (const f of falling) f.view.destroy({ children: true });
   falling.clear(); burning.clear(); smoking.clear(); dirty.clear();
   world.pods.clear(); world.buildings.clear(); podDetails.clear(); exposures.clear(); world.requests = false;
+  nodes.clear(); podNode.clear();
   sim.pending.length = 0;
   select(null);
 }
@@ -4147,14 +4316,25 @@ function resetWorld() {
 // ---------------------------------------------------------------- stats
 
 function districtStats() {
-  for (const d of world.districts) d.stats = { pods: 0, workloads: 0, counts: [0, 0, 0, 0, 0, 0] };
+  for (const d of world.districts) d.stats = { pods: 0, workloads: 0, counts: [0, 0, 0, 0, 0, 0], nodes: 0, dark: 0, warn: 0 };
   for (const pod of world.pods.values()) { const s = world.districts[pod.b.ns].stats; s.pods++; s.counts[pod.state]++; }
-  for (const b of world.buildings.values()) if (b.view) world.districts[b.ns].stats.workloads++;
+  for (const b of world.buildings.values()) {
+    if (!b.view) continue;
+    const s = world.districts[b.ns].stats;
+    if (b.kind !== "Node") { s.workloads++; continue; }
+    // The power grid (#96): its stations, dark ones and ones in trouble.
+    s.nodes++;
+    const sev = severity(b);
+    if (sev === "bad") s.dark++; else if (sev) s.warn++;
+  }
   for (const d of world.districts) {
     const c = d.stats.counts;
-    d.health = c[CRASH] || c[FAILED] ? "bad" : c[PENDING] ? "warn" : d.stats.pods ? "ok" : "empty";
+    d.health = d.stats.nodes ? (d.stats.dark ? "bad" : d.stats.warn ? "warn" : "ok")
+      : c[CRASH] || c[FAILED] ? "bad" : c[PENDING] ? "warn" : d.stats.pods ? "ok" : "empty";
   }
 }
+// A district worth a colour and a sign: it has pods, or it is the power grid with stations.
+const inUse = d => !!(d.stats && (d.stats.pods || d.stats.nodes));
 
 // ---------------------------------------------------------------- camera
 
@@ -4430,14 +4610,31 @@ function wayText(w) {
   return `${VIA_WORDS[w.via] || w.via} · ${where} → ${to}`;
 }
 function buildingTip(b) {
+  if (b.kind === "Node") return stationTip(b);
   const counts = [0, 0, 0, 0, 0, 0]; for (const s of b.pods.values()) counts[s]++;
-  const requests = buildingRequests(b), ways = shopOf(b);
+  const requests = buildingRequests(b), ways = shopOf(b), dark = b.look ? b.look.dark : 0;
   return `<div class="t">${esc(b.name)}</div><div class="s">${b.kind} · ${ROLE_WORDS[b.role]} in ${esc(DATA.ns[b.ns])}</div><div>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}: ${summary(counts)}</div>` +
     (requests ? `<div class="s">requests ${requests}</div>` : "") +
-    (ways ? `<div class="s">shop: ${esc([...new Set(ways.map(w => VIA_WORDS[w.via] || w.via))].join(", "))}</div>` : "");
+    (ways ? `<div class="s">shop: ${esc([...new Set(ways.map(w => VIA_WORDS[w.via] || w.via))].join(", "))}</div>` : "") +
+    (dark ? `<div class="s">blackout: ${dark === 2 ? "every pod" : "some pods"} on a NotReady node</div>` : "");
+}
+// A node's state in words (#96); "" for a node known only from its pods.
+function nodeStateText(i) {
+  if (!i) return "";
+  const words = [i.ready ? "Ready" : "NotReady"];
+  if (i.cordoned) words.push("cordoned");
+  for (const c of i.pressure || []) words.push(c);
+  return words.join(" · ");
+}
+function stationTip(b) {
+  const n = nodes.get(b.name), i = n && n.info;
+  const pods = n ? n.pods.size : 0;
+  return `<div class="t">${esc(b.name)}</div><div class="s">Node · power station${i && i.control_plane ? " · control plane" : ""}</div>` +
+    `<div>${nodeStateText(i) || "known from its pods only"}</div><div class="s">${pods} pod${pods === 1 ? "" : "s"} on its grid</div>`;
 }
 function districtTip(d) {
   const s = d.stats;
+  if (s.nodes) return `<div class="t">${esc(d.name)}</div><div class="s">${ZONE_WORDS[d.zone]}: the cluster's nodes</div><div>${s.nodes} node${s.nodes === 1 ? "" : "s"}${s.dark ? `, ${s.dark} dark` : ""}${s.warn ? `, ${s.warn} with a warning` : ""}</div>`;
   return `<div class="t">${esc(d.name)}</div><div class="s">${ZONE_WORDS[d.zone]}${d.zone === "industry" ? (infraName(d.name) ? ": infrastructure" : ": runs a DaemonSet") : ""}</div><div>${s.workloads} workloads, ${s.pods} pods</div><div class="s">${summary(s.counts) || "empty"}</div>`;
 }
 
@@ -4460,6 +4657,8 @@ function select(b) {
 }
 
 function severity(b) {
+  // A station (#96): dark is down; pressure and cordoned want a look.
+  if (b.kind === "Node") return !b.look ? null : b.look.dark ? "bad" : b.look.smoke || b.look.p.cordoned ? "warn" : null;
   const c = b.look ? b.look.counts : null;
   if (!c) return null;
   if (c[CRASH]) return "bad";
@@ -4499,6 +4698,13 @@ async function renderPanel() {
   if (selected && world.buildings.get(selected.key) !== selected) selected = world.buildings.get(selected.key) || null;
   if (!selected) { sel.hidden = true; return; }
   const b = selected;
+  if (b.kind === "Node") {
+    const img = b.look ? await icon(b.look) : "";
+    sel.hidden = false;
+    sel.innerHTML = stationCard(b, img);
+    document.getElementById("unselect").addEventListener("click", () => select(null));
+    return;
+  }
   const twins = [...world.buildings.values()].filter(o => o !== b && o.name === b.name && o.view);
   const img = b.look ? await icon(b.look) : "";
   const urgency = [2, 4, 0, 3, 5, 1]; // by state: crashing and failed pods first
@@ -4511,12 +4717,53 @@ async function renderPanel() {
       <button class="close" id="unselect" aria-label="Clear selection">×</button></div>
     ${requests ? `<h2>Requests</h2><div class="pod-facts">${requests}, for the pods that run</div>` : ""}
     ${ways ? `<h2>Reached from outside</h2>${ways.map(w => `<div class="pod-facts">${esc(wayText(w))}</div>`).join("")}` : ""}
+    ${nodesOfCard(b)}
     <h2>${b.pods.size} pod${b.pods.size === 1 ? "" : "s"}</h2><div class="pods">${pods}</div>
     ${images.length ? `<h2>Image${images.length === 1 ? "" : "s"}</h2><div class="images">${images.map(i => `<span>${esc(i)}</span>`).join("")}</div>` : ""}
     ${twins.length ? `<h2>Same component in ${twins.length} other namespace${twins.length === 1 ? "" : "s"}</h2>
       <ul class="list">${twins.map(o => `<li><button data-key="${esc(o.key)}"><span class="sev ${severity(o) || "ok"}"></span><span class="name">${esc(DATA.ns[o.ns])}</span><span class="ns">${o.pods.size} pod${o.pods.size === 1 ? "" : "s"}</span></button></li>`).join("")}</ul>` : ""}
   </div>`;
   document.getElementById("unselect").addEventListener("click", () => select(null));
+}
+// The stations a building's pods run on (#96), as links to them.
+function nodesOfCard(b) {
+  const on = new Map();
+  for (const id of b.pods.keys()) { const name = podNode.get(id); if (name !== undefined) on.set(name, (on.get(name) || 0) + 1); }
+  if (!on.size) return "";
+  const rows = [...on].sort(([a], [z]) => a.localeCompare(z)).map(([name, k]) => {
+    const n = nodes.get(name), st = n && n.b.view ? n.b : null;
+    const inner = `<span class="sev ${st ? severity(st) || "ok" : "ok"}"></span><span class="name">${esc(name)}</span><span class="ns">${k} pod${k === 1 ? "" : "s"}${isDark(n) ? " · dark" : ""}</span>`;
+    return `<li>${st ? `<button data-key="${esc(st.key)}">${inner}</button>` : `<span class="row">${inner}</span>`}</li>`;
+  });
+  return `<h2>On ${on.size} node${on.size === 1 ? "" : "s"}</h2><ul class="list">${rows.join("")}</ul>`;
+}
+// A station's card (#96): the node's state, capacity, and the buildings on its grid.
+function stationCard(b, img) {
+  const n = nodes.get(b.name), i = n && n.info;
+  const facts = [];
+  if (i) {
+    facts.push(`<div class="pod-facts">${esc(nodeStateText(i))}</div>`);
+    if (i.cordoned) facts.push(`<div class="pod-facts">cordoned: no new pods are scheduled here</div>`);
+    if (!i.ready) facts.push(`<div class="pod-reason">NotReady: the buildings on its grid are in a blackout</div>`);
+    const cap = requestsText(i.cpu || 0, i.memory || 0);
+    if (cap) facts.push(`<div class="pod-facts">capacity ${cap}</div>`);
+    const more = [i.kubelet ? `kubelet ${esc(i.kubelet)}` : "", i.created ? `joined ${ageOf(i.created)} ago` : ""].filter(Boolean);
+    if (more.length) facts.push(`<div class="pod-facts">${more.join(" · ")}</div>`);
+  } else facts.push(`<div class="pod-facts">Known from its pods only: kube-city may not list Nodes here, or the recording has none.</div>`);
+  const grid = new Map();
+  for (const id of n ? n.pods : []) {
+    const pod = world.pods.get(id);
+    if (pod && pod.b.view) grid.set(pod.b, (grid.get(pod.b) || 0) + 1);
+  }
+  const rows = [...grid].sort(([a], [z]) => (severity(a) ? 0 : 1) - (severity(z) ? 0 : 1) || a.name.localeCompare(z.name)).map(([o, k]) =>
+    `<li><button data-key="${esc(o.key)}"><span class="sev ${severity(o) || "ok"}"></span><span class="name">${esc(o.name)}</span><span class="ns">${esc(DATA.ns[o.ns])} · ${k} pod${k === 1 ? "" : "s"}</span></button></li>`);
+  return `<div class="card">
+    <div class="card-head">${img ? `<img src="${img}" alt="">` : ""}<div><div class="title">${esc(b.name)}</div><div class="sub">Node · power station${i && i.control_plane ? " · <b>control plane</b>" : ""}</div></div>
+      <button class="close" id="unselect" aria-label="Clear selection">×</button></div>
+    <h2>State</h2>${facts.join("")}
+    <h2>On its grid: ${grid.size} building${grid.size === 1 ? "" : "s"}</h2>
+    ${rows.length ? `<ul class="list">${rows.slice(0, 80).join("")}</ul>` : `<div class="pod-facts">No pods run here.</div>`}
+  </div>`;
 }
 // How long ago an RFC 3339 time was, the way kubectl shows ages.
 function ageOf(time) {
@@ -4566,6 +4813,7 @@ async function renderLegend() {
     ["Failed", t.scorched, look("scorched")],
     ["Pod without owner", t.kiosk, look("kiosk")],
     ["Shop", t.shop, look("tower", { floors: 3, shop: true })],
+    ["Node", t.station, look("station", { towers: 2 })],
   ];
   const html = [];
   for (const [title, sub, l, fire] of items) {
@@ -4577,6 +4825,8 @@ async function renderLegend() {
     const color = `#${theme.zones[zone].toString(16).padStart(6, "0")}`;
     html.push(`<div class="zone"><i style="background:${color}"></i><span>${ZONE_WORDS[zone]}<small>${rule}</small></span></div>`);
   }
+  // Nodes (#96): their states, and what a dark one does to the buildings on its grid.
+  html.push(`<div class="zone"><span>Power grid<small>one power station per node, in the industrial quarter. NotReady: dark, no steam, and a blackout (dimmed) in every building with pods on it, partly when only some of its pods are. Memory, disk or PID pressure: dark smoke. Cordoned: a striped barrier. Hover or pick a station to light up the buildings on its grid</small></span></div>`);
   // Roles (#48): where a building stands inside its neighbourhood, never its shape.
   html.push(`<div class="zone"><span>Inside a neighbourhood<small>by what runs there: shops on the street facing the middle of town, then web servers, offices, data and messaging (databases, brokers), Jobs at the back</small></span></div>`);
   // Height (#49): offices and StatefulSets, never houses or works.
@@ -4650,15 +4900,17 @@ function renderLabels(level) {
     }
   }
   for (const el of qSigns.values()) if (!shown.has(el)) el.hidden = true;
-  const order = [...world.districts].sort((a, b) => (b.stats.pods - a.stats.pods));
+  const order = [...world.districts].sort((a, b) => (b.stats.pods - a.stats.pods) || (b.stats.nodes - a.stats.nodes));
   for (const d of order) {
     const el = signFor(d);
-    if (!d.stats.pods) { el.hidden = true; continue; }
+    if (!inUse(d)) { el.hidden = true; continue; }
     const big = level === "cluster";
     const [wx, wy] = big ? iso(d.x + d.w / 2, d.y + d.h / 2) : iso(d.x + 0.4, d.y + 0.4);
     const [sx, sy] = w2s(wx, wy);
-    const c = d.stats.counts;
-    const html = `<b>${esc(d.name)}</b><span class="meta"><span>${d.stats.pods} pods</span>${c[CRASH] + c[FAILED] ? `<span class="flag bad">${c[CRASH] + c[FAILED]} down</span>` : ""}${c[PENDING] ? `<span class="flag warn">${c[PENDING]} pending</span>` : ""}</span>`;
+    const c = d.stats.counts, st = d.stats;
+    const html = st.nodes
+      ? `<b>${esc(d.name)}</b><span class="meta"><span>${st.nodes} node${st.nodes === 1 ? "" : "s"}</span>${st.dark ? `<span class="flag bad">${st.dark} dark</span>` : ""}${st.warn ? `<span class="flag warn">${st.warn} warning${st.warn === 1 ? "" : "s"}</span>` : ""}</span>`
+      : `<b>${esc(d.name)}</b><span class="meta"><span>${d.stats.pods} pods</span>${c[CRASH] + c[FAILED] ? `<span class="flag bad">${c[CRASH] + c[FAILED]} down</span>` : ""}${c[PENDING] ? `<span class="flag warn">${c[PENDING]} pending</span>` : ""}</span>`;
     measure(el, html + big, () => { el.innerHTML = html; el.classList.toggle("big", big); });
     const w = el._w, h = el._h;
     const rect = { x: sx - w / 2, y: sy - h - (big ? -h / 2 : 18), w, h };
@@ -4711,7 +4963,7 @@ function simulate(now) {
   for (let k = sim.pending.length - 1; k >= 0; k--) if (sim.pending[k].at <= now) { const f = sim.pending[k].fn; sim.pending.splice(k, 1); f(); }
   if (!flags.sim || replay.idx < DATA.events.length * 0.98 || now < sim.next) return;
   sim.next = now + 1400 + Math.random() * 1800;
-  const healthy = [...world.buildings.values()].filter(b => b.view && !severity(b) && b.kind !== "Job" && [...b.pods.values()].every(s => s === RUNNING));
+  const healthy = [...world.buildings.values()].filter(b => b.view && !severity(b) && b.kind !== "Job" && b.kind !== "Node" && [...b.pods.values()].every(s => s === RUNNING));
   if (!healthy.length) return;
   const b = healthy[Math.floor(Math.random() * healthy.length)];
   const nsKind = [b.ns, b.wl, KINDS.indexOf(b.kind)];
@@ -4782,6 +5034,10 @@ app.ticker.add(() => {
     document.querySelectorAll(".levels [data-level]").forEach(btn => btn.setAttribute("aria-current", String(btn.dataset.level === level)));
   }
 
+  // The grid of the station under the pointer or picked (#96).
+  const gridOf = hover && hover.b && hover.b.kind === "Node" ? hover.b : selected && selected.kind === "Node" ? selected : null;
+  const grid = gridOf ? new Set([...(nodes.get(gridOf.name) || { pods: [] }).pods].map(id => world.pods.get(id)).filter(Boolean).map(p => p.b)) : null;
+
   // Building animations.
   for (const b of world.buildings.values()) {
     if (!b.view) continue;
@@ -4796,6 +5052,7 @@ app.ticker.add(() => {
     let alpha = b.look.fading ? 0.42 : 1;
     if (flags.focus && !severity(b) && b !== selected) alpha *= 0.16;
     if (matches && !matches.has(b.key)) alpha *= 0.14;
+    if (grid && b !== gridOf && !grid.has(b)) alpha *= 0.22;
     b.alpha = lerp(b.alpha, alpha, 0.18);
     b.view.alpha = b.alpha;
   }
@@ -4836,7 +5093,7 @@ app.ticker.add(() => {
   const colors = { ok: hexNum(cssColor("--ok")), warn: hexNum(cssColor("--warn")), bad: hexNum(cssColor("--bad")), empty: 0x999999 };
   if (strength > 0.01) {
     for (const d of world.districts) {
-      if (!d.stats || !d.stats.pods) continue;
+      if (!inUse(d)) continue;
       const pts = [iso(d.x, d.y), iso(d.x + d.w, d.y), iso(d.x + d.w, d.y + d.h), iso(d.x, d.y + d.h)].flat();
       overlay.beginFill(colors[d.health], 0.72 * strength); overlay.drawPolygon(pts); overlay.endFill();
       // A bar of pod states along the front edge: how much of the district is healthy.
@@ -4869,6 +5126,13 @@ app.ticker.add(() => {
       const b = world.buildings.get(key); if (!b || !b.view) continue;
       const [x, y] = iso(b.lot.i, b.lot.j);
       markers.lineStyle(px(2.5), hexNum(cssColor("--accent")), 0.95); markers.drawEllipse(x, y, Math.max(26, px(8)), Math.max(13, px(4))); markers.lineStyle(0);
+    }
+  }
+  if (grid) {
+    for (const b of grid) {
+      if (!b.view) continue;
+      const [x, y] = iso(b.lot.i, b.lot.j);
+      markers.lineStyle(px(2.5), 0xf2c230, 0.95); markers.drawEllipse(x, y, Math.max(26, px(8)), Math.max(13, px(4))); markers.lineStyle(0);
     }
   }
   if (selected && selected.view) {
@@ -5110,9 +5374,9 @@ function applyDeepLink() {
 
 // ---------------------------------------------------------------- live feed (kube-city --web)
 // The server sends JSON arrays of {"PodUpserted": pod}, {"PodDeleted": {uid}},
-// {"Exposed": {namespace, workload, kind, ways}} (#50), {"Status": text},
-// {"Contexts": {current, all}} and {"Reset": null} (every exposure and then
-// every pod follow). The page asks for another context with {"Context": name}.
+// {"Exposed": {namespace, workload, kind, ways}} (#50), {"Node": node} and
+// {"NodeGone": {name}} (#96), {"Status": text}, {"Contexts": {current, all}}
+// and {"Reset": null} (every node, every exposure and then every pod follow). The page asks for another context with {"Context": name}.
 
 const live = DATA.live ? {
   connected: false, retries: 0, status: "connecting", ws: null, context: null,
@@ -5125,6 +5389,7 @@ const contextSelect = document.getElementById("context");
 // Another cluster: forget the old one's namespaces, lots and labels too.
 function newCity() {
   registry.length = 0; lotWeights.length = 0; wlKinds.length = 0; exposures.clear(); seating.clear(); daemons.clear(); DATA.ns.length = 0; DATA.wl.length = 0; townPlaced = null; fronts.clear();
+  nodes.clear(); podNode.clear();
   live.ns.clear(); live.wl.clear(); live.pods.clear(); live.next = 0;
   for (const el of signs) if (el) el.remove();
   signs.length = 0;
@@ -5160,7 +5425,17 @@ function intern(map, list, key, name) {
 }
 function liveBatch(items) {
   let events = [];
-  const flush = () => { registerBatch(events); for (const e of events) apply(e); events = []; };
+  // Nodes (#96) follow the pods they may name: new ones get their lots in
+  // name order, then the nodes and the pods' nodes are set.
+  let afterPods = [];
+  const named = new Set();
+  const flush = () => {
+    const fresh = [...named].filter(name => !nodes.has(name)).sort();
+    if (fresh.length) registerStations(fresh);
+    registerBatch(events); for (const e of events) apply(e);
+    for (const f of afterPods) f();
+    events = []; afterPods = []; named.clear();
+  };
   for (const it of items) {
     if ("Reset" in it) { flush(); resetWorld(); riseOrigin = { until: performance.now() + 900 }; }
     else if ("Status" in it) live.status = it.Status;
@@ -5170,18 +5445,28 @@ function liveBatch(items) {
       let id = live.pods.get(p.uid);
       if (id === undefined) { id = live.next++; live.pods.set(p.uid, id); }
       if (p.details && p.details.name) podDetails.set(id, p.details);
+      const node = (p.details && p.details.node) || null;
+      if (node) named.add(node);
+      afterPods.push(() => setPodNode(id, node));
       events.push([0, id, intern(live.ns, DATA.ns, p.namespace, p.namespace),
         intern(live.wl, DATA.wl, `${p.kind}/${p.workload}`, p.workload), KINDS.indexOf(p.kind), STATES.indexOf(p.state),
         ROLES.indexOf(p.role), (p.details && p.details.cpu) || 0, (p.details && p.details.memory) || 0]);
     } else if (it.PodDeleted) {
       const id = live.pods.get(it.PodDeleted.uid);
-      if (id !== undefined) { events.push([0, id]); live.pods.delete(it.PodDeleted.uid); }
+      if (id !== undefined) { events.push([0, id]); live.pods.delete(it.PodDeleted.uid); afterPods.push(() => setPodNode(id, null)); }
     } else if (it.Exposed) {
       // A shop front comes or goes where the building stands; the street is
       // laid out again only with the neighbourhood (streetSeats).
       const e = it.Exposed, key = exposureKey(e.namespace, e.kind, e.workload);
       if (e.ways.length) exposures.set(key, e.ways); else exposures.delete(key);
       for (const b of world.buildings.values()) if (exposureKey(DATA.ns[b.ns], b.kind, b.name) === key) dirty.add(b);
+    } else if (it.Node) {
+      const info = it.Node;
+      named.add(info.name);
+      afterPods.push(() => setNode(info));
+    } else if (it.NodeGone) {
+      const name = it.NodeGone.name;
+      afterPods.push(() => nodeGone(name));
     }
   }
   flush();

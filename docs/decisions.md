@@ -754,6 +754,26 @@ rules. Owner's answers on the issue: 1C, 2A, 3A.
 | Demo | `report-job` keeps each namespace's last three finished runs (`JOB_HISTORY`), as a CronJob's history does, so its works idles between runs | The issue |
 | Fixed on the way | Finished pods were taken off twice when counting a workload's active pods, so a Deployment with a completed pod could show as a construction site | Found by the new check |
 
+## Power stations (2026-11-19, #96, part of #19)
+
+#19's decisions: Nodes as power stations (#96), Services and Ingresses
+need nothing beyond #50, volumes as depots next (#97).
+
+| Topic | Decision | Why |
+|---|---|---|
+| Where | A district `power grid` (a name no namespace can have) in the industrial quarter, one lot per node, laid out by `planCity()` like a namespace | Decision 1a: roads, overlay, sign, hover and fly-to come for free; the city stays laid out by namespace |
+| Server | A read-only watch of Nodes sends `Node { name, ready, pressure, cordoned, control_plane, cpu, memory, kubelet, created }` when what the city shows changes (heartbeats are not sent) and `NodeGone`; a snapshot sends nodes first | Small events; recordings keep them, old ones still load |
+| No access | Nodes are cluster-wide; without list access the status says "no access to Nodes; power stations may be missing" and stations come from the pods' node names | The issue; `--anonymise` keeps that status |
+| Old recordings | Stations from the pods' node names, without state or capacity | Decision 3a |
+| Look | Pad, turbine hall with lit windows and a lightning sign, one to three cooling towers (up to 8 cores, up to 32, more); drawn in code in both looks with their own colours | Readable at district zoom; the Kenney packs have no power station |
+| States | NotReady: unlit and dimmed, no steam; memory, disk or PID pressure (or NetworkUnavailable): dark smoke; cordoned: a striped barrier | Decision 1a |
+| Blackout | A building is dimmed (a tint multiplied into its drawing) when all of its running, pending or crashing pods are on NotReady nodes, dimmed less when only some are | Decision 2a |
+| Cluster zoom | A dark station is "down" (red marker, the grid's sign "1 dark"), pressure and cordoned are warnings; the power grid's colour follows its worst station | Problems visible from far away |
+| Grid | Hovering or picking a station rings the buildings with pods on it in yellow and fades the rest; a building's card lists its nodes, a station's card its state, capacity, kubelet, age and the buildings on its grid | The issue |
+| Control plane | The same station, "control plane" in its tip and card | Decision 4a |
+| Demo | `control-plane`, `node-1`…`node-4`: `node-3` under memory pressure, `node-4` cordoned and empty, `node-2` NotReady for 40 of every 150 steps | Every state shows |
+| Check | `art/nodes_check.mjs`: stations and blackouts through the page's own code | No browser needed |
+
 ## Roadmap
 
 The public roadmap is [`ROADMAP.md`](../ROADMAP.md); keep it up to date when

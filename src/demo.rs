@@ -1,7 +1,8 @@
 //! A simulated cluster, so kube-city runs without a real one.
 //!
 //! Made-up namespaces and pods get created, start, crash, recover, finish and
-//! get deleted. Everything is driven by a seeded RNG, so a seed replays the
+//! get deleted, on made-up nodes: one under memory pressure, one cordoned, a
+//! control plane, and one that drops out now and then (#96). Everything is driven by a seeded RNG, so a seed replays the
 //! same city.
 
 use std::time::Duration;
@@ -11,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::{
     roles::role_of,
     util::Rng,
-    world::{Exposure, PodDetails, PodInfo, PodState, Via, Way, WorkloadKind, WorldEvent},
+    world::{Exposure, NodeInfo, PodDetails, PodInfo, PodState, Via, Way, WorkloadKind, WorldEvent},
 };
 
 type Workload = (&'static str, WorkloadKind);
@@ -41,6 +42,12 @@ const JOB: Workload = ("report-job", WorkloadKind::Job);
 /// Scale-ups stop here; restarts and new namespaces may briefly exceed it.
 const MAX_PODS: usize = 120;
 const INITIAL_NAMESPACES: usize = 4;
+/// The simulated nodes (#96): name, cores, GiB of memory. Pods run on the
+/// first three; `node-4` is cordoned and empty.
+const NODES: [(&str, u64, u64); 5] =
+    [("control-plane", 4, 8), ("node-1", 16, 64), ("node-2", 8, 32), ("node-3", 4, 16), ("node-4", 32, 128)];
+/// `node-2` is NotReady for steps `DARK.0..DARK.1` of every `DARK.2`.
+const DARK: (u64, u64, u64) = (30, 70, 150);
 /// Finished runs a namespace's `report-job` keeps, like a CronJob's history
 /// (#65): its works stays on the map between runs.
 const JOB_HISTORY: usize = 3;
@@ -71,18 +78,22 @@ pub struct DemoCluster {
     open: Vec<usize>,
     next_uid: u64,
     started: bool,
+    steps: u64,
 }
 
 impl DemoCluster {
     pub fn new(seed: u64) -> Self {
-        Self { rng: Rng::new(seed), pods: Vec::new(), open: Vec::new(), next_uid: 0, started: false }
+        Self { rng: Rng::new(seed), pods: Vec::new(), open: Vec::new(), next_uid: 0, started: false, steps: 0 }
     }
 
     /// Advances the simulation by one step and returns what changed.
     pub fn step(&mut self) -> Vec<WorldEvent> {
         let mut events = Vec::new();
+        self.steps += 1;
         if !self.started {
             self.started = true;
+            // The nodes first, as a cluster sends them.
+            events.extend(NODES.iter().map(|&(name, ..)| WorldEvent::Node(node(name, true))));
             for _ in 0..INITIAL_NAMESPACES {
                 self.open_namespace(PodState::Running, &mut events);
             }
@@ -100,6 +111,10 @@ impl DemoCluster {
             _ => {}
         }
         self.forget_old_runs(&mut events);
+        let phase = self.steps % DARK.2;
+        if phase == DARK.0 || phase == DARK.1 {
+            events.push(WorldEvent::Node(node("node-2", phase == DARK.1)));
+        }
         events
     }
 
@@ -281,7 +296,7 @@ impl DemoCluster {
             // Derived from the counter, not the RNG, so seeds replay the same city.
             details: PodDetails {
                 name: format!("{workload}-{}", suffix(n)),
-                node: format!("node-{}", 1 + n % 4),
+                node: format!("node-{}", 1 + n % 3),
                 images: vec![format!("{workload}:1.{}", n % 7)],
                 containers: 1,
                 cpu: requests_of(workload).map(|(cpu, _)| cpu),
@@ -299,6 +314,22 @@ impl DemoCluster {
         move_to(&mut pod.info, state);
         pod.age = 0;
         events.push(WorldEvent::PodUpserted(pod.info.clone()));
+    }
+}
+
+/// A simulated node; `ready` only matters for `node-2`, the others always are.
+fn node(name: &str, ready: bool) -> NodeInfo {
+    let &(_, cores, gib) = NODES.iter().find(|(known, ..)| *known == name).expect("a simulated node");
+    NodeInfo {
+        name: name.to_owned(),
+        ready,
+        pressure: if name == "node-3" { vec!["MemoryPressure".to_owned()] } else { Vec::new() },
+        cordoned: name == "node-4",
+        control_plane: name == "control-plane",
+        cpu: Some(cores * 1000),
+        memory: Some(gib << 30),
+        kubelet: Some("v1.31.2".to_owned()),
+        created: None,
     }
 }
 
@@ -422,7 +453,8 @@ mod tests {
     fn it_starts_with_a_running_city() {
         let first = DemoCluster::new(1).step();
         assert!(!first.is_empty());
-        let pods: Vec<_> = first.iter().filter(|e| !matches!(e, WorldEvent::Exposed(_))).collect();
+        let pods: Vec<_> =
+            first.iter().filter(|e| !matches!(e, WorldEvent::Exposed(_) | WorldEvent::Node(_))).collect();
         assert!(pods.iter().all(|e| matches!(e, WorldEvent::PodUpserted(p) if p.state == PodState::Running)));
     }
 
@@ -433,7 +465,7 @@ mod tests {
         for _ in 0..400 {
             upserts.extend(demo.step().into_iter().filter_map(|e| match e {
                 WorldEvent::PodUpserted(info) => Some(info),
-                WorldEvent::PodDeleted { .. } | WorldEvent::Exposed(_) => None,
+                _ => None,
             }));
         }
         assert!(upserts.iter().all(|p| p.details.name.starts_with(&p.workload) && !p.details.node.is_empty()));
@@ -459,7 +491,7 @@ mod tests {
                     WorldEvent::PodDeleted { uid } => {
                         assert!(alive.remove(uid), "deleted a pod that was never created: {uid}");
                     }
-                    WorldEvent::Exposed(_) => {}
+                    WorldEvent::Exposed(_) | WorldEvent::Node(_) | WorldEvent::NodeGone { .. } => {}
                 }
             }
             assert_eq!(alive.len(), cluster.pods.len());
@@ -499,6 +531,34 @@ mod tests {
     }
 
     #[test]
+    fn nodes_come_first_and_one_drops_out_and_comes_back() {
+        let mut cluster = DemoCluster::new(3);
+        let first = cluster.step();
+        assert!(first[..NODES.len()].iter().all(|e| matches!(e, WorldEvent::Node(n) if n.ready)));
+        assert!(
+            first
+                .iter()
+                .filter_map(|e| match e {
+                    WorldEvent::Node(n) => Some(n),
+                    _ => None,
+                })
+                .any(|n| n.cordoned)
+                && first.iter().any(|e| matches!(e, WorldEvent::Node(n) if !n.pressure.is_empty()))
+        );
+        let mut changes = Vec::new();
+        for _ in 0..DARK.2 {
+            for event in cluster.step() {
+                if let WorldEvent::Node(n) = event {
+                    changes.push((n.name, n.ready));
+                }
+            }
+        }
+        assert_eq!(changes, [("node-2".to_owned(), false), ("node-2".to_owned(), true)]);
+        // Pods never land on the cordoned node or the control plane.
+        assert!(cluster.pods.iter().all(|p| ["node-1", "node-2", "node-3"].contains(&p.info.details.node.as_str())));
+    }
+
+    #[test]
     fn a_namespace_shows_its_shops_before_its_pods_and_closes_them() {
         let mut cluster = DemoCluster::new(5);
         let mut shops = HashSet::new();
@@ -515,7 +575,7 @@ mod tests {
                     WorldEvent::PodUpserted(p) => {
                         built.insert((p.namespace, p.workload));
                     }
-                    WorldEvent::PodDeleted { .. } => {}
+                    _ => {}
                 }
             }
             // A namespace that closes forgets its pods' workloads too.

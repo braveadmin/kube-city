@@ -86,6 +86,44 @@ pub enum WorldEvent {
     /// source sends a workload's first one before its pods where it can, so
     /// the page knows its shops when it lays out the street.
     Exposed(Exposure),
+    /// A node, a power station in the city (#96); sent when what the city
+    /// shows of it changes.
+    Node(NodeInfo),
+    NodeGone {
+        name: String,
+    },
+}
+
+/// What the city shows of a node (#96).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeInfo {
+    pub name: String,
+    /// Its Ready condition is True.
+    pub ready: bool,
+    /// Conditions that warn of trouble and are True, by Kubernetes' own names
+    /// (`MemoryPressure`, `DiskPressure`, `PIDPressure`, `NetworkUnavailable`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pressure: Vec<String>,
+    /// Marked unschedulable (`kubectl cordon`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cordoned: bool,
+    /// Has the `node-role.kubernetes.io/control-plane` (or `master`) label.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub control_plane: bool,
+    /// CPU capacity in millicores and memory capacity in bytes, when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubelet: Option<String>,
+    /// When it joined (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// A workload that is reached from outside: a "shop" in the city (#50).
