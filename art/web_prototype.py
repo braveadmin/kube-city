@@ -220,6 +220,11 @@ def main():
         sys.exit(f"refusing to write the page: {len(found)} real names would leak, e.g. {found[:3]}")
     sprites = kenney_sprites(template, pack_dir)
     page = page.replace("/*KENNEY_SPRITES*/null", json.dumps(sprites, separators=(",", ":")))
+    # The tab icon (#66) goes in as data URIs, so the page stays one file.
+    for name, kind in [("favicon.ico", "image/x-icon"), ("favicon.svg", "image/svg+xml")]:
+        with open(os.path.join(HERE, "..", "assets", "favicon", name), "rb") as f:
+            uri = f"data:{kind};base64,{base64.b64encode(f.read()).decode()}"
+        page = page.replace(f'href="{name}"', f'href="{uri}"', 1)
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, "city.html")
     with open(out, "w") as f:

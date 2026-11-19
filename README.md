@@ -126,7 +126,7 @@ The page keeps its world under the made-up context name, so without
   the cluster has the Gateway API) HTTPRoutes and GRPCRoutes; without it
   the city runs without shops and the status line says so.
 - A browser with WebGL. The page is served only on 127.0.0.1 and needs
-  no internet: PixiJS, the sprites and the fonts are in the binary.
+  no internet: PixiJS, the sprites, the fonts and the tab icon are in the binary.
 
 ## The browser city
 
@@ -190,3 +190,5 @@ It includes:
 - [PixiJS](https://pixijs.com) 7.4.2 (MIT, see `assets/pixi/LICENSE`).
 - The Barlow, Barlow Condensed and IBM Plex Mono fonts (SIL Open Font
   License, see `assets/fonts/`).
+- The tab icon in `assets/favicon/` is kube-city's own drawing, made by
+  `art/favicon.py` (same licence as kube-city).

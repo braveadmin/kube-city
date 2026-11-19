@@ -52,6 +52,13 @@ a new run, failed, crashing, gone (instant):
 node art/jobs_check.mjs
 ```
 
+The tab icon (#66): writes `assets/favicon/` (commit the result), with an
+8x preview of both sizes on light and dark in the given folder:
+
+```bash
+python3 art/favicon.py [art/out]
+```
+
 #47's first sketch, the quarters without roads or river (kept for
 comparison):
 
