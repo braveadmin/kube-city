@@ -61,6 +61,9 @@ const PIXI_CDN: &str = "https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pix
 include!(concat!(env!("OUT_DIR"), "/fonts.rs"));
 /// The `@font-face` rules for `FONTS`, put into the page in place of `GOOGLE_FONTS`.
 const FONTS_CSS: &str = include_str!("../assets/fonts/fonts.css");
+/// The tab's icon (#66), our own drawing made by `art/favicon.py`: 16 and 32 px, and as a vector.
+const FAVICON_ICO: &[u8] = include_bytes!("../assets/favicon/favicon.ico");
+const FAVICON_SVG: &str = include_str!("../assets/favicon/favicon.svg");
 /// How the template loads its fonts when it is published as a page.
 const GOOGLE_FONTS: &str = r#"<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -184,6 +187,8 @@ pub async fn serve(
         .route("/ws", get(socket))
         .route("/pixi.min.js", get(pixi))
         .route("/fonts/{file}", get(font))
+        .route("/favicon.ico", get(favicon_ico))
+        .route("/favicon.svg", get(favicon_svg))
         .with_state(shared);
     let url = format!("http://127.0.0.1:{port}/");
     eprintln!("kube-city: the city is at {url} (Ctrl+C to stop)");
@@ -446,6 +451,14 @@ async fn font(Path(file): Path<String>) -> Response {
     }
 }
 
+async fn favicon_ico() -> Response {
+    ([(header::CONTENT_TYPE, "image/x-icon"), (header::CACHE_CONTROL, "max-age=86400")], FAVICON_ICO).into_response()
+}
+
+async fn favicon_svg() -> Response {
+    ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "max-age=86400")], FAVICON_SVG).into_response()
+}
+
 async fn socket(upgrade: WebSocketUpgrade, headers: HeaderMap, State(shared): State<Shared>) -> Response {
     if !from_own_page(&headers, shared.port) {
         return StatusCode::FORBIDDEN.into_response();
@@ -611,6 +624,25 @@ mod tests {
             assert!(page.contains(&format!(r#""{name}":"{uri}""#)), "sprite {name} is not in the page");
         }
         assert!(!page.contains("sprites/"));
+    }
+
+    #[tokio::test]
+    async fn the_tab_icon_is_built_in_and_linked() {
+        let page = page(Shows::Demo.name());
+        assert!(page.contains(r#"<link rel="icon" href="favicon.ico" sizes="16x16 32x32">"#));
+        assert!(page.contains(r#"<link rel="icon" href="favicon.svg" type="image/svg+xml">"#));
+        for (response, kind) in [(favicon_ico().await, "image/x-icon"), (favicon_svg().await, "image/svg+xml")] {
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], kind);
+        }
+        // An icon directory of two PNGs, 16 and 32 px.
+        assert_eq!(&FAVICON_ICO[..6], &[0, 0, 1, 0, 2, 0]);
+        assert_eq!((FAVICON_ICO[6], FAVICON_ICO[22]), (16, 32));
+        for entry in [6, 22] {
+            let offset = u32::from_le_bytes(FAVICON_ICO[entry + 12..entry + 16].try_into().unwrap()) as usize;
+            assert_eq!(&FAVICON_ICO[offset..offset + 8], b"\x89PNG\r\n\x1a\n");
+        }
+        assert!(FAVICON_SVG.starts_with("<svg") && FAVICON_SVG.trim_end().ends_with("</svg>"));
     }
 
     #[tokio::test]

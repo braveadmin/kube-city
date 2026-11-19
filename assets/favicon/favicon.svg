@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">
+<!-- kube-city favicon, drawn by art/favicon.py (MIT OR Apache-2.0) -->
+<rect width="32" height="32" rx="6" fill="#5aa9e6" shape-rendering="auto"/>
+<path fill="#5c9a43" d="M16,29 4,23 4,21 16,27Z"/>
+<path fill="#477a34" d="M16,29 28,23 28,21 16,27Z"/>
+<path fill="#7cc45a" d="M16,27 4,21 16,15 28,21Z"/>
+<path fill="#f1ede4" d="M16,21 12,19 12,5 16,7Z"/>
+<path fill="#bdb6a8" d="M16,21 20,19 20,5 16,7Z"/>
+<path fill="#8d8983" d="M16,7 12,5 16,3 20,5Z"/>
+<path fill="#6f9cc9" d="M15,18.5 13,17.5 13,16.5 15,17.5Z"/>
+<path fill="#4c7298" d="M17,18.5 19,17.5 19,16.5 17,17.5Z"/>
+<path fill="#6f9cc9" d="M15,15.5 13,14.5 13,13.5 15,14.5Z"/>
+<path fill="#4c7298" d="M17,15.5 19,14.5 19,13.5 17,14.5Z"/>
+<path fill="#6f9cc9" d="M15,12.5 13,11.5 13,10.5 15,11.5Z"/>
+<path fill="#4c7298" d="M17,12.5 19,11.5 19,10.5 17,11.5Z"/>
+<path fill="#6f9cc9" d="M15,9.5 13,8.5 13,7.5 15,8.5Z"/>
+<path fill="#4c7298" d="M17,9.5 19,8.5 19,7.5 17,8.5Z"/>
+<path fill="#de8a6c" d="M10,24 6,22 6,14 10,16Z"/>
+<path fill="#a95d48" d="M10,24 14,22 14,14 10,16Z"/>
+<path fill="#6f4135" d="M10,16 6,14 10,12 14,14Z"/>
+<path fill="#f4d9a6" d="M9,21.5 7,20.5 7,19.5 9,20.5Z"/>
+<path fill="#c9a777" d="M11,21.5 13,20.5 13,19.5 11,20.5Z"/>
+<path fill="#f4d9a6" d="M9,18.5 7,17.5 7,16.5 9,17.5Z"/>
+<path fill="#c9a777" d="M11,18.5 13,17.5 13,16.5 11,17.5Z"/>
+<path fill="#9fd0f0" d="M22,24 18,22 18,17 22,19Z"/>
+<path fill="#5f95bd" d="M22,24 26,22 26,17 22,19Z"/>
+<path fill="#3c5f7c" d="M22,19 18,17 22,15 26,17Z"/>
+<path fill="#e9f6ff" d="M21,21.5 19,20.5 19,19.5 21,20.5Z"/>
+<path fill="#b8d9ef" d="M23,21.5 25,20.5 25,19.5 23,20.5Z"/>
+</svg>

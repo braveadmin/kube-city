@@ -3,7 +3,7 @@
 What was decided while building kube-city, and why. Read this before
 changing direction; update it when a decision changes.
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-19.
 
 ## The idea
 
@@ -184,6 +184,7 @@ direction before building a `--web` server.
 | Signing | None; README explains the macOS quarantine command | Apple signing needs a paid account |
 | PixiJS | Built into the binary (`assets/pixi`), served at `/pixi.min.js` | `--web` must work without a CDN |
 | Fonts (#21) | Latin subsets of Barlow, Barlow Condensed and IBM Plex Mono built into the binary (`assets/fonts`, about 180 KB); the page gets `@font-face` rules for `/fonts/…` in place of the Google Fonts link, which the template keeps for the published prototype | `--web` fully offline, no request to Google; Latin-only keeps the binary small (#22), other characters fall back to system fonts |
+| Tab icon (#66) | Our own drawing (MIT OR Apache-2.0): three isometric towers in the Kenney colours on a grass tile, on a sky-blue rounded square; `art/favicon.py` draws 16 and 32 px pixel versions with their own geometry (in `favicon.ico`) and the 32 px picture as `favicon.svg`, with the standard library only; the binary serves both, the prototype gets them as data URIs | Owner's choice (2026-11-19): a shrunk Kenney tower is a blob at 16 px, a fire would look alarmed; the square reads the same on light and dark tab bars; no 404 for `/favicon.ico` |
 | Binary size (#22) | `strip = true` in `release`; `dist` adds full LTO, one codegen unit and `opt-level = "s"`; panics still unwind | 17.3 MB to 8.1 MB (5.5 MB to 4.1 MB gzipped, Linux x86_64); the binary is almost all Rust code, the assets are about 1.3 MB. Same CPU on a fast demo (4.5 % vs 4.6 % of a core). Abort would save 0.3 MB more but let one panicking task stop the server |
 | Sprite loading (#22) | The sprites go into the page as data URIs (page about 1 MB) instead of 144 requests to `/sprites/…`; a live page opens its WebSocket while they load and holds the batches until the first plan | The page waited for every sprite (140–350 ms of requests on localhost alone) before it planned the city or connected |
 | Line endings | `.gitattributes`: LF everywhere, PNG binary | Windows checkouts embedded CRLF copies of the page |
